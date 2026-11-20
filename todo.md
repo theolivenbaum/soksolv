@@ -24,7 +24,7 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] full/solver.go (distances, assignment, freeze/2x2, pair deadlocks, goal macros, corrals, FESS buckets)
 - [x] full/solver.go ported (distances, assignment, freeze/2x2, pair, goal-area, goal macros, PI-corral, FESS buckets, side-dead, cluster+penalties); node counts identical to Go on 18-level subset
 - [x] CLI + JSON output compatible with Go (-t -mem -nodes -header)
-- [ ] circular levels (start solved): port circular.go (child-process first-push search) — currently reports `solution has no push`
+- [x] circular levels: `Circular.cs` (in-process first-push search, doubling slices) + tests; [ ] hook into CLI dispatch (Program.cs is owned by the reverse-lane work for now)
 - [ ] Compare vs Go on subset (correctness + perf), then bigger sets
 
 - [x] Native AOT build + compare harness uses it: 18/18 identical to Go, 0.85x Go's time (JIT build was 1.02x)
