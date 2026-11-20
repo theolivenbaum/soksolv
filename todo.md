@@ -34,7 +34,7 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 
 ## Phase 3 — Remaining lanes (from `laneTable` in `.reference/lane.go`)
 - [ ] reverse (pull) search — `.reference/reverse/` (3.6k lines)
-- [ ] macro (`solver.go`, 2.6k) and advisors
+- [ ] macro lane: scoped in docs/macro.md (≈7.9k executed Go lines, 35 files; `bench/macro-scope.sh`); staged port order 1–6 there. Unported experiment flags: plan-v2, plan-file, packed-festorder, diag-dead, seed/novelty (exp-192/194/195), inefficient, hf-* (toward lane), fx426/fx477 families
 - [ ] novelty, fa2 (+rooms, plan4), hub / hub-gen / hub-pull, toward, pull, dive, factor, relay
 - [ ] Portfolio scheduler, memory governor, restarts (`main.go`, `lane.go`, `elastic_mem.go`)
 
