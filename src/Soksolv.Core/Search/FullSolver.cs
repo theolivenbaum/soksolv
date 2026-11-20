@@ -82,7 +82,7 @@ public sealed unsafe partial class FullSolver : IDisposable
     // regions()
     readonly uint[] rmark; uint rstamp; int[] floorCells = [];
     // feasible()
-    int[] matchOf = []; uint[] gseen = []; uint gstamp;
+    int[] matchOf = [];
     // pair deadlocks
     int[] poff = [], popp = [];
     sbyte[] dpair = [];
@@ -166,25 +166,60 @@ public sealed unsafe partial class FullSolver : IDisposable
         }
     }
 
+    // Box->goal feasibility as bitsets: goalAdj[c*gw + w] bit g set iff a box on c can reach goal g (goalDist >= 0).
+    ulong[] goalAdj = [];
+    int gw;
+    ulong[] matchedMask = [], visitedMask = [];
+
+    void InitMatching()
+    {
+        gw = (goals.Length + 63) / 64;
+        goalAdj = new ulong[cells * gw];
+        for (int g = 0; g < goals.Length; g++)
+            for (int c = 0; c < cells; c++)
+                if (goalDist[g * cells + c] >= 0) goalAdj[c * gw + (g >> 6)] |= 1UL << (g & 63);
+        matchedMask = new ulong[gw]; visitedMask = new ulong[gw];
+        matchOf = new int[goals.Length];
+    }
+
+    /// <summary>Does every box have a distinct reachable goal (perfect bipartite matching)? Greedy bit-ops first, augmenting paths only on conflicts.</summary>
     bool Feasible(ReadOnlySpan<int> boxes)
     {
-        if (matchOf.Length == 0) { matchOf = new int[goals.Length]; gseen = new uint[goals.Length]; }
+        if (goalAdj.Length == 0) InitMatching();
         Array.Fill(matchOf, -1);
+        Array.Clear(matchedMask);
         for (int i = 0; i < boxes.Length; i++)
         {
-            if (++gstamp == 0) { Array.Clear(gseen); gstamp = 1; }
-            if (!TryMatch(i, boxes)) return false;
+            int b = boxes[i];
+            int baseW = b * gw;
+            int found = -1;
+            for (int w = 0; w < gw; w++)
+            {
+                ulong free = goalAdj[baseW + w] & ~matchedMask[w];
+                if (free != 0) { found = (w << 6) + System.Numerics.BitOperations.TrailingZeroCount(free); break; }
+            }
+            if (found >= 0) { matchOf[found] = i; matchedMask[found >> 6] |= 1UL << (found & 63); continue; }
+            Array.Clear(visitedMask);
+            if (!Augment(i, boxes)) return false;
         }
         return true;
     }
-    bool TryMatch(int i, ReadOnlySpan<int> boxes)
+
+    bool Augment(int i, ReadOnlySpan<int> boxes)
     {
-        int b = boxes[i];
-        for (int j = 0; j < goals.Length; j++)
+        int baseW = boxes[i] * gw;
+        for (int w = 0; w < gw; w++)
         {
-            if (gseen[j] == gstamp || goalDist[j * cells + b] < 0) continue;
-            gseen[j] = gstamp;
-            if (matchOf[j] < 0 || TryMatch(matchOf[j], boxes)) { matchOf[j] = i; return true; }
+            ulong cand = goalAdj[baseW + w] & ~visitedMask[w];
+            while (cand != 0)
+            {
+                int g = (w << 6) + System.Numerics.BitOperations.TrailingZeroCount(cand);
+                cand &= cand - 1;
+                if ((visitedMask[w] & (1UL << (g & 63))) != 0) continue;
+                visitedMask[w] |= 1UL << (g & 63);
+                if (matchOf[g] < 0 || Augment(matchOf[g], boxes)) { matchOf[g] = i; matchedMask[g >> 6] |= 1UL << (g & 63); return true; }
+                cand &= ~visitedMask[w]; // recursion may have visited more goals in this word
+            }
         }
         return false;
     }
