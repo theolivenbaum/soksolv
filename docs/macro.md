@@ -230,3 +230,18 @@ Throughput on the 27 levels that ran to the limit: Go 6,916 nodes/s vs C# 7,976 
 Speed (node-capped, equal work, AOT, 50k nodes, 6 testdata levels): Go 7.3 s vs C# 7.9 s (1.08x); per-candidate costs on Holland_81_27
 (JIT, 30k nodes): room connectivity 16%, region counts 10%, push-deadlock pipeline 6%, move access 4%, hotspots 3%.
 Next speed work (not done): Go's incremental `roomConnChild` and tree-based hotspot rows.
+
+
+## Stage 6b (corral deadzone proofs + frontier corral) and 6c (displacement landmarks): DONE (exact parity)
+
+* **6b** (`SOKSOLV_FEAT` bit1): `Search/DeadZone/DeadZoneChecker.cs` ports Go package `deadzone` (zone/corral enumeration, pairs, groups of >=3
+  corrals, fixed boxes + matching, FastKey cache + shared verdict table, BFS with Kill/Escape/Shrink) including the **word-parallel path**
+  (row bitsets: `escapeBits`, seeded child floods `seedChild/seedFinal`, `floodFreeMode`) used on boards up to 64 wide; wider boards use Go's live
+  `escapeScan`. *Parity pitfall found*: Go's "scan" and "bits" escapes are not interchangeable (fence cells are not monotone under removal; the
+  bit path judges a whole pass against the pass-start snapshot) - a Gauss-Seidel scan diverged on `Sven_1623#98` after ~15k nodes. The frontier corral
+  (`FirstPushCorral`, `corral_frontier.go`) precedes the PI-corral in `open`; the checker runs in `apply` after the cluster check.
+* **6c** (bit2): `Macro/Displacement.cs` (single-pin CMD certificates + collective unpacking), the score adjustment (`packed`/`oop` of a mandatory
+  displacement push) and the 8th (displacement) advisor.
+Parity (`STAGE=5`, 20,000-node caps; FEAT=3 for 6b, FEAT=7 for 6c): Holland_81_27 at 1/10/100/1000/20000 identical; testdata 18/18; LTS sample 42/42 for both.
+C# is at parity or faster than Go on testdata (e.g. 13.2 s vs 15.3 s total on FEAT=7); on wide levels with ~775 candidate moves per open (Sven_1623#21)
+it is still ~2.2x slower: Go uses word-parallel variants of the box-search flood, move access, child region counts and pair search that are not yet ported.

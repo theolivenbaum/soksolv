@@ -6,7 +6,8 @@ namespace Soksolv.Search;
 public sealed unsafe partial class FullSolver
 {
     // ---- open(): evaluate all macro moves of a node once (Go fess_moves.go open, Stage 1 configuration) ----------------------------
-    int mOpenId, mOpenCands, mParentOop, mParentRoom; uint mOpenSt; int[]? mHotCounts;
+    int mOpenId, mOpenCands, mParentOop, mParentRoom, mParentConn, mParentPackedF; uint mOpenSt; int[]? mHotCounts;
+    DisplacementLandmarks? dl; bool dlInit; ulong mCmdMask, mUnpinMask;
 
     void MOpen(int id, int[] cur, int h, uint st)
     {
@@ -21,6 +22,17 @@ public sealed unsafe partial class FullSolver
         }
         int parentPacked = MPacked();
         int parentConn = maux[id].Reg;
+        mCmdMask = 0; mUnpinMask = 0;
+        if (Feat(2) && goals.Length <= 64) // Go: DisplacementLandmarksOn && len(goals) <= 64
+        {
+            if (!dlInit) { dlInit = true; dl = DisplacementLandmarks.Create(lv, dirs, goals); }
+            if (dl != null)
+            {
+                mCmdMask = dl.ComputeSinglePinCMD(cur, nodes.Player(id));
+                if (mCmdMask == 0) mUnpinMask = dl.ComputeCollectiveUnpacking(cur, nodes.Player(id)).candidateUnpins;
+            }
+        }
+        mParentConn = parentConn; mParentPackedF = parentPacked;
         int parentRoom = MRoomConnectivity();
         int parentOop = MOutOfPlan(cur);
         int[]? counts = MacroStage >= 4 ? HotCounts(cur) : null;
@@ -46,7 +58,8 @@ public sealed unsafe partial class FullSolver
 
         int nm = mCandN;
         // advisors: packing, connectivity, room, out-of-plan (each picks its best-scored eligible move)
-        int packingK = -1, connK = -1, roomK = -1, oopK = -1, hotK = -1, openerK = -1, explorerK = -1;
+        int packingK = -1, connK = -1, roomK = -1, oopK = -1, hotK = -1, openerK = -1, explorerK = -1, dispK = -1;
+        ulong displaceMask = mCmdMask | mUnpinMask;
         int hottest = -1;
         if (counts != null) for (int i = 0; i < counts.Length; i++) if (counts[i] > 0 && (hottest < 0 || counts[i] > counts[hottest])) hottest = i;
         int hotFrom = hottest >= 0 ? cur[hottest] : 0, openerNear = 1 << 30;
@@ -78,6 +91,15 @@ public sealed unsafe partial class FullSolver
                 if (d < oopNear) { oopNear = d; oopK = -1; }
                 if (d == oopNear) MChoose(ref oopK, k);
             }
+            if (displaceMask != 0 && dl != null && m.T != m.B && m.R <= parentConn)
+            {
+                int gIdxB = dl.GoalIdx[m.B];
+                if (gIdxB >= 0 && (displaceMask & (1UL << gIdxB)) != 0)
+                {
+                    int gIdxT = dl.GoalIdx[m.T];
+                    if (gIdxT < 0 || (displaceMask & (1UL << gIdxT)) == 0) MChoose(ref dispK, k);
+                }
+            }
         }
         if (mWeights.Length < nm) { mWeights = new int[nm * 2]; mKeys = new MKey[nm * 2]; }
         for (int k = 0; k < nm; k++) mWeights[k] = 1;
@@ -88,6 +110,7 @@ public sealed unsafe partial class FullSolver
         if (explorerK >= 0) mWeights[explorerK] = 0;
         if (openerK >= 0) mWeights[openerK] = 0;
         if (oopK >= 0) mWeights[oopK] = 0;
+        if (dispK >= 0) { mWeights[dispK] = 0; stats.DispAdvisor++; }
         for (int k = 0; k < nm; k++) mKeys[k] = new MKey { W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = mCands[k].Plen, Idx = k };
         mKeys.AsSpan(0, nm).Sort(static (x, y) =>
         {
@@ -170,6 +193,19 @@ public sealed unsafe partial class FullSolver
                 oop = MOutOfPlan(cur, cphase, i, t);
             }
             else { packed = MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
+            if (mCmdMask != 0 && dl != null && r <= mParentConn)
+            {
+                int gIdxB = dl.GoalIdx[cur[i]];
+                if (gIdxB >= 0 && (mCmdMask & (1UL << gIdxB)) != 0)
+                {
+                    int gIdxT = dl.GoalIdx[t];
+                    if (gIdxT < 0 || (mCmdMask & (1UL << gIdxT)) == 0)
+                    {
+                        packed = Math.Max(packed, mParentPackedF);
+                        oop = Math.Min(oop, mParentOop);
+                    }
+                }
+            }
             mCands[mCandN++] = new MCand { I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl };
         }
         SetOcc(t, false);
@@ -179,20 +215,35 @@ public sealed unsafe partial class FullSolver
     /// <summary>Pruning rules for cur[i] pushed to t (occ holds the child). 0 = alive.</summary>
     int MPushDead(ReadOnlySpan<int> cur, int i, int t, int canonical)
     {
-        if (Frozen2x2(t)) { stats.Frozen2x2++; return 1; }
-        if (FreezeDeadlock(t)) { stats.Freeze++; return 2; }
-        if (GoalAreaDeadlock(t)) { stats.GoalArea++; return 3; }
-        if (PairDeadlock(t)) { stats.PairDead++; return 4; }
+        long tq = Prof.Start();
+        bool f22 = Frozen2x2(t);
+        bool fz = !f22 && FreezeDeadlock(t);
+        Prof.Stop(6, tq);
+        if (f22) { stats.Frozen2x2++; return 1; }
+        if (fz) { stats.Freeze++; return 2; }
+        tq = Prof.Start();
+        bool ga = GoalAreaDeadlock(t);
+        Prof.Stop(7, tq);
+        if (ga) { stats.GoalArea++; return 3; }
+        tq = Prof.Start();
+        bool pd = PairDeadlock(t);
+        Prof.Stop(10, tq);
+        if (pd) { stats.PairDead++; return 4; }
         if (sd != null)
         {
+            tq = Prof.Start();
             int p = t - dirs[canonical];
+            bool dead = false;
             if (m3[p] == mpstamp)
                 for (int j = 0; j < cur.Length; j++)
                 {
                     int c = j == i ? t : cur[j];
-                    if (!goal[c] && sd.Dead(c, p)) { stats.SideDead++; return 5; }
+                    if (!goal[c] && sd.Dead(c, p)) { dead = true; break; }
                 }
+            Prof.Stop(14, tq);
+            if (dead) { stats.SideDead++; return 5; }
         }
+        if (Feat(3) && CorridorFlowDeadlock(t)) { stats.CorridorFlow++; return 6; }
         return 0;
     }
 
@@ -212,13 +263,19 @@ public sealed unsafe partial class FullSolver
         SetOcc(b, false); SetOcc(t, true);
         int sideC = t - dirs[last.Dir];
         int np = Reach(sideC, mark2);
-        if (cl != null && cl.Dead(occ, t, sideC, mark2, stamp, -1))
+        long tcl = Prof.Start();
+        bool clDead = cl != null && cl.Dead(occ, t, sideC, mark2, stamp, -1);
+        Prof.Stop(12, tcl);
+        if (clDead)
         {
             stats.ClusterDead++;
             SetOcc(t, false); SetOcc(b, true);
             return -1;
         }
-        if (dz != null && dz.DeadAfter(occ, child, sideC, t))
+        long tdz = Prof.Start();
+        bool dzDead = dz != null && dz.DeadAfter(occ, child, sideC, t);
+        Prof.Stop(11, tdz);
+        if (dzDead)
         {
             stats.CorralDead++;
             SetOcc(t, false); SetOcc(b, true);
@@ -284,7 +341,9 @@ public sealed unsafe partial class FullSolver
             mmv[e.Move] = mv | MMoveUsed;
             maux[id].MvLeft--;
             ulong parentHash = nodes.HashOf(cur, pl);
+            long tap = Prof.Start();
             int cid = MApply(id, mv & ~MMoveUsed, cur, child, h, st, parentHash, out int ch);
+            Prof.Stop(9, tap);
             if (s1On) S1Step(expanded, id, (int)(e.Move - maux[id].MvStart), cid);
             RecordEdge(id, mLastAdded);
             PropagateDead(id);
@@ -294,7 +353,7 @@ public sealed unsafe partial class FullSolver
             {
                 maux[id].MvOff += maux[id].MvLen;
                 Reach(pl, mark);
-                MOpen(id, cur, h, stamp);
+                long tmo = Prof.Start(); MOpen(id, cur, h, stamp); Prof.Stop(8, tmo);
                 mReopen = -1;
                 MEnqueue(id);
             }
@@ -312,7 +371,7 @@ public sealed unsafe partial class FullSolver
             {
                 foreach (int b in child) SetOcc(b, true);
                 Reach(nodes.Player(cid), mark);
-                MOpen(cid, child, ch, stamp);
+                long tmo2 = Prof.Start(); MOpen(cid, child, ch, stamp); Prof.Stop(8, tmo2);
                 PropagateDead(cid);
                 foreach (int b in child) SetOcc(b, false);
             }

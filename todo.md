@@ -33,6 +33,8 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [x] Incremental child region counts (articulation) in FullSolver (exact; ~7% faster fast mode)
 - [ ] Remaining hot spots (SokHard_36 profile): Regions() 12%, piCorral 9%, pairDeadlock 6%, apply 13% — carry region bitmaps / incremental region count; bitboard pair offsets
 
+- [x] macro 6b deadzone+frontier corral, 6c displacement (exact parity, goldens in MacroTests)
+
 ## Phase 3 — Remaining lanes (from `laneTable` in `.reference/lane.go`)
 - [x] reverse (pull) search — default config incl. supply, novelty, types, walks, restart ring (see docs/reverse.md): exact vs Go on 18 testdata + 296/297 LTS sample; 0.9x Go time, ~half memory
 - [ ] reverse: `Match`/`Free` heuristics, Root/RootBoxes (toward/relay), `-rev-supply-inherit` validation, delta-coded node store

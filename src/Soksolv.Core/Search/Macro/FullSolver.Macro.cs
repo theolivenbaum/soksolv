@@ -86,7 +86,7 @@ public sealed unsafe partial class FullSolver
         res.Stats = stats; stats.Stored = nodes.Count;
         res.PeakBytes = (long)(nodes.Bytes + mmv.Bytes + mmvScore.Bytes + maux.Bytes);
         MacroReport(res);
-        if (Prof.On) { Prof.Names[0] = "pushDead"; Prof.Names[1] = "roomConn"; Prof.Names[2] = "hotAfter"; Prof.Names[3] = "moveAccess"; Prof.Names[4] = "regions"; Prof.Names[5] = "piCorral+setup"; Prof.Report(res.TimeMs); }
+        if (Prof.On) { Prof.Names[0] = "pushDead"; Prof.Names[1] = "roomConn"; Prof.Names[2] = "hotAfter"; Prof.Names[3] = "moveAccess"; Prof.Names[4] = "regions"; Prof.Names[5] = "piCorral+setup"; Prof.Names[11] = "apply:deadzone"; Prof.Names[12] = "apply:cluster"; Prof.Names[6] = "pd:freeze2x2"; Prof.Names[7] = "pd:goalarea"; Prof.Names[10] = "pd:pair"; Prof.Names[14] = "pd:sidedead"; Prof.Names[8] = "MOpen"; Prof.Names[9] = "MApply"; Prof.Report(res.TimeMs); Console.Error.WriteLine($"pairs tried {stats.PairsTried} dead {stats.PairsDead}"); if (dz != null) Console.Error.WriteLine($"dz: calls {dz.Calls} corrals {dz.Corrals} searches {dz.Searches} states {dz.States} pfloods {dz.PFloods} cfloods {dz.CFloods} escCalls {dz.EscCalls} escPasses {dz.EscPasses} cacheHits {dz.CacheHits} opened {dz.Opened} matching {dz.MatchingDead}"); }
         return res;
     }
 
@@ -94,7 +94,7 @@ public sealed unsafe partial class FullSolver
     void MacroReport(SolveResult res)
     {
         res.Fingerprint = $"expanded={res.Nodes} stored={nodes.Count} generated={stats.Generated} duplicates={stats.Duplicates} hash={s1Hash:x16}";
-        if (s1Env) { Console.Error.WriteLine($"S1FEAT corral_dead={stats.CorralDead} frontier_corrals={stats.FrontierCorrals}"); Console.Error.WriteLine("S1HASH " + res.Fingerprint); }
+        if (s1Env) { Console.Error.WriteLine($"S1FEAT corral_dead={stats.CorralDead} frontier_corrals={stats.FrontierCorrals} disp_adv={stats.DispAdvisor} corridor={stats.CorridorFlow}"); Console.Error.WriteLine("S1HASH " + res.Fingerprint); }
     }
     static readonly bool s1Env = Environment.GetEnvironmentVariable("SOKSOLV_S1") == "1";
     /// <summary>Maintain the per-move fingerprint (tests / parity runs). Off in production runs.</summary>

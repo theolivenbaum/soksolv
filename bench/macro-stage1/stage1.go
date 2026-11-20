@@ -82,6 +82,6 @@ func s1step(s *solver, n int, node, local, cid int32) {
 }
 
 func s1report(s *solver, expanded int) {
-	fmt.Fprintf(os.Stderr, "S1FEAT corral_dead=%d frontier_corrals=%d\n", s.stats.CorralDead, s.stats.FrontierCorrals)
+	fmt.Fprintf(os.Stderr, "S1FEAT corral_dead=%d frontier_corrals=%d disp_adv=%d corridor=%d\n", s.stats.CorralDead, s.stats.FrontierCorrals, s.stats.Advisors[7], s.stats.CorridorFlow)
 	fmt.Fprintf(os.Stderr, "S1HASH expanded=%d stored=%d generated=%d duplicates=%d hash=%016x\n", expanded, len(s.player), s.stats.Generated, s.stats.Duplicates, s1Hash)
 }

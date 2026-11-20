@@ -7,7 +7,7 @@ public struct Push { public int From; public sbyte Dir; public Push(int f, sbyte
 
 public sealed class SolveStats
 {
-    public long Generated, Duplicates, CorralDead, FrontierCorrals, DeadSquare, Frozen2x2, GoalArea, Freeze, PairDead, ClusterDead, SideDead, Assignment, Macros, ConnAdvisor, Corrals, Penalized, PairsTried, PairsDead;
+    public long Generated, Duplicates, CorralDead, FrontierCorrals, DispAdvisor, CorridorFlow, DeadSquare, Frozen2x2, GoalArea, Freeze, PairDead, ClusterDead, SideDead, Assignment, Macros, ConnAdvisor, Corrals, Penalized, PairsTried, PairsDead;
     public int Stored; public int LeanAt;
 }
 

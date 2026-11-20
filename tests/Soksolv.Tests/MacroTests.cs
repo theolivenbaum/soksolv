@@ -180,4 +180,20 @@ public class MacroTests
         Assert.True(r.Solved, r.Reason);
         Assert.Null(Verifier.CheckSolution(TestData.Rows(level), r.Solution));
     }
+
+    // 6c: displacement landmarks (feature bit 2) on top of bits 0-1: goldens from the patched Go reference (SOKSOLV_FEAT=7).
+    [Theory]
+    [InlineData("Holland_81_27", 1, "expanded=1 stored=2 generated=8 duplicates=0 hash=a944444f3a9250ce")]
+    [InlineData("Holland_81_27", 10, "expanded=10 stored=7 generated=33 duplicates=0 hash=d8636b47459d9b38")]
+    [InlineData("Holland_81_27", 100, "expanded=100 stored=44 generated=666 duplicates=16 hash=52d7ccc19d97487e")]
+    [InlineData("Holland_81_27", 1000, "expanded=1000 stored=328 generated=6771 duplicates=316 hash=633e5fc8d7352114")]
+    [InlineData("Holland_81_27", 20000, "expanded=5826 stored=1711 generated=37843 duplicates=2271 hash=a32d5bfd9cb845b5")]
+    [InlineData("Aymeric_Du_Peloux_282_22", 20000, "expanded=326 stored=92 generated=611 duplicates=175 hash=849ac3741c78b81b")]
+    [InlineData("Microban_155_65", 20000, "expanded=14 stored=8 generated=147 duplicates=3 hash=3dad979af95d13b7")]
+    [InlineData("SokEvo_107_55", 20000, "expanded=4221 stored=655 generated=11309 duplicates=2550 hash=0a983bbc3be269b6")]
+    [InlineData("Sven_1623_100", 20000, "expanded=67 stored=35 generated=462 duplicates=18 hash=3b715637ed5c8c10")]
+    [InlineData("SokHard_163_36", 20000, "expanded=20000 stored=2592 generated=58520 duplicates=9010 hash=054149d412b1441d")]
+    [InlineData("Sasquatch_VI_50_24", 20000, "expanded=20000 stored=6906 generated=235264 duplicates=6852 hash=f47e39482c4ebba0")]
+    public void Stage6c_Displacement_MatchGoReferenceFingerprint(string level, long nodes, string golden)
+        => Assert.Equal(golden, Run(level, nodes, 5, 7).Fingerprint);
 }

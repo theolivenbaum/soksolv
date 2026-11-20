@@ -170,75 +170,117 @@ public sealed unsafe partial class FullSolver
         dpair = new sbyte[cells * poff.Length];
     }
 
-    bool[]? pocc; uint[]? pmark, pseen; uint pst, pst2; int[]? pq;
+    // PairDead scratch: pinned, allocation-free (results identical to Go's pairDead / pairDeadFromBits).
+    byte[]? pbA; byte* pb; uint[]? pmarkA, pseenA; uint* pmarkP, pseenP; int[]? pqA; int* pqP;
+    uint pst, pst2;
+    ulong[] pvis = new ulong[1024]; ushort pgen;
+    int[] pqx = new int[512], pqy = new int[512], pqp = new int[512];
+    int[] pstarts = [];
+
+    int PReach(int p, out uint st)
+    {
+        st = ++pst;
+        int w = W;
+        int* q = pqP; int tail = 0; q[tail++] = p; pmarkP[p] = st; int m = p;
+        for (int i = 0; i < tail; i++)
+        {
+            int c = q[i];
+            int y = c - w; if (pmarkP[y] != st && pb[y] == 0) { pmarkP[y] = st; q[tail++] = y; if (y < m) m = y; }
+            y = c + w; if (pmarkP[y] != st && pb[y] == 0) { pmarkP[y] = st; q[tail++] = y; }
+            y = c - 1; if (pmarkP[y] != st && pb[y] == 0) { pmarkP[y] = st; q[tail++] = y; if (y < m) m = y; }
+            y = c + 1; if (pmarkP[y] != st && pb[y] == 0) { pmarkP[y] = st; q[tail++] = y; }
+        }
+        pqN = tail;
+        return m;
+    }
+    int pqN;
+
+    bool PVisit(int x, int y, int p)
+    {
+        ulong k = (ushort)x | (ulong)(ushort)y << 16 | (ulong)(ushort)p << 32;
+        ulong v = k | (ulong)pgen << 48;
+        ulong mask = (ulong)(pvis.Length - 1);
+        for (ulong i = (k * 0x9E3779B97F4A7C15UL >> 40) & mask; ; i = (i + 1) & mask)
+        {
+            ulong e = pvis[i];
+            if ((ushort)(e >> 48) != pgen) { pvis[i] = v; return true; }
+            if (e == v) return false;
+        }
+    }
 
     bool PairDead(int a, int b)
     {
         const int capStates = 200;
-        pocc ??= new bool[cells]; pmark ??= new uint[cells]; pseen ??= new uint[cells]; pq ??= new int[cells];
-        var po = pocc; int pqn = 0;
-        (int min, uint st) PReach(int p)
+        if (pbA == null)
         {
-            uint st = ++pst;
-            int tail = 0; pq[tail++] = p; pmark[p] = st; int m = p;
-            for (int i = 0; i < tail; i++)
-                foreach (int d in dirs)
-                {
-                    int y = pq[i] + d;
-                    if (pmark[y] != st && !wall[y] && !po[y]) { pmark[y] = st; pq[tail++] = y; if (y < m) m = y; }
-                }
-            pqn = tail;
-            return (m, st);
+            pbA = GC.AllocateArray<byte>(cells, pinned: true); pmarkA = GC.AllocateArray<uint>(cells, pinned: true);
+            pseenA = GC.AllocateArray<uint>(cells, pinned: true); pqA = GC.AllocateArray<int>(cells, pinned: true);
+            pb = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref pbA[0]);
+            pmarkP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref pmarkA![0]); pseenP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref pseenA![0]);
+            pqP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref pqA![0]);
+            for (int i = 0; i < cells; i++) pbA[i] = (byte)(wall[i] ? 1 : 0);
+            pstarts = new int[cells];
         }
-        po[a] = true; po[b] = true;
+        pb[a] = 1; pb[b] = 1;
         try
         {
             uint seenStamp = ++pst2;
-            var starts = new List<int>();
+            int nstarts = 0;
             foreach (int c in FloorCells())
             {
-                if (po[c] || pseen![c] == seenStamp) continue;
-                var (m, _) = PReach(c);
-                starts.Add(m);
-                for (int i = 0; i < pqn; i++) pseen![pq[i]] = seenStamp;
+                if (pb[c] != 0 || pseenP[c] == seenStamp) continue;
+                int m = PReach(c, out _);
+                pstarts[nstarts++] = m;
+                for (int i = 0; i < pqN; i++) pseenP[pqP[i]] = seenStamp;
             }
-            foreach (int p0 in starts)
+            Span<int> mvBox = stackalloc int[8], mvT = stackalloc int[8], mvOther = stackalloc int[8];
+            for (int si = 0; si < nstarts; si++)
             {
-                var seen = new HashSet<(int, int, int)> { (a, b, p0) };
-                var q = new List<(int x, int y, int p)> { (a, b, p0) };
-                for (int i = 0; i < q.Count; i++)
+                int p0 = pstarts[si];
+                if (++pgen == 0) { Array.Clear(pvis); pgen = 1; }
+                PVisit(a, b, p0);
+                int nseen = 1, qn = 0;
+                pqx[0] = a; pqy[0] = b; pqp[0] = p0; qn = 1;
+                for (int i = 0; i < qn; i++)
                 {
-                    if (seen.Count > capStates) return false;
-                    var cur = q[i];
-                    po[a] = false; po[b] = false;
-                    po[cur.x] = true; po[cur.y] = true;
-                    var (_, st) = PReach(cur.p);
-                    var moves = new List<(int box, int t, int other)>();
+                    if (nseen > capStates) return false; // unknown: assume not dead
+                    int cx = pqx[i], cy = pqy[i], cp = pqp[i];
+                    pb[a] = 0; pb[b] = 0;
+                    pb[cx] = 1; pb[cy] = 1;
+                    PReach(cp, out uint st);
+                    int nm = 0;
                     for (int side = 0; side < 2; side++)
                     {
-                        int bx = side == 0 ? cur.x : cur.y, other = side == 0 ? cur.y : cur.x;
-                        foreach (int d in dirs)
+                        int bx = side == 0 ? cx : cy, other = side == 0 ? cy : cx;
+                        for (int di = 0; di < 4; di++)
                         {
+                            int d = dirs[di];
                             int t = bx + d;
-                            if (pmark![bx - d] == st && !wall[t] && t != other && dist[t] >= 0) moves.Add((bx, t, other));
+                            if (pmarkP[bx - d] == st && !wall[t] && t != other && dist[t] >= 0) { mvBox[nm] = bx; mvT[nm] = t; mvOther[nm] = other; nm++; }
                         }
                     }
-                    po[cur.x] = false; po[cur.y] = false;
-                    foreach (var m in moves)
+                    pb[cx] = 0; pb[cy] = 0;
+                    for (int mi = 0; mi < nm; mi++)
                     {
-                        if (goal[m.t] && goal[m.other]) { po[a] = true; po[b] = true; return false; }
-                        po[m.t] = true; po[m.other] = true;
-                        var (np, _) = PReach(m.box);
-                        po[m.t] = false; po[m.other] = false;
-                        var nn = (Math.Min(m.t, m.other), Math.Max(m.t, m.other), np);
-                        if (seen.Add(nn)) q.Add(nn);
+                        int t = mvT[mi], other = mvOther[mi];
+                        if (goal[t] && goal[other]) { pb[a] = 1; pb[b] = 1; return false; }
+                        pb[t] = 1; pb[other] = 1;
+                        int np = PReach(mvBox[mi], out _);
+                        pb[t] = 0; pb[other] = 0;
+                        int nx = Math.Min(t, other), ny = Math.Max(t, other);
+                        if (PVisit(nx, ny, np))
+                        {
+                            nseen++;
+                            if (qn == pqx.Length) { Array.Resize(ref pqx, qn * 2); Array.Resize(ref pqy, qn * 2); Array.Resize(ref pqp, qn * 2); }
+                            pqx[qn] = nx; pqy[qn] = ny; pqp[qn] = np; qn++;
+                        }
                     }
-                    po[a] = true; po[b] = true;
+                    pb[a] = 1; pb[b] = 1;
                 }
             }
             return true;
         }
-        finally { po[a] = false; po[b] = false; }
+        finally { pb[a] = 0; pb[b] = 0; }
     }
 
     int[] FloorCells()
