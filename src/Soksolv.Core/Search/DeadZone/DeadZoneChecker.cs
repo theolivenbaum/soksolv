@@ -129,7 +129,7 @@ public sealed class DeadZoneChecker
     public bool DeadAfter(bool[] occIn, ReadOnlySpan<int> boxes, int player, int t)
     {
         Calls++;
-        try { bool r = DeadAfterCore(occIn, boxes, player, t); if (Trace) Console.Error.WriteLine($"DZ {Calls} t={t} p={player} r={(r ? "True" : "False")} corrals={Corrals} searches={Searches}"); return r; }
+        try { bool r = DeadAfterCore(occIn, boxes, player, t); if (Trace) Console.Error.WriteLine($"DZ {Calls} t={t} p={player} r={(r ? "true" : "false")} corrals={Corrals} searches={Searches} frozen={Frozen} matching={MatchingDead}"); return r; }
         finally { foreach (int x in boxes) fixedB[x] = false; }
     }
 
@@ -410,6 +410,7 @@ public sealed class DeadZoneChecker
             (bool hit, bool dead) Lookup()
             {
                 ci = (int)(key >> 2 & (ulong)(cache.Length - 1));
+                if (Trace && Calls == 12367) Console.Error.WriteLine($"LOOKUP key={key:x} slot={cache[ci]:x} shared={(sh != null ? sh.Slots[(int)(key >> 2 & (ulong)(sh.Slots.Length - 1))] : 0):x} zone=[{string.Join(" ", zone)}]");
                 if (sh != null && (cache[ci] & ~3UL) != key)
                 {
                     ulong v = Volatile.Read(ref sh.Slots[(int)(key >> 2 & (ulong)(sh.Slots.Length - 1))]);
