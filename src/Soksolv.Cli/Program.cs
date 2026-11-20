@@ -3,9 +3,11 @@ using System.Text;
 using Soksolv.Diagnostics;
 using Soksolv.Model;
 using Soksolv.Search;
+using Soksolv.Search.Reverse;
 
 // soksolv [-t seconds] [-mem MiB] [-nodes N] [-header] <file.xsb> [level index (1-based)]
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
+string strategy = "full"; int revLanes = 2, revSupply = 4, revExtra = 0;
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
 for (int i = 0; i < args.Length; i++)
@@ -22,7 +24,10 @@ for (int i = 0; i < args.Length; i++)
         case "-cluster-skipcap": ClusterChecker.SkipCapped = true; break;
         case "-cluster-cap": ClusterChecker.StateCap = int.Parse(args[++i]); break;
         case "-procs": i++; break; // accepted for CLI compatibility (single lane for now)
-        case "-strategy": i++; break;
+        case "-strategy": strategy = args[++i]; break;
+        case "-rev-lanes": revLanes = int.Parse(args[++i]); break;
+        case "-rev-supply": revSupply = int.Parse(args[++i]); break;
+        case "-rev-novelty": revExtra = 1; break;
         default: pos.Add(args[i]); break;
     }
 }
@@ -40,7 +45,14 @@ var opt = new FullOptions
     SharedClusters = new ClusterTable(16),
     SharedPenalties = new ClusterTable(16),
 };
-var res = FullSolver.Solve(rows, opt, tLimit);
+SolveResult res;
+if (strategy == "reverse")
+{
+    var ro = ReverseRunner.Config(revLanes, revSupply);
+    ro.NodeBudget = nodes; ro.BudgetBytes = opt.BudgetBytes; ro.MemLimitBytes = (ulong)memMb * 1024 * 1024;
+    res = ReverseRunner.Solve(rows, ro, tLimit);
+}
+else res = FullSolver.Solve(rows, opt, tLimit);
 string? verr = res.Solved ? Verifier.CheckSolution(rows, res.Solution) : null;
 int pushes = res.Solution.Count(char.IsUpper);
 var sb = new StringBuilder();
@@ -53,6 +65,6 @@ sb.Append(CultureInfo.InvariantCulture, $"  \"peak_memory_mb\": {res.PeakBytes /
 sb.Append($"  \"stored\": {res.Stats.Stored},\n  \"generated\": {res.Stats.Generated},\n  \"duplicates\": {res.Stats.Duplicates},\n");
 sb.Append($"  \"reason\": \"{res.Reason}\",\n");
 if (verr != null) sb.Append($"  \"verify_error\": \"{verr}\",\n");
-sb.Append($"  \"solution\": \"{res.Solution}\",\n  \"strategy\": \"full\"\n}}\n");
+sb.Append($"  \"solution\": \"{res.Solution}\",\n  \"strategy\": \"{strategy}\"\n}}\n");
 Console.Out.Write(sb.ToString());
 return res.Solved && verr == null ? 0 : 1;

@@ -25,6 +25,7 @@ go_bin = os.environ.get("GO_SOKSOLV", f"{scratch}/soksolv-go")
 aot = f"{root}/artifacts/aot/Soksolv.Cli"
 cs_dll = f"{root}/src/Soksolv.Cli/bin/Release/net11.0/Soksolv.Cli.dll"
 CS_FLAGS = os.environ.get("CS_FLAGS", "")
+GO_FLAGS = os.environ.get("GO_FLAGS", "-strategy full -procs 1")
 CS = aot if os.path.exists(aot) and not os.environ.get("CS_JIT") else f"dotnet {cs_dll}"   # Native AOT by default (bench/publish-aot.sh)
 env = dict(os.environ, PATH=os.environ["PATH"] + ":/root/.dotnet:/usr/local/go/bin", DOTNET_TieredPGO="1")
 
@@ -33,7 +34,7 @@ if not os.path.exists(go_bin) or os.environ.get("REBUILD_GO"):
     r = sh(f"cd {root}/.reference && go build -o {go_bin} ."); assert r.returncode == 0, r.stderr
 r = sh(f"cd {root} && dotnet build src/Soksolv.Cli -c Release 2>&1 | tail -1")
 # machine header (C# prints cpu/mem/calibration; Go side shares the machine)
-print(f"c# binary: {CS} {CS_FLAGS}")
+print(f"c# binary: {CS} {CS_FLAGS}   go flags: {GO_FLAGS}")
 print(sh(f"{CS} -header '{files[0]}' 1 -nodes 1 2>&1 >/dev/null").stdout, end="")
 print(f"go: {sh('go version').stdout.strip()}   limit={tl}s nodes={nodes or '-'}   python {platform.python_version()}")
 print(f"{'level':34} {'go ms':>8} {'cs ms':>8} {'cs/go':>6} | {'go nodes':>9} {'cs nodes':>9} | {'go push':>7} {'cs push':>7} | {'go MB':>6} {'cs MB':>6}")
@@ -42,7 +43,7 @@ def one(spec):
     f, idx = spec
     name = os.path.basename(f)[:-4] + f"#{idx}"
     ng = f"-nodes {nodes}" if nodes else ""
-    g = sh(f"{go_bin} -strategy full -procs 1 -t {tl} {ng} '{f}' {idx}")
+    g = sh(f"{go_bin} {GO_FLAGS} -t {tl} {ng} '{f}' {idx}")
     c = sh(f"{CS} {CS_FLAGS} -t {tl} {ng} '{f}' {idx}")
     return name, g, c
 tg = tc = 0; solved_g = solved_c = 0; nbad = 0; nrun = 0
