@@ -27,6 +27,10 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] circular levels (start solved): port circular.go (child-process first-push search) — currently reports `solution has no push`
 - [ ] Compare vs Go on subset (correctness + perf), then bigger sets
 
+- [x] Native AOT build + compare harness uses it: 18/18 identical to Go, 0.85x Go's time (JIT build was 1.02x)
+- [ ] Re-run node-capped 297-level LTS sample (-nodes 5000) to hunt divergences (first attempt aborted: Sasquatch_VI#50 slow)
+- [ ] Speed up cluster flood (60% of time): fewer floods / cheaper flood
+
 ## Phase 3 — Remaining lanes (from `laneTable` in `.reference/lane.go`)
 - [ ] reverse (pull) search — `.reference/reverse/` (3.6k lines)
 - [ ] macro (`solver.go`, 2.6k) and advisors

@@ -66,3 +66,27 @@ dedupe probe happens after normalisation as in Go; Zobrist makes everything else
 Same idea for the cluster proof search: states are packed into a 128-bit key (≤ 7 boxes + player,
 16 bits each) in an open-addressing set with generation stamps (no clearing, no allocation) instead of
 Go's `map[[9]int16]struct{}`; measured end-to-end in the Phase-2 comparison.
+
+## 4. Ahead-of-time compilation (JIT cost)
+
+Measured with `bench/compare.py` / best-of-5 wall time, same machine, single lane (ms):
+
+| level | JIT (default) | ReadyToRun | **Native AOT** | Go |
+|---|---|---|---|---|
+| Microban_155_31 (20 nodes) | 81 | 44 | **5** | 6 |
+| Sven_1623_100 | 300 | 101 | **47** | 57 |
+| Holland_81_27 (4.3k nodes) | 786 | 332 | **280** | 341 |
+| GrigrSpecial_40_3 | 1424 | 1190 | **892** | 1036 |
+| Holland_81_57 (153k nodes, 5 s) | 5945 | 5551 | **4965** | 5682 |
+
+* JIT's cost is not just startup: tier-0 → tier-1 warm-up of the hot flood/BFS loops costs seconds on
+  runs of several seconds. R2R removes startup but still re-JITs hot methods; **Native AOT** compiles
+  everything optimised up-front and is fastest at every length, ~13% faster than Go on the long level.
+* `IlcInstructionSet=native` / `x86-64-v3` gave no measurable gain (BitOperations use popcnt/tzcnt anyway);
+  the portable baseline build is used so results are comparable across VMs. (Side effect: in AOT
+  `Vector256/512.IsHardwareAccelerated` report false, so SIMD paths must be opted into explicitly if added.)
+* Profile-guided AOT (`--mibc`) needs `dotnet-pgo` to turn an event-pipe trace into a `.mibc`; that tool is
+  not published on NuGet (only built from the dotnet/runtime sources), so it is not used here. Dynamic PGO
+  stays on for the JIT build (`TieredPGO`), but did not beat AOT.
+* Build: `bench/publish-aot.sh` → `artifacts/aot/Soksolv.Cli` (1.3 MB, needs clang/lld to link);
+  `bench/compare.py` uses it by default (`CS_JIT=1` to compare the JIT build).

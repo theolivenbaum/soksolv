@@ -33,6 +33,9 @@ todo.md                port plan and status — keep it current
 
 ## Conventions
 
+- **Benchmark with the Native AOT build** (`bench/publish-aot.sh` → `artifacts/aot/Soksolv.Cli`): it has no JIT
+  warm-up and is the fastest mode (see docs/data-model.md §4). Use the JIT build only for debugging/profiling.
+
 - Toolchain: .NET SDK 11.0 (installed under `/root/.dotnet`; `export PATH=$PATH:/root/.dotnet`).
   Go 1.27 is at `/usr/local/go/bin` for building the reference (`cd .reference && go build -o <out> .`).
 - Level data is parsed by `Core` into a padded grid (outer ring is wall) exactly like Go's
