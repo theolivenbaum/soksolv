@@ -22,7 +22,9 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] Level parser (splitCollection, parseLevel, hole closing) + Verifier (`cmd/verify`)
 - [ ] reach, sidedead, diagdead, cluster, deadzone deadlock detectors (+ differential tests)
 - [ ] full/solver.go (distances, assignment, freeze/2x2, pair deadlocks, goal macros, corrals, FESS buckets)
-- [ ] CLI + JSON output compatible with Go
+- [x] full/solver.go ported (distances, assignment, freeze/2x2, pair, goal-area, goal macros, PI-corral, FESS buckets, side-dead, cluster+penalties); node counts identical to Go on 18-level subset
+- [x] CLI + JSON output compatible with Go (-t -mem -nodes -header)
+- [ ] circular levels (start solved): port circular.go (child-process first-push search) — currently reports `solution has no push`
 - [ ] Compare vs Go on subset (correctness + perf), then bigger sets
 
 ## Phase 3 — Remaining lanes (from `laneTable` in `.reference/lane.go`)

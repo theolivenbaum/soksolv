@@ -30,6 +30,7 @@ public sealed unsafe partial class FullSolver
         }
         var res = Search(timeLimitSec, sw);
         res.TimeMs = sw.Elapsed.TotalMilliseconds;
+        Prof.Report(res.TimeMs);
         res.Stats = stats; stats.Stored = nodes.Count;
         res.PeakBytes = (long)TrackedBytes();
         return res;
@@ -83,7 +84,7 @@ public sealed unsafe partial class FullSolver
             int pl = nodes.Player(id);
             Reach(pl, mark);
             uint st = stamp;
-            if (nodes.MvIdx(id) < 0) Open(id, cur, h, st);
+            if (nodes.MvIdx(id) < 0) { long to = Prof.Start(); Open(id, cur, h, st); Prof.Stop(8, to); }
             ulong parentHash = nodes.HashOf(cur, pl);
             int oi = nodes.MvIdx(id);
             int solved = -1;
@@ -93,7 +94,9 @@ public sealed unsafe partial class FullSolver
                 uint m = mv[k];
                 mv[k] |= MoveUsed;
                 opened[oi].Left--;
+                long ta = Prof.Start();
                 int cid = Apply(id, m, cur, child, h, st, parentHash, out int ch);
+                Prof.Stop(9, ta);
                 if (cid >= 0)
                 {
                     added = true;

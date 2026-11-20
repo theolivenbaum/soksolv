@@ -316,7 +316,10 @@ public sealed unsafe partial class FullSolver
         nodes.MvIdx(id) = oi;
         try
         {
-            if (!Feasible(cur)) { stats.Assignment++; return; }
+            long tf = Prof.Start();
+            bool feas = Feasible(cur);
+            Prof.Stop(10, tf);
+            if (!feas) { stats.Assignment++; return; }
             var seqs = MacroMoves(cur, id, st);
             if (seqs != null)
             {
@@ -326,7 +329,9 @@ public sealed unsafe partial class FullSolver
             }
             int np = 0;
             int best = nodes.Reg(id), bestK = -1;
+            long tc = Prof.Start();
             uint corral = PiCorral(st);
+            Prof.Stop(5, tc);
             if (corral != 0) stats.Corrals++;
             for (int i = 0; i < cur.Length; i++)
             {
@@ -338,15 +343,21 @@ public sealed unsafe partial class FullSolver
                     if (mark[b - d] != st || wall[t] || occ[t]) continue;
                     if (dist[t] < 0) { stats.DeadSquare++; continue; }
                     occ[b] = false; occ[t] = true;
-                    if (Frozen2x2(t)) stats.Frozen2x2++;
-                    else if (FreezeDeadlock(t)) stats.Freeze++;
-                    else if (GoalAreaDeadlock(t)) stats.GoalArea++;
-                    else if (PairDeadlock(t)) stats.PairDead++;
-                    else if (cl != null && cl.Dead(occ, t, b, mark, st, b)) stats.ClusterDead++;
-                    else
+                    long t0 = Prof.Start();
+                    bool f1 = Frozen2x2(t) ? (stats.Frozen2x2++ >= 0) : FreezeDeadlock(t) && (stats.Freeze++ >= 0);
+                    Prof.Stop(2, t0); t0 = Prof.Start();
+                    bool f2 = !f1 && GoalAreaDeadlock(t) && (stats.GoalArea++ >= 0);
+                    Prof.Stop(3, t0); t0 = Prof.Start();
+                    bool f3 = !f1 && !f2 && PairDeadlock(t) && (stats.PairDead++ >= 0);
+                    Prof.Stop(4, t0); t0 = Prof.Start();
+                    bool f4 = !f1 && !f2 && !f3 && cl != null && cl.Dead(occ, t, b, mark, st, b) && (stats.ClusterDead++ >= 0);
+                    Prof.Stop(0, t0);
+                    if (!(f1 || f2 || f3 || f4))
                     {
                         stats.Generated++;
+                        t0 = Prof.Start();
                         int r = Regions();
+                        Prof.Stop(1, t0);
                         int pen = 0;
                         if (opt.Penalties && cl != null && noise == null)
                         {

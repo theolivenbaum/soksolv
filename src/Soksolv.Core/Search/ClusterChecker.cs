@@ -63,7 +63,7 @@ public sealed class ClusterTable
 /// exhaustive capped BFS over the cluster's pushes decides whether all its boxes can ever stand on goals.
 /// The proof-search state set is a packed open-addressing table (no per-state allocation).
 /// </summary>
-public sealed class ClusterChecker
+public sealed unsafe class ClusterChecker
 {
     public static int MaxBoxes = 5;
     public static int StateCap = 1000;
@@ -75,10 +75,10 @@ public sealed class ClusterChecker
 
     readonly ClusterBoard b;
     readonly ulong[] proven = new ulong[1 << 18];
-    readonly bool[] occ;
-    readonly uint[] mark;
+    // pinned (POH) scratch so hot loops use raw pointers: blk = wall | cluster box, mark = flood stamps
+    readonly byte[] blkArr; readonly uint[] markArr; readonly int[] queueArr; readonly byte[] deadArr, goalArr;
+    readonly byte* blk; readonly uint* mark; readonly int* queue; readonly byte* deadP, goalP;
     uint stamp;
-    readonly int[] queue;
     int qlen;
 
     // proof-search scratch
@@ -101,7 +101,12 @@ public sealed class ClusterChecker
     {
         b = board;
         int n = board.Wall.Length;
-        occ = new bool[n]; mark = new uint[n]; queue = new int[n];
+        blkArr = GC.AllocateArray<byte>(n, pinned: true); markArr = GC.AllocateArray<uint>(n, pinned: true); queueArr = GC.AllocateArray<int>(n, pinned: true);
+        deadArr = GC.AllocateArray<byte>(n, pinned: true); goalArr = GC.AllocateArray<byte>(n, pinned: true);
+        for (int i = 0; i < n; i++) { blkArr[i] = (byte)(board.Wall[i] ? 1 : 0); deadArr[i] = (byte)(board.Dead[i] ? 1 : 0); goalArr[i] = (byte)(board.Goal[i] ? 1 : 0); }
+        blk = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref blkArr[0]); mark = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref markArr[0]);
+        queue = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref queueArr[0]);
+        deadP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref deadArr[0]); goalP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref goalArr[0]);
     }
 
     static ulong KeyOf(ReadOnlySpan<int> cells, int side)
@@ -157,10 +162,10 @@ public sealed class ClusterChecker
             return false;
         }
         if (shared != null && shared.Has(k)) { Interlocked.Increment(ref shared.Hits); return true; }
-        for (int i = 0; i < n; i++) occ[cells[i]] = true;
+        for (int i = 0; i < n; i++) blk[cells[i]] = 1;
         Region(side);
         bool split = qlen < b.NFloor - n;
-        for (int i = 0; i < n; i++) occ[cells[i]] = false;
+        for (int i = 0; i < n; i++) blk[cells[i]] = 0;
         if (!split) { SetLocal(k, 0); return false; }
         var (dead, cost) = SearchCap(cells, side, StateCap);
         if (dead) shared?.Add(k);
@@ -178,20 +183,20 @@ public sealed class ClusterChecker
         return dead;
     }
 
-    /// <summary>Floods the player's region from p (per occ); returns its minimum cell. Cells hold stamp in mark.</summary>
+    /// <summary>Floods the player's region from p (blocked = wall | box); returns its minimum cell. Cells hold the new stamp in mark.</summary>
     int Region(int p)
     {
+        if (Prof.On) Prof.Calls[15]++;
         uint st = ++stamp;
-        var q = queue; var wall = b.Wall; var dirs = b.Dirs;
-        int tail = 0; q[tail++] = p; mark[p] = st; int m = p;
+        int w = b.W;
+        int* q = queue; int tail = 0; q[tail++] = p; mark[p] = st; int m = p;
         for (int i = 0; i < tail; i++)
         {
             int c = q[i];
-            foreach (int d in dirs)
-            {
-                int y = c + d;
-                if (mark[y] != st && !wall[y] && !occ[y]) { mark[y] = st; q[tail++] = y; if (y < m) m = y; }
-            }
+            int y = c - w; if (mark[y] != st && blk[y] == 0) { mark[y] = st; q[tail++] = y; if (y < m) m = y; }
+            y = c + w; if (mark[y] != st && blk[y] == 0) { mark[y] = st; q[tail++] = y; }
+            y = c - 1; if (mark[y] != st && blk[y] == 0) { mark[y] = st; q[tail++] = y; if (y < m) m = y; }
+            y = c + 1; if (mark[y] != st && blk[y] == 0) { mark[y] = st; q[tail++] = y; }
         }
         qlen = tail;
         return m;
@@ -223,12 +228,12 @@ public sealed class ClusterChecker
     /// <summary>Exhaustive BFS over cluster positions (other boxes removed). Returns (dead, cost): cost = BFS depth of the first all-on-goals state when alive, else 0.</summary>
     public (bool dead, int cost) SearchCap(ReadOnlySpan<int> start, int side, int capStates)
     {
-        Checked++;
+        Checked++; if (Prof.On) Prof.Calls[13]++;
         int n = start.Length;
         if (n > 7) return (false, 0);
-        for (int i = 0; i < n; i++) occ[start[i]] = true;
+        for (int i = 0; i < n; i++) blk[start[i]] = 1;
         int p0 = Region(side);
-        for (int i = 0; i < n; i++) occ[start[i]] = false;
+        for (int i = 0; i < n; i++) blk[start[i]] = 0;
 
         int tsize = 8192;
         while (tsize < capStates * 4 + 128) tsize <<= 1;
@@ -261,14 +266,15 @@ public sealed class ClusterChecker
         cur = cur[..n]; nb = nb[..n];
         TryAdd(MkKey(start, p0), 0);
         Span<Move> moves = stackalloc Move[32];
-        var goal = b.Goal; var wall = b.Wall; var dead = b.Dead; var dirs = b.Dirs;
+        var dirs = b.Dirs;
         for (int head = 0; head < qn; head++)
         {
             if (seenCount > capStates) return (false, 0);
+            if (Prof.On) Prof.Calls[14]++;
             var st = cq[head]; int depth = cdepth[head];
             for (int i = 0; i < n; i++) cur[i] = (int)((i < 4 ? st.Lo >> (i * 16) : st.Hi >> ((i - 4) * 16)) & 0xFFFF);
             int stp = (int)((st.Hi >> 48) & 0xFFFF);
-            for (int i = 0; i < n; i++) occ[cur[i]] = true;
+            for (int i = 0; i < n; i++) blk[cur[i]] = 1;
             Region(stp);
             uint rs = stamp;
             int minR = stp; // the stored player is the region's minimum cell
@@ -279,11 +285,11 @@ public sealed class ClusterChecker
                 foreach (int d in dirs)
                 {
                     int to = x + d;
-                    if (mark[x - d] == rs && !wall[to] && !occ[to] && !dead[to])
+                    if (mark[x - d] == rs && blk[to] == 0 && deadP[to] == 0)
                         moves[nm++] = new Move { I = i, To = to, From = x, Np = FastPlayer(x, to, minR, rs) };
                 }
             }
-            for (int i = 0; i < n; i++) occ[cur[i]] = false;
+            for (int i = 0; i < n; i++) blk[cur[i]] = 0;
             for (int mi = 0; mi < nm; mi++)
             {
                 ref var m = ref moves[mi];
@@ -291,14 +297,14 @@ public sealed class ClusterChecker
                 nb[m.I] = m.To;
                 nb.Sort();
                 bool done = true;
-                for (int i = 0; i < n; i++) if (!goal[nb[i]]) { done = false; break; }
+                for (int i = 0; i < n; i++) if (goalP[nb[i]] == 0) { done = false; break; }
                 if (done) return (false, depth + 1);
                 int np = m.Np;
                 if (np < 0)
                 {
-                    for (int i = 0; i < n; i++) occ[nb[i]] = true;
+                    for (int i = 0; i < n; i++) blk[nb[i]] = 1;
                     np = Region(m.From);
-                    for (int i = 0; i < n; i++) occ[nb[i]] = false;
+                    for (int i = 0; i < n; i++) blk[nb[i]] = 0;
                 }
                 TryAdd(MkKey(nb, np), depth + 1);
             }
@@ -314,7 +320,7 @@ public sealed class ClusterChecker
         foreach (int d in b.Dirs)
         {
             int y = x + d;
-            if (y != t && !b.Wall[y] && !occ[y] && mark[y] != rs) return -1;
+            if (y != t && blk[y] == 0 && mark[y] != rs) return -1;
         }
         if (t == minR) return -1;
         int w = b.W;
@@ -324,7 +330,7 @@ public sealed class ClusterChecker
         for (int k = 0; k < 8; k++)
         {
             int y = t + ring[k];
-            free[k] = !b.Wall[y] && (y == x || !occ[y]);
+            free[k] = blk[y] == 0 || y == x;
             if (!free[k] && start < 0) start = k;
         }
         if (start < 0) return Math.Min(minR, x);
