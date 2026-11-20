@@ -50,6 +50,12 @@ todo.md                port plan and status — keep it current
 - Don't port Go experiment flags (`-exp-NNN`) unless they're on by default in the Go solver; port the
   default configuration first, flags later (tracked in todo.md).
 
+## CLI / harness
+
+- `Soksolv.Cli -strategy full|reverse [-t s] [-mem MiB] [-nodes N] [-parity] [-rev-lanes 1|2] [-rev-supply W] [-header] file.xsb [idx]`
+- Parity runs MUST use `-nodes N` (Go's cell/walk scheduling is wall-clock based otherwise) and `-parity` for the full lane;
+  `bench/compare.py` takes `GO_FLAGS` / `CS_FLAGS` env to pick the lane on each side.
+
 ## Porting rules of thumb
 
 - Port package by package, leaf-first (`reach`, `sidedead`, `diagdead`, `cluster`, `deadzone`, …),

@@ -33,7 +33,8 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] Remaining hot spots (SokHard_36 profile): Regions() 12%, piCorral 9%, pairDeadlock 6%, apply 13% — carry region bitmaps / incremental region count; bitboard pair offsets
 
 ## Phase 3 — Remaining lanes (from `laneTable` in `.reference/lane.go`)
-- [ ] reverse (pull) search — `.reference/reverse/` (3.6k lines)
+- [x] reverse (pull) search — default config incl. supply, novelty, types, walks, restart ring (see docs/reverse.md): exact vs Go on 18 testdata + 296/297 LTS sample; 0.9x Go time, ~half memory
+- [ ] reverse: `Match`/`Free` heuristics, Root/RootBoxes (toward/relay), `-rev-supply-inherit` validation, delta-coded node store
 - [ ] macro lane: scoped in docs/macro.md (≈7.9k executed Go lines, 35 files; `bench/macro-scope.sh`); staged port order 1–6 there. Unported experiment flags: plan-v2, plan-file, packed-festorder, diag-dead, seed/novelty (exp-192/194/195), inefficient, hf-* (toward lane), fx426/fx477 families
 - [ ] novelty, fa2 (+rooms, plan4), hub / hub-gen / hub-pull, toward, pull, dive, factor, relay
 - [ ] Portfolio scheduler, memory governor, restarts (`main.go`, `lane.go`, `elastic_mem.go`)
