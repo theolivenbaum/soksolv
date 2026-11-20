@@ -15,7 +15,7 @@ cs_bin = os.environ.get("CS_BIN", f"{root}/artifacts/aot/Soksolv.Cli")
 env = dict(os.environ, PATH=os.environ["PATH"] + ":/root/.dotnet:/usr/local/go/bin", DOTNET_ROOT="/root/.dotnet")
 
 a = sys.argv[1:]
-who = a.pop(0); tl = 10.0; out = None; limit = 0; shard = (0, 1); gop = 4; extra = ""
+who = a.pop(0); stride = 1; tl = 10.0; out = None; limit = 0; shard = (0, 1); gop = 4; extra = ""
 while a:
     x = a.pop(0)
     if x == "-t": tl = float(a.pop(0))
@@ -24,6 +24,7 @@ while a:
     elif x == "-shard": k, m = a.pop(0).split("/"); shard = (int(k), int(m))
     elif x == "-go-procs": gop = int(a.pop(0))
     elif x == "-flags": extra = a.pop(0)
+    elif x == "-stride": stride = int(a.pop(0))
 out = out or f"results-{who}.tsv"
 
 def isrow(s): return '#' in s and all(c in ' -_@+$*.#' for c in s)
@@ -69,6 +70,8 @@ for tag, fn, i, rows in levels():
     if key in seen: continue
     seen[key] = (tag, os.path.basename(fn), i)
     if hash(key) % shard[1] != shard[0] and shard[1] > 1: continue
+    nseen = len(seen)
+    if stride > 1 and nseen % stride != 0: continue
     if key in done: continue
     n += 1
     if limit and n > limit: break
