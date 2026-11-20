@@ -282,3 +282,27 @@ default to `-macro-stage 5 -macro-features 31`. 141 tests pass.
 * The portfolio wrapper around the lane (`lane.go` ring: replan/revive restarts) and elastic memory.
 * Speed: Go's word-parallel variants of the box-search flood (`boxflood.go`), move access (`moveaccess.go` bits), child region counts (`regionsChild`) and the pair search (`pairbits.go`) are
   not ported; on wide levels (hundreds of candidate moves per open) C# is ~2x slower than Go (10-50% fewer nodes in a timed run), at parity or faster on narrow ones.
+
+
+## Stages 6f (plan4) and 6g (alt engine, baton, pair-side, rev-groups): DONE (exact parity); the macro lane now equals Go's default lane
+
+* **6f plan4** (`FEAT` bit5, `Macro/FullSolver.MacroPlan4.cs`): `planner2` + `planner4` (BASE_SEARCH-style backward pull planner with gated sink moves, FESS feature cells,
+  matching-based sink feasibility `matchOK`, Tarjan SCC `computeElim4`, region labelling, stable key sort, seen-set, kids store), `packing_fest.go` (`festPlan`: Festival event list,
+  `packed(occ)`, partition/keep-only-perm), the **anytime planner** (`planAnytime`/`stepPlan4`: 8 planner iterations per macro expansion when the up-front phase did not complete, restart of the
+  lane ring on the finished plan = `prePlan`), and the lane ring (`RingRun`). `cutscan.go` is replaced by exact floods (`Query`, `Pieces`, `CompMin`). Under `-nodes` the planner runs to completion
+  (`planBudget = 1 h`), so the node-count-driven path is exact; the timed path mirrors Go (`Plan4Frac` 20% of the remaining time, planner gets 4/5 of it).
+* **6g**: `Macro/MacroAlt.cs` — the **alt engine** (exp-769, default on): a second macro solver whose plan4 runs festsink + roomsep + keep-parks 1 (`FestSinkAdv`, `FestPackAdv`, `FestRoomSep`, `SetAdv`, `KeepParks4`),
+  alternating with the default engine on a `Baton` (doubling slices `1024 << min(k, 4)` expansions, per-engine `-nodes/2`, first solve wins, lane `Nodes` = sum of both engines). **Pair-side deadlocks**
+  (`PairSideDeadlock`, `PairSplits`, `PairDeadFrom`, bit 7) and **reversible preparation groups** (bit 6: per-node union-find groups, exit deduplication, undo/internal/dead-child demotion, best-exit advisor,
+  recorded demoted words replayed on reopen). Novelty / access-novelty are inert in the macro lane (`noveltyBudget() == 0`), so they are not ported.
+* Fingerprint parity (`bench/macro-parity.py`, `STAGE=5`, `-parity`, 20,000 nodes, patched Go reference; `ALT=1` = the alt planner config as the single engine):
+
+| mask | what | testdata (19) | Holland_81_27 @1/10/100/1000/20000 |
+|---|---|---|---|
+| FEAT=63 | + plan4 | 19/19 | identical |
+| FEAT=63 ALT=1 | + alt planner config | 19/19 | - |
+| FEAT=191 | + pair-side | 19/19 | identical |
+| FEAT=255 (ALT=0 and 1) | + rev-groups = all default features | 19/19 and 19/19 | identical (solves at 14,873 nodes like unpatched single-engine Go) |
+
+* **End to end vs unpatched Go** `soksolv -strategy macro -procs 1 -nodes N` (two engines + baton + all features; `bench/compare.py` with `GO_FLAGS`/`CS_FLAGS`, parity mode): **19/19 testdata levels identical in solved, pushes and
+  nodes_expanded at N=40000**, time ratio 1.04 on the 12 solved ones; ten further level/cap pairs spot-checked (N=4000/40000) identical. Goldens in `MacroTests` (`Stage6f`, `Stage6g`, `MacroLane_EndToEnd`); 176 tests pass.

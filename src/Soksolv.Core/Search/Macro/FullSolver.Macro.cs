@@ -35,8 +35,10 @@ public sealed unsafe partial class FullSolver
     {
         public int I, B, T, R, Packed, Plen, Side, Room, Oop, Progress, Hot, Mobility; public bool Explorer;
         public ulong ScoreKey;
+        public bool Undo, Internal, DeadChild, GroupDupExit, DistinctExit; public ulong ExitKey;
+        public readonly bool RevBad => Undo || Internal || DeadChild;
     }
-    struct MKey { public int W, Oop, Packed, R, Room, Hot, Mobility, Plen, Idx; }
+    struct MKey { public int Bad, W, Oop, Packed, R, Room, Hot, Mobility, Plen, Idx; }
     Search.DeadZone.DeadZoneChecker? dz;
     MCand[] mCands = new MCand[64]; int mCandN;
     int[] mWeights = new int[64]; MKey[] mKeys = new MKey[64];
@@ -187,7 +189,7 @@ public sealed unsafe partial class FullSolver
         return false;
     }
 
-    int MAdd(ulong zh, int player, int parent, int from, int dir, int g, int h, int w, int reg, ReadOnlySpan<int> boxes)
+    int MAdd(ulong zh, int player, int parent, int from, int to, int dir, int g, int h, int w, int reg, ReadOnlySpan<int> boxes)
     {
         int id = nodes.Find(ckey, player, zh, out int slot, out uint fp);
         if (id >= 0)
@@ -199,7 +201,7 @@ public sealed unsafe partial class FullSolver
             if (w > nodes.W(id) || w == nodes.W(id) && g >= nodes.G(id)) return -1;
             bool lowerWeight = w < nodes.W(id);
             if (MCreatesCycle(id, parent)) return -1;
-            nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g;
+            nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; a.PushTo = (ushort)to;
             uint newBucket = (uint)Project(a.Actual, parent);
             bool movedCell = newBucket != a.Bucket;
             if (lowerWeight || movedCell)
@@ -226,10 +228,36 @@ public sealed unsafe partial class FullSolver
         if (reg < 0) reg = Regions();
         var cell = new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
         int bucket = Project(cell, parent);
-        maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell });
+        maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
         if (nodes.NeedsGrow) nodes.Grow();
         return id;
     }
+
+    // ---- reversible preparation groups (Go solver.go findRevGroup / unionRevGroup; exp-290) ---------------------------------------
+    int MFindRevGroup(int id)
+    {
+        if (id < 0 || id >= maux.Count) return id;
+        int root = id;
+        while (root >= 0 && root < maux.Count && root != maux[root].RevGroup) root = maux[root].RevGroup;
+        int curr = id;
+        while (curr >= 0 && curr < maux.Count && curr != root) { int nxt = maux[curr].RevGroup; maux[curr].RevGroup = root; curr = nxt; }
+        return root;
+    }
+    void MUnionRevGroup(int x, int y)
+    {
+        int rx = MFindRevGroup(x), ry = MFindRevGroup(y);
+        if (rx != ry && rx >= 0 && ry >= 0 && rx < maux.Count && ry < maux.Count)
+        {
+            if (maux[rx].RevSize + maux[ry].RevSize > 32) return;
+            if (maux[rx].RevSize < maux[ry].RevSize) (rx, ry) = (ry, rx);
+            maux[ry].RevGroup = rx;
+            maux[rx].RevSize += maux[ry].RevSize;
+        }
+    }
+    readonly HashSet<ulong> mRevExits = new();
+    readonly List<ulong> mRevWords = new();
+    ulong* mRevKey;
+    int mGid, mRevP = -1, mPB0 = -1, mPT0 = -1, mPPlayer = -1; bool mReopening; ulong mRevParentHash;
 
     // ---- dead-end propagation (Go fess_deadends.go) --------------------------------------------------------------------------
     void RecordEdge(int parent, int child)

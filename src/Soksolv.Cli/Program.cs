@@ -8,7 +8,7 @@ using Soksolv.Search.Reverse;
 // soksolv [-t seconds] [-mem MiB] [-nodes N] [-header] <file.xsb> [level index (1-based)]
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
-int macroStage = 5, macroFeat = 63; bool macroPlanAlt = false, macroAlt = true;
+int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
 for (int i = 0; i < args.Length; i++)

@@ -9,7 +9,7 @@ public sealed class PortfolioOptions
     public long NodeBudget;
     public ulong MemBytes = 15360UL << 20;   // total budget (Go -mem); 70% goes to lane data structures, split by share
     public bool Full = true, Reverse = true, Macro = true;
-    public int MacroStage = 5, MacroFeatures = 63; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
+    public int MacroStage = 5, MacroFeatures = 255; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     public int RevSupply = 4;
     public Action<string>? Log;
 }

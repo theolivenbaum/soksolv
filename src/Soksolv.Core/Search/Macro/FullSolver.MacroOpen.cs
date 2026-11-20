@@ -20,6 +20,18 @@ public sealed unsafe partial class FullSolver
             ref var af = ref maux[id]; af.MvLen = 0; af.MvLeft = 0; af.MvNext = 0;
             return;
         }
+        mReopening = maux[id].MvOff > 0;
+        mGid = -1; mPB0 = mPT0 = mPPlayer = -1; mRevP = nodes.Parent(id);
+        if (Feat(6))
+        {
+            if (mRevKey == null) mRevKey = (ulong*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(Math.Max(1, nodes.Nw) * 8));
+            ulong* pk0 = nodes.Key(id);
+            for (int x = 0; x < nodes.Nw; x++) mRevKey[x] = pk0[x];
+            mRevParentHash = nodes.HashOf(cur, nodes.Player(id));
+            mGid = MFindRevGroup(id);
+            int p0 = mRevP;
+            if (p0 >= 0 && maux[p0].Bucket == maux[id].Bucket) { mPB0 = nodes.From(id); mPT0 = maux[id].PushTo; mPPlayer = nodes.Player(p0); }
+        }
         int parentPacked = MPacked();
         int parentConn = maux[id].Reg;
         mCmdMask = 0; mUnpinMask = 0;
@@ -119,9 +131,68 @@ public sealed unsafe partial class FullSolver
         if (openerK >= 0) mWeights[openerK] = 0;
         if (oopK >= 0) mWeights[oopK] = 0;
         if (dispK >= 0) { mWeights[dispK] = 0; stats.DispAdvisor++; }
-        for (int k = 0; k < nm; k++) mKeys[k] = new MKey { W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = mCands[k].Plen, Idx = k };
+        if (Feat(6))
+        {
+            // advisor picks that are distinct group exits are remembered (Go: revExits.insert for every chosen advisor)
+            foreach (int ck in (ReadOnlySpan<int>)[packingK, connK, roomK, hotK, explorerK, openerK, oopK, dispK])
+                if (ck >= 0 && mCands[ck].DistinctExit) mRevExits.Add(mCands[ck].ExitKey);
+            int bestExit = -1;
+            if (!mReopening)
+            {
+                if (mGid >= 0 && mGid < maux.Count && maux[mGid].RevSize >= 2)
+                {
+                    bool hasDistinctAdvisorExit = false;
+                    foreach (int ck in (ReadOnlySpan<int>)[packingK, connK, roomK, hotK, explorerK, openerK, oopK, dispK])
+                        if (ck >= 0 && mCands[ck].DistinctExit) { hasDistinctAdvisorExit = true; break; }
+                    if (!hasDistinctAdvisorExit)
+                    {
+                        for (int k = 0; k < nm; k++)
+                        {
+                            ref var m = ref mCands[k];
+                            if (!m.DistinctExit || m.Undo || m.Internal || m.DeadChild) continue;
+                            bool progress = m.Packed > parentPacked || m.R < parentConn || m.Room < parentRoom || m.Hot < parentHot || m.Explorer;
+                            if (!progress && displaceMask != 0 && dl != null && m.R <= parentConn && m.T != m.B)
+                            {
+                                int gIdxB = dl.GoalIdx[m.B];
+                                if (gIdxB >= 0 && (displaceMask & (1UL << gIdxB)) != 0)
+                                {
+                                    int gIdxT = dl.GoalIdx[m.T];
+                                    if (gIdxT < 0 || (displaceMask & (1UL << gIdxT)) == 0) progress = true;
+                                }
+                            }
+                            if (progress)
+                            {
+                                if (bestExit < 0) { bestExit = k; continue; }
+                                int c = MScoreCmp(ref m, ref mCands[bestExit]);
+                                if (c < 0 || c == 0 && m.Plen < mCands[bestExit].Plen) bestExit = k;
+                            }
+                        }
+                        if (bestExit >= 0) { mWeights[bestExit] = 0; mRevExits.Add(mCands[bestExit].ExitKey); }
+                    }
+                }
+                maux[id].RevBestExit = (short)bestExit;
+                int revOff = mRevWords.Count;
+                int nwd = (nm + 63) / 64;
+                for (int x = 0; x < nwd; x++) mRevWords.Add(0);
+                maux[id].RevOffset = revOff + 1;
+                for (int k = 0; k < nm; k++)
+                    if (mCands[k].RevBad) mRevWords[revOff + k / 64] |= 1UL << (k % 64);
+            }
+            else
+            {
+                if (maux[id].RevOffset > 0)
+                {
+                    int revOff = maux[id].RevOffset - 1;
+                    for (int k = 0; k < nm; k++)
+                        if ((mRevWords[revOff + k / 64] & (1UL << (k % 64))) != 0) mCands[k].Undo = true;
+                }
+                if (maux[id].RevBestExit >= 0) { int be = maux[id].RevBestExit; if (be < nm) mWeights[be] = 0; }
+            }
+        }
+        for (int k = 0; k < nm; k++) mKeys[k] = new MKey { Bad = Feat(6) && mCands[k].RevBad ? 1 : 0, W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = mCands[k].Plen, Idx = k };
         mKeys.AsSpan(0, nm).Sort(static (x, y) =>
         {
+            if (x.Bad != y.Bad) return x.Bad < y.Bad ? -1 : 1;
             if (x.W != y.W) return x.W < y.W ? -1 : 1;
             if (x.Oop != y.Oop) return x.Oop < y.Oop ? -1 : 1;
             if (x.Packed != y.Packed) return x.Packed > y.Packed ? -1 : 1; // -packed
@@ -147,8 +218,12 @@ public sealed unsafe partial class FullSolver
         a.MvLen = (uint)win; a.MvNext = 0; a.MvTotal = (uint)nm; a.MvLeft = (uint)(nm - off);
     }
 
+    static int MScoreCmp(ref MCand m, ref MCand o) =>
+        m.Oop != o.Oop ? (m.Oop < o.Oop ? -1 : 1) : m.Packed != o.Packed ? (m.Packed > o.Packed ? -1 : 1) : m.R != o.R ? (m.R < o.R ? -1 : 1) : m.Room != o.Room ? (m.Room < o.Room ? -1 : 1) : m.Hot != o.Hot ? (m.Hot < o.Hot ? -1 : 1) : m.Mobility != o.Mobility ? (m.Mobility > o.Mobility ? -1 : 1) : 0;
+
     void MChoose(ref int slot, int k)
     {
+        if (Feat(6) && mCands[k].RevBad) return;
         if (slot < 0) { slot = k; return; }
         ref var m = ref mCands[k]; ref var o = ref mCands[slot];
         int c = m.Oop != o.Oop ? (m.Oop < o.Oop ? -1 : 1) : m.Packed != o.Packed ? (m.Packed > o.Packed ? -1 : 1) : m.R != o.R ? (m.R < o.R ? -1 : 1) : m.Room != o.Room ? (m.Room < o.Room ? -1 : 1) : m.Hot != o.Hot ? (m.Hot < o.Hot ? -1 : 1) : m.Mobility != o.Mobility ? (m.Mobility > o.Mobility ? -1 : 1) : 0;
@@ -214,7 +289,45 @@ public sealed unsafe partial class FullSolver
                     }
                 }
             }
-            mCands[mCandN++] = new MCand { I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl };
+            bool cUndo = false, cInternal = false, cDeadChild = false, cGroupDup = false, cDistinct = false; ulong cExit = 0;
+            if (Feat(6) && !mReopening)
+            {
+                int b = cur[i], p = mRevP;
+                if (mPB0 >= 0 && b == mPT0 && t == mPB0 && mCandNP == mPPlayer) { MUnionRevGroup(p, mOpenId); mGid = MFindRevGroup(mOpenId); cUndo = true; }
+                int fb = nodes.Fidx[b], ft = nodes.Fidx[t];
+                ulong zh = mRevParentHash ^ nodes.ZPlayer(nodes.Player(mOpenId)) ^ nodes.ZPlayer(mCandNP);
+                if (b != t)
+                {
+                    mRevKey[fb >> 6] &= ~(1UL << (fb & 63)); mRevKey[ft >> 6] |= 1UL << (ft & 63);
+                    zh ^= nodes.ZBox(b) ^ nodes.ZBox(t);
+                }
+                int existing = nodes.Find(mRevKey, mCandNP, zh, out _, out uint fpx);
+                if (b != t) { mRevKey[ft >> 6] &= ~(1UL << (ft & 63)); mRevKey[fb >> 6] |= 1UL << (fb & 63); }
+                if (existing >= 0)
+                {
+                    if (maux[existing].Dead != 0) cDeadChild = true;
+                    else if (maux[existing].Bucket == maux[mOpenId].Bucket && nodes.W(mOpenId) >= nodes.W(existing))
+                    {
+                        if (existing == p || MFindRevGroup(existing) == mGid) cInternal = true;
+                        else
+                        {
+                            bool isAnc = false;
+                            for (int anc = p, depth = 0; anc >= 0 && depth < 8; anc = nodes.Parent(anc), depth++)
+                            {
+                                if (maux[anc].Bucket != maux[mOpenId].Bucket) break;
+                                if (anc == existing) { isAnc = true; break; }
+                            }
+                            if (isAnc) { MUnionRevGroup(existing, mOpenId); mGid = MFindRevGroup(mOpenId); cInternal = true; }
+                        }
+                    }
+                }
+                else if (mGid >= 0 && mGid < maux.Count && maux[mGid].RevSize >= 2)
+                {
+                    cExit = ((ulong)mGid << 40) | fpx;
+                    if (mRevExits.Contains(cExit)) cGroupDup = true; else cDistinct = true;
+                }
+            }
+            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl };
         }
         SetOcc(t, false);
         return true;
@@ -296,7 +409,7 @@ public sealed unsafe partial class FullSolver
         for (int x = 0; x < nodes.Nw; x++) ckey[x] = pk[x];
         ulong zh = parentHash ^ nodes.ZPlayer(nodes.Player(id)) ^ nodes.ZPlayer(np);
         if (b != t) { Flip(b); Flip(t); zh ^= nodes.ZBox(b) ^ nodes.ZBox(t); }
-        int cid = MAdd(zh, np, id, b, last.Dir, nodes.G(id) + seq.Count, ch, w, r, child);
+        int cid = MAdd(zh, np, id, b, t, last.Dir, nodes.G(id) + seq.Count, ch, w, r, child);
         SetOcc(t, false); SetOcc(b, true);
         return cid;
     }
@@ -323,7 +436,7 @@ public sealed unsafe partial class FullSolver
         uint st0 = stamp;
         for (int x = 0; x < nodes.Nw; x++) ckey[x] = 0;
         foreach (int b in start) Flip(b);
-        int root = MAdd(nodes.HashOf(start, p0), p0, -1, -1, -1, 0, h0, 0, -1, start);
+        int root = MAdd(nodes.HashOf(start, p0), p0, -1, -1, -1, -1, 0, h0, 0, -1, start);
         if (root >= 0) { MOpen(root, start, h0, st0); PropagateDead(root); MEnqueue(root); }
         mBest = 0;
         mSearchStartMs = mLastImproveMs = clock.ElapsedMilliseconds;

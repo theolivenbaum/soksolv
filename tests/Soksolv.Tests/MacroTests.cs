@@ -231,4 +231,48 @@ public class MacroTests
     [InlineData("Holland_81_43", 20000, "expanded=20000 stored=2692 generated=56913 duplicates=10330 hash=cdc4403074e988fa")]
     public void Stage6f_Plan4_MatchGoReferenceFingerprint(string level, long nodes, string golden)
         => Assert.Equal(golden, Run(level, nodes, 5, 63).Fingerprint);
+
+    // Stage 6g: + pair-side deadlocks (bit 7) and reversible preparation groups (bit 6): Go reference SOKSOLV_STAGE=5 SOKSOLV_FEAT=255 (single engine).
+    [Theory]
+    [InlineData("Holland_81_27", 1, "expanded=1 stored=2 generated=8 duplicates=0 hash=a944444f3a9250ce")]
+    [InlineData("Holland_81_27", 10, "expanded=10 stored=6 generated=26 duplicates=1 hash=8855f1ebf3adc5ff")]
+    [InlineData("Holland_81_27", 100, "expanded=100 stored=56 generated=1119 duplicates=4 hash=8287704de7a44127")]
+    [InlineData("Holland_81_27", 1000, "expanded=1000 stored=418 generated=10252 duplicates=208 hash=699323bb5f10640c")]
+    [InlineData("Holland_81_27", 14873, "expanded=14873 stored=4266 generated=97216 duplicates=5766 hash=0b58ea6c59b68815")]
+    [InlineData("Holland_81_27", 20000, "expanded=14873 stored=4266 generated=97216 duplicates=5766 hash=0b58ea6c59b68815")]
+    [InlineData("Aymeric_Du_Peloux_282_22", 20000, "expanded=514 stored=108 generated=1002 duplicates=275 hash=a268ff38650d9706")]
+    [InlineData("Microban_155_65", 20000, "expanded=7 stored=8 generated=133 duplicates=0 hash=b745719bde76385e")]
+    [InlineData("SokEvo_107_55", 20000, "expanded=3807 stored=667 generated=9574 duplicates=2456 hash=0c40c04b2b9a65ed")]
+    [InlineData("Sven_1623_100", 20000, "expanded=3384 stored=783 generated=8328 duplicates=1555 hash=087fe4aca71c946a")]
+    [InlineData("SokHard_163_36", 20000, "expanded=20000 stored=3167 generated=57597 duplicates=7504 hash=01d5cef93ea1048c")]
+    [InlineData("Sasquatch_VI_50_24", 20000, "expanded=20000 stored=8235 generated=279590 duplicates=4005 hash=add3f11d6ea8befb")]
+    [InlineData("GrigrSpecial_40_3", 20000, "expanded=20000 stored=2839 generated=66582 duplicates=11902 hash=5b6e80fb05115ced")]
+    [InlineData("Holland_81_43", 20000, "expanded=20000 stored=3241 generated=53936 duplicates=11682 hash=33c3d1a83cfbeaad")]
+    public void Stage6g_RevGroupsPairSide_MatchGoReferenceFingerprint(string level, long nodes, string golden)
+        => Assert.Equal(golden, Run(level, nodes, 5, 255).Fingerprint);
+
+    // The whole default lane (two engines on the baton, alt plan4 config, every feature) vs unpatched `soksolv -strategy macro -procs 1 -nodes N`.
+    [Theory]
+    [InlineData("Microban_155_65", 4000, true, 41, 14)]
+    [InlineData("SokEvo_107_55", 4000, true, 38, 3304)]
+    [InlineData("SokEvo_107_55", 40000, true, 38, 4376)]
+    [InlineData("Holland_81_27", 4000, false, 0, 4000)]
+    [InlineData("Holland_81_27", 40000, true, 57, 22041)]
+    [InlineData("Sven_1623_100", 40000, true, 35, 6456)]
+    [InlineData("Holland_81_43", 4000, false, 0, 4000)]
+    [InlineData("Aymeric_Du_Peloux_282_22", 40000, true, 50, 998)]
+    public void MacroLane_EndToEnd_MatchesGoDefaultLane(string level, long nodes, bool solved, int pushes, int expanded)
+    {
+        bool a = ClusterChecker.AStar, s = ClusterChecker.SkipCapped;
+        ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false;
+        try
+        {
+            var rows = TestData.Rows(level);
+            var r = FullSolver.SolveMacroLane(rows, new FullOptions { NodeBudget = nodes, SharedClusters = new ClusterTable(16), SharedDeadZone = new Soksolv.Search.DeadZone.DeadZoneTable(18) }, 120);
+            Assert.Equal(solved, r.Solved);
+            Assert.Equal(expanded, r.Nodes);
+            if (solved) { Assert.Equal(pushes, r.Solution.Count(char.IsUpper)); Assert.Null(Verifier.CheckSolution(rows, r.Solution)); }
+        }
+        finally { ClusterChecker.AStar = a; ClusterChecker.SkipCapped = s; }
+    }
 }
