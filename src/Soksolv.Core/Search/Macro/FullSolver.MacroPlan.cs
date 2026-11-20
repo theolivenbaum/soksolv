@@ -17,6 +17,7 @@ public sealed unsafe partial class FullSolver
         public ulong[] In = [];                // per phase bitset of required cells
         public int InW;
         public bool Complete; public int Expanded, Parkings, Remaining;
+        public FestPlan? Fest; public bool FestPacked; // plan4: Festival-prefix packed feature (Go plan.fest / plan.festPacked)
         public ulong[] OccBits = []; public int[] Miss = [];
 
         public void Prepare()

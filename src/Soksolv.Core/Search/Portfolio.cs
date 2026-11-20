@@ -9,7 +9,7 @@ public sealed class PortfolioOptions
     public long NodeBudget;
     public ulong MemBytes = 15360UL << 20;   // total budget (Go -mem); 70% goes to lane data structures, split by share
     public bool Full = true, Reverse = true, Macro = true;
-    public int MacroStage = 5, MacroFeatures = 31; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
+    public int MacroStage = 5, MacroFeatures = 63; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     public int RevSupply = 4;
     public Action<string>? Log;
 }
@@ -72,7 +72,7 @@ public static class Portfolio
             Lane("reverse", () => ReverseRunner.Solve(rows, ro, timeLimitSec));
         }
         if (po.Macro)
-            Lane("macro", () => FullSolver.SolveMacro(rows, new FullOptions
+            Lane("macro", () => FullSolver.SolveMacroLane(rows, new FullOptions
             {
                 NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared,
                 MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,

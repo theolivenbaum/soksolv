@@ -47,8 +47,19 @@ public sealed unsafe partial class FullSolver
         try { lv = Level.Parse(rows, opt.CloseHoles); }
         catch (InvalidDataException e) { return new SolveResult { Reason = e.Message }; }
         opt.Penalties = false; // the macro lane's cluster checker has no distance table (no penalties)
-        using var s = new FullSolver(lv, opt) { mRows = rows };
-        return s.RunMacro(timeLimitSec);
+        // ring of plans (Go lane ring, exp-563): config k+1 restarts on the anytime plan4 that config k completed
+        var sw = Stopwatch.StartNew();
+        PackingPlan? pre = null; int preAt = 0;
+        while (true)
+        {
+            double left = timeLimitSec > 0 ? timeLimitSec - sw.Elapsed.TotalSeconds : 0;
+            if (timeLimitSec > 0 && left <= 0) return new SolveResult { Reason = "timeout", TimeMs = sw.Elapsed.TotalMilliseconds };
+            using var s = new FullSolver(lv, opt) { mRows = rows, prePlan = pre, prePlanAt = preAt };
+            var r = s.RunMacro(left);
+            if (r.Reason == "replan" && (timeLimitSec <= 0 || sw.Elapsed.TotalSeconds < timeLimitSec)) { pre = s.prePlan; preAt = s.prePlanAt; continue; }
+            r.TimeMs = sw.Elapsed.TotalMilliseconds;
+            return r;
+        }
     }
 
     SolveResult RunMacro(double timeLimitSec)
@@ -69,12 +80,27 @@ public sealed unsafe partial class FullSolver
             dz = new Search.DeadZone.DeadZoneChecker(new Search.DeadZone.DeadZoneBoard(wall, goal, deadSq, W), 200) { Shared = opt.SharedDeadZone };
         }
         mSetupDeadlineMs = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(100, timeLimitSec * 1000 / 10);
-        mNodeLimit = opt.NodeBudget;
+        mNodeLimit = nodeLimitOverride > 0 ? nodeLimitOverride : opt.NodeBudget;
         if (MacroStage >= 2) { MComputeRooms(); MComputeBasin(); }
         if (MacroStage >= 3)
         {
             long planDeadline = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(250, timeLimitSec * 1000 / 10);
-            mPlan = MBuildPackingPlan(4096, planDeadline);
+            if (prePlan != null) { mPlan = prePlan; stats.Plan4Complete = true; stats.Plan4Swap = prePlanAt; }   // a finished plan4 plan carried into a restarted solver
+            else if (Feat(5))
+            {
+                // Go: planBudget = 20% of the remaining time (Plan4Frac); -nodes: unbounded (planner caps only); plan4 gets 4/5 of it
+                long nowMs = clock.ElapsedMilliseconds;
+                long budgetMs = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue / 4 : (long)(timeLimitSec * 1000 * 0.2);
+                long p4Deadline = budgetMs >= long.MaxValue / 4 ? long.MaxValue : nowMs + budgetMs * 4 / 5;
+                var p4 = PlanAnytime(p4Deadline, 4096);
+                if (p4 != null && p4.Complete) { p4.FestPacked = true; mPlan = p4; stats.Plan4Complete = true; }
+                else
+                {
+                    long fb = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(250, budgetMs / 5);
+                    mPlan = MBuildPackingPlan(4096, fb);
+                }
+            }
+            else mPlan = MBuildPackingPlan(4096, planDeadline);
             if (mPlan != null && Feat(4)) mPlan.Dag = CompilePackingDag(mPlan); // installPlanStats: PackingObligations
         }
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
@@ -129,7 +155,7 @@ public sealed unsafe partial class FullSolver
     /// <summary>Boxes on goals (no sink plan: Go packedWith with plan == nil).</summary>
     int MPacked()
     {
-        if (mPlan != null) return mPlan.Status(occ).packed;
+        if (mPlan != null) return mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.Packed(occ) : mPlan.Status(occ).packed;
         int c = 0;
         foreach (int g in goals) if (occ[g]) c++;
         return c;

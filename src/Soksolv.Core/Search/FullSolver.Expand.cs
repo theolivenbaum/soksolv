@@ -208,7 +208,10 @@ public sealed unsafe partial class FullSolver
         }
     }
 
-    bool PairDead(int a, int b)
+    bool PairDead(int a, int b) => PairDeadFrom(a, b, -1);
+
+    /// <summary>pairDeadFromScan: two boxes alone on the board; from >= 0 restricts the start to the player's region around that cell.</summary>
+    bool PairDeadFrom(int a, int b, int from)
     {
         const int capStates = 200;
         if (pbA == null)
@@ -226,6 +229,8 @@ public sealed unsafe partial class FullSolver
         {
             uint seenStamp = ++pst2;
             int nstarts = 0;
+            if (from >= 0) pstarts[nstarts++] = PReach(from, out _);
+            else
             foreach (int c in FloorCells())
             {
                 if (pb[c] != 0 || pseenP[c] == seenStamp) continue;
@@ -292,6 +297,50 @@ public sealed unsafe partial class FullSolver
             floorCells = [.. l];
         }
         return floorCells;
+    }
+
+    sbyte[]? pairSide;
+
+    /// <summary>pairSplits: boxes on a and b (alone on the board) leave the player's region from `from` smaller than all other floor.</summary>
+    bool PairSplits(int a, int b, int from)
+    {
+        if (pbA == null) PairDead(a, a); // lazily allocate the pair scratch (result unused)
+        uint st = ++pst;
+        int tail = 0; pqP[tail++] = from; pmarkP[from] = st;
+        for (int i = 0; i < tail; i++)
+            for (int di = 0; di < 4; di++)
+            {
+                int y = pqP[i] + dirs[di];
+                if (pmarkP[y] != st && !wall[y] && y != a && y != b) { pmarkP[y] = st; pqP[tail++] = y; }
+            }
+        return tail < FloorCells().Length - 2;
+    }
+
+    /// <summary>pairSideDeadlock (solver.go): the box just pushed to t forms a dead pair with a neighbour given the player's actual side `from`.</summary>
+    bool PairSideDeadlock(int t, int from)
+    {
+        if (goal[t] || dist[t] < 0) return false;
+        int np = poff.Length;
+        pairSide ??= new sbyte[cells * np * 4];
+        int side = 0;
+        while (side < 4 && t + dirs[side] != from) side++;
+        if (side == 4) return false;
+        int baseI = t * np;
+        for (int k = 0; k < np; k++)
+        {
+            int x = t + poff[k];
+            if (x < 0 || x >= cells || !occ[x] || x == from || (goal[t] && goal[x])) continue;
+            ref sbyte v = ref pairSide[(baseI + k) * 4 + side];
+            if (v == 0)
+            {
+                v = 2;
+                SetOcc(t, false); SetOcc(x, false);
+                if (PairSplits(t, x, from) && PairDeadFrom(t, x, from)) v = 1;
+                SetOcc(t, true); SetOcc(x, true);
+            }
+            if (v == 1) return true;
+        }
+        return false;
     }
 
     bool PairDeadlock(int t)

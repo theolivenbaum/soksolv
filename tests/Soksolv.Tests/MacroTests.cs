@@ -213,4 +213,22 @@ public class MacroTests
     [InlineData("CorridorFlow_synth", 5000, "expanded=21 stored=12 generated=99 duplicates=8 hash=6173fae931a53589")]
     public void Stage6e_ObligationsAndCorridor_MatchGoReferenceFingerprint(string level, long nodes, string golden)
         => Assert.Equal(golden, Run(level, nodes, 5, 31).Fingerprint);
+
+    // Stage 6f: + plan4 (Festival-prefix packed from the BASE_SEARCH-style planner); Go reference SOKSOLV_STAGE=5 SOKSOLV_FEAT=63.
+    [Theory]
+    [InlineData("Holland_81_27", 1, "expanded=1 stored=2 generated=8 duplicates=0 hash=a944444f3a9250ce")]
+    [InlineData("Holland_81_27", 10, "expanded=10 stored=6 generated=26 duplicates=1 hash=8855f1ebf3adc5ff")]
+    [InlineData("Holland_81_27", 100, "expanded=100 stored=50 generated=1202 duplicates=12 hash=2a004d7c92efb4a5")]
+    [InlineData("Holland_81_27", 1000, "expanded=1000 stored=354 generated=8359 duplicates=292 hash=186c5266c28fd8d7")]
+    [InlineData("Holland_81_27", 20000, "expanded=20000 stored=5575 generated=125087 duplicates=7867 hash=692e9cfd78d74f17")]
+    [InlineData("Aymeric_Du_Peloux_282_22", 20000, "expanded=542 stored=111 generated=1031 duplicates=284 hash=3ff720138d701752")]
+    [InlineData("Microban_155_65", 20000, "expanded=14 stored=8 generated=147 duplicates=3 hash=c0342cf2f581c497")]
+    [InlineData("SokEvo_107_55", 20000, "expanded=4048 stored=575 generated=9989 duplicates=2573 hash=1b323aae99f8211d")]
+    [InlineData("Sven_1623_100", 20000, "expanded=3514 stored=785 generated=8920 duplicates=1625 hash=0652c58cb5a98115")]
+    [InlineData("SokHard_163_36", 20000, "expanded=20000 stored=3011 generated=55400 duplicates=7959 hash=9c9d35a4f13bb4a1")]
+    [InlineData("Sasquatch_VI_50_24", 20000, "expanded=20000 stored=6430 generated=210105 duplicates=5550 hash=37baccdb8b2cd587")]
+    [InlineData("GrigrSpecial_40_3", 20000, "expanded=20000 stored=2741 generated=74606 duplicates=10973 hash=19a2ea290919e1e6")]
+    [InlineData("Holland_81_43", 20000, "expanded=20000 stored=2692 generated=56913 duplicates=10330 hash=cdc4403074e988fa")]
+    public void Stage6f_Plan4_MatchGoReferenceFingerprint(string level, long nodes, string golden)
+        => Assert.Equal(golden, Run(level, nodes, 5, 63).Fingerprint);
 }

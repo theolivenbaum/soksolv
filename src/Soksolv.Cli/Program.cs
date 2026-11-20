@@ -8,7 +8,7 @@ using Soksolv.Search.Reverse;
 // soksolv [-t seconds] [-mem MiB] [-nodes N] [-header] <file.xsb> [level index (1-based)]
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
-int macroStage = 5, macroFeat = 31;
+int macroStage = 5, macroFeat = 63; bool macroPlanAlt = false, macroAlt = true;
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
 for (int i = 0; i < args.Length; i++)
@@ -19,6 +19,8 @@ for (int i = 0; i < args.Length; i++)
         case "-mem": memMb = int.Parse(args[++i]); break;
         case "-nodes": nodes = long.Parse(args[++i]); break;
         case "-header": header = true; break;
+        case "-macro-alt": macroAlt = args[++i] != "0"; break;
+        case "-macro-planalt": macroPlanAlt = true; break;
         case "-parity": ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; break; // Go-identical cluster proofs (BFS, no skipping)
         case "-macro-features": macroFeat = int.Parse(args[++i]); break;
         case "-macro-stage": macroStage = int.Parse(args[++i]); break;
@@ -48,7 +50,7 @@ var opt = new FullOptions
     SharedClusters = new ClusterTable(16),
     SharedPenalties = new ClusterTable(16),
     SharedDeadZone = new Soksolv.Search.DeadZone.DeadZoneTable(18),
-    MacroStage = macroStage, MacroFeatures = macroFeat,
+    MacroStage = macroStage, MacroFeatures = macroFeat, PlanAlt = macroPlanAlt, MacroAlt = macroAlt,
 };
 SolveResult Run(string[] r, double tl)
 {
@@ -59,7 +61,7 @@ SolveResult Run(string[] r, double tl)
         return ReverseRunner.Solve(r, ro, tl);
     }
     if (strategy == "full") return FullSolver.Solve(r, opt, tl);
-    if (strategy == "macro") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveMacro(r, opt, tl); } // main.go -stall-scale
+    if (strategy == "macro") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveMacroLane(r, opt, tl); } // main.go -stall-scale
     return Portfolio.Solve(r, new PortfolioOptions { NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
 }
 SolveResult res;

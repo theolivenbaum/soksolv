@@ -197,7 +197,7 @@ public sealed unsafe partial class FullSolver
             if (mPlan != null)
             {
                 var (cphase, cpacked) = mPlan.ChildStatus(cur[i], t);
-                packed = cpacked; progress = cphase;
+                packed = mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.Packed(occ) : cpacked; progress = cphase;
                 oop = MOutOfPlan(cur, cphase, i, t);
             }
             else { packed = MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
@@ -251,6 +251,7 @@ public sealed unsafe partial class FullSolver
             Prof.Stop(14, tq);
             if (dead) { stats.SideDead++; return 5; }
         }
+        if (Feat(7) && m3[t - dirs[canonical]] == mpstamp && PairSideDeadlock(t, t - dirs[canonical])) { stats.PairDead++; return 7; }
         if (Feat(3) && CorridorFlowDeadlock(t)) { stats.CorridorFlow++; return 6; }
         return 0;
     }
@@ -303,7 +304,7 @@ public sealed unsafe partial class FullSolver
     // ---- search loop (Go solve + loop) -----------------------------------------------------------------------------------------------
     SolveResult MacroSearch(double timeLimitSec, System.Diagnostics.Stopwatch sw)
     {
-        mNodeLimit = opt.NodeBudget;
+        mNodeLimit = nodeLimitOverride > 0 ? nodeLimitOverride : opt.NodeBudget;
         mDeadlineMs = opt.NodeBudget > 0 ? 0 : timeLimitSec * 1000;
         long expanded = 0;
         if (MExpired()) return new SolveResult { Reason = "timeout" };
@@ -348,12 +349,14 @@ public sealed unsafe partial class FullSolver
                 if (MExpired()) return new SolveResult { Reason = "timeout", Nodes = expanded };
                 return new SolveResult { Reason = "exhausted", Nodes = expanded };
             }
+            if (p4pend != null && StepPlan4()) return new SolveResult { Reason = "replan", Nodes = expanded };
             int id = e.Node;
             nodes.Unpack(id, cur);
             int h = 0;
             foreach (int b in cur) { SetOcc(b, true); h += dist[b]; }
             expanded++; mExpandedN++;
-            if ((expanded & 255) == 0 && opt.BudgetBytes > 0 && (ulong)(nodes.Bytes + mmv.Bytes + mmvScore.Bytes + maux.Bytes) > opt.BudgetBytes)
+            if (bat != null && (mExpandedN & 1023) == 0 && !bat.Yield(batMe)) return new SolveResult { Reason = "stopped", Nodes = expanded };
+            if ((expanded & 255) == 0 && opt.BudgetBytes > 0 && (ulong)(nodes.Bytes + mmv.Bytes + mmvScore.Bytes + maux.Bytes) > opt.BudgetBytes / (ulong)(bat?.Live() ?? 1))
                 return new SolveResult { Reason = "memory", Nodes = expanded };
             int pl = nodes.Player(id);
             Reach(pl, mark);

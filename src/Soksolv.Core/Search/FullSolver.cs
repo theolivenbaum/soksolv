@@ -7,6 +7,7 @@ public struct Push { public int From; public sbyte Dir; public Push(int f, sbyte
 
 public sealed class SolveStats
 {
+    public int Plan4Exp, Plan4Swap; public bool Plan4Pending, Plan4Complete;
     public long Generated, Duplicates, CorralDead, FrontierCorrals, DispAdvisor, CorridorFlow, PackingPrepQueries, PackingPrepPicks, PackingPrepClears, DeadSquare, Frozen2x2, GoalArea, Freeze, PairDead, ClusterDead, SideDead, Assignment, Macros, ConnAdvisor, Corrals, Penalized, PairsTried, PairsDead;
     public int Stored; public int LeanAt;
 }
@@ -31,10 +32,15 @@ public sealed class FullOptions
     public volatile bool Stop;
     public CancelFlag? Cancel;
     /// <summary>Macro lane: highest ported feature stage (1..5) and the stage-6 default-on feature mask (bit0 move windows, ...).</summary>
-    public int MacroStage = 5, MacroFeatures = 31; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
+    public int MacroStage = 5, MacroFeatures = 63; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     /// <summary>Go StallFinish (timed runs only): when the best node stops improving, try a short private backward search toward it.
     /// StallScale = timeLimit/600 s when the limit is below 600 s (main.go -stall-scale), scaling the 1 s cap/floor.</summary>
     public bool StallFinish = true;
+    /// <summary>Macro alt engine (exp-769): plan4 with festsink + roomsep + keep-parks 1.</summary>
+    public bool PlanAlt;
+    /// <summary>Go -macro-alt-plan (default on): the macro lane runs a second engine on the alt plan4 config, alternating on a baton.</summary>
+    public bool MacroAlt = true;
+    public FullOptions Clone() => (FullOptions)MemberwiseClone();
     public double StallScale = 1.0;
 }
 

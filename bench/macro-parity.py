@@ -8,7 +8,7 @@ scratch = os.environ.get("SCRATCH", "/tmp")
 go = os.environ.get("GO_S1", f"{scratch}/soksolv-s1")
 aot = f"{root}/artifacts/aot-macro/Soksolv.Cli"
 cs = os.environ.get("CS_BIN", aot if os.path.exists(aot) else f"dotnet {root}/src/Soksolv.Cli/bin/Release/net11.0/Soksolv.Cli.dll")
-stage = int(os.environ.get("STAGE", "1")); feat = os.environ.get("FEAT", "0"); nodes = 20000; specs = []; a = sys.argv[1:]; files = []
+alt = os.environ.get("ALT", "0") == "1"; stage = int(os.environ.get("STAGE", "1")); feat = os.environ.get("FEAT", "0"); nodes = 20000; specs = []; a = sys.argv[1:]; files = []
 while a:
     x = a.pop(0)
     if x == "-nodes": nodes = int(a.pop(0))
@@ -27,8 +27,8 @@ print(subprocess.run(f"{cs} -header -strategy macro -nodes 1 '{specs[0][0]}' 1 2
 print(f"stage {stage} feat {feat}; nodes cap {nodes}; go={go}; cs={cs}")
 bad = 0; tg = tc = 0; lastfeat = ""
 for f, i in specs:
-    t0 = time.time(); g, gout = run(f"{go} -strategy macro -procs 1 -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_STAGE": str(stage), "SOKSOLV_FEAT": feat}); t1 = time.time()
-    c, cout = run(f"{cs} -parity -macro-stage {stage} -macro-features {feat} -strategy macro -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_S1": "1"}); t2 = time.time()
+    t0 = time.time(); g, gout = run(f"{go} -strategy macro -procs 1 -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_STAGE": str(stage), "SOKSOLV_FEAT": feat, "SOKSOLV_ALT": "1" if alt else "0"}); t1 = time.time()
+    c, cout = run(f"{cs} -parity -macro-alt 0 {"-macro-planalt " if alt else ""}-macro-stage {stage} -macro-features {feat} -strategy macro -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_S1": "1"}); t2 = time.time()
     tg += t1 - t0; tc += t2 - t1
     csfeat = lastfeat
     ok = g == c

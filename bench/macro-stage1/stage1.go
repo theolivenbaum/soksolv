@@ -85,3 +85,6 @@ func s1report(s *solver, expanded int) {
 	fmt.Fprintf(os.Stderr, "S1FEAT corral_dead=%d frontier_corrals=%d disp_adv=%d corridor=%d prep=%d picks=%d\n", s.stats.CorralDead, s.stats.FrontierCorrals, s.stats.Advisors[7], s.stats.CorridorFlow, s.stats.PackingPrepQueries, s.stats.PackingPrepPicks)
 	fmt.Fprintf(os.Stderr, "S1HASH expanded=%d stored=%d generated=%d duplicates=%d hash=%016x\n", expanded, len(s.player), s.stats.Generated, s.stats.Duplicates, s1Hash)
 }
+
+// SOKSOLV_ALT=1: the (single) engine plans like the macro lane's alt engine (exp-769 planAlt: festsink + roomsep + keep-parks 1).
+var altOn = os.Getenv("SOKSOLV_ALT") == "1"
