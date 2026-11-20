@@ -165,3 +165,37 @@ this stage (only the packing planner uses it). C#: `Macro/FullSolver.MacroRooms.
 | LTS sample (42) | 20,000 | 42/42 identical (go 47.7 s, cs JIT 81 s wall) |
 Tests: `MacroTests.Stage2_*` (10 goldens + 2 solve/verify). Not yet tuned: the full room-connectivity recompute per candidate is the
 obvious cost (Go's incremental `roomConnChild` is the speed-up to port when tuning).
+
+
+## Stages 3-5 — DONE (exact parity at every stage)
+
+* **Stage 3 — sink packing plan** (`Macro/FullSolver.MacroPlan.cs`): `buildPackingPlan` (real-sink reachability, sink/pushable
+  squares, goal distances), the pull planner (`pullMoves`: removals take precedence, parking moves sorted by weight/score with the
+  connectivity advisor, stable sorts, per-box distinct `(to, player region)` ends, round-robin cell queues, 4096-node cap) and the
+  plan queries (`status`, `nodeSetup`, `childStatus`, `placed`/`placedRow`). Effects: `packed` and `progress` come from plan phases,
+  the packing advisor also fires on phase progress, out-of-plan uses the plan's placed row. **cutscan.go is replaced by exact
+  floods** (it is a speed-up of "player region with the box on `to`"; one flood per pull instead of one DFS per box).
+* **Stage 4 — hotspots** (`FullSolver.MacroHot.cs`): `row(y)` computed from its definition (box squares that lose reachability of a
+  goal when y becomes a wall, per goal: tree minus re-search with y walled as cell and as support) instead of Go's Euler-tour
+  re-search; per-node counts, `after()` for children, the hot score term, the hotspot advisor and the opener advisor (needs walking
+  distances: cached BFS per source).
+* **Stage 5 — move access** (mobility term, explorer advisor): scan form of `moveAccess` with access novelty off.
+
+Go references: `SOKSOLV_STAGE=3|4|5` of `bench/macro-stage1` (plan on / hot on / access on; each earlier stage's features stay on).
+Fingerprint parity (`bench/macro-parity.py`, `STAGE=n`, `-parity`, 20,000-node caps unless noted):
+
+| stage | Holland_81_27 @1/10/100/1000 | testdata (18) | LTS sample (42) |
+|---|---|---|---|
+| 1 | identical | 18/18 | 42/42 |
+| 2 | identical | 18/18 | 42/42 |
+| 3 | identical | 18/18 | 42/42 |
+| 4 | identical | 18/18 | 42/42 |
+| 5 | identical | 18/18 | 42/42 |
+Unit tests: `MacroTests` (golden fingerprints from the Go reference for stages 1-5, 10 each, plus solve/verify): 61 pass.
+
+**What this lane is at Stage 5:** everything of the default macro lane except the *flag features* (stage 6): move window /
+lazy children / reopen, novelty (+ access novelty), rev-groups, frontier corral, corral deadzone, displacement landmarks, corridor
+flow, packing obligations, plan4 (+ anytime ring), the macro-alt engine and the portfolio ring/revive wrapper. Speed has not been
+tuned since Stage 1 (full room-connectivity recompute per candidate; plan/hot rows computed from definitions): C# JIT wall time is
+~1.0-1.7x the Go reference's on 20k-node runs (dominated by .NET startup/JIT on short runs); optimisation is the next job once
+stage 6 lands (Go's incremental `roomConnChild` and tree-based hotspot rows are the known speed-ups).
