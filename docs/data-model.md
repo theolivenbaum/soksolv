@@ -90,3 +90,21 @@ Measured with `bench/compare.py` / best-of-5 wall time, same machine, single lan
   stays on for the JIT build (`TieredPGO`), but did not beat AOT.
 * Build: `bench/publish-aot.sh` → `artifacts/aot/Soksolv.Cli` (1.3 MB, needs clang/lld to link);
   `bench/compare.py` uses it by default (`CS_JIT=1` to compare the JIT build).
+
+## 5. Cluster checker optimisation (Phase 2)
+
+Profile (Go and C# alike): cluster deadlock proofs = 60% of runtime; **66–85% of proof-search states were
+spent in searches that hit the 1000-state cap and learned nothing** (Holland_81_57: 874k of 1.3M states),
+and 70–85% of those were repeats of a box set that had already capped from another player side.
+
+| change | effect | parity with Go |
+|---|---|---|
+| pinned buffers, wall\|box byte map, unrolled 4-neighbour floods (cluster + solver `Reach`/`Regions`) | parity mode 1.02× → 0.75× Go time | identical nodes |
+| incremental child-region normalisation (pocket flood behind the pushed box, region-min rescan; full flood only when t may split the region) | floods/state 3.2 → 2.2 | identical (checked vs flood with `-cluster-check`) |
+| **A\*** proof search (h = Σ box→nearest-goal push distance; admissible+consistent ⇒ same minimal cost, dead proofs still exhaustive) | alive/capped searches far cheaper, penalties now available for clusters that used to cap | changes proof order ⇒ ±1–4% nodes |
+| **skip capped box sets** for other player sides (alive is always safe) | 1.5M of 2.2M SokHard_36 states removed | idem |
+
+Result (Native AOT, 18-level subset, `bench/compare.py`): Go 48–49 s; C# `-parity` 36 s (0.75×, all nodes
+and pushes identical); C# default (fast cluster proofs) **22.4 s (0.46×)**, 3× less memory, all solutions verified.
+On the 28 levels Go's `full` lane fails to solve in 20 s, the C# default solves 5 (Grigr2001_100#59,
+Grigr2002_40#34, Sasquatch_V_50#32, SokHard_163#57, #124) and loses none of the levels Go solves.

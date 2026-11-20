@@ -29,7 +29,8 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 
 - [x] Native AOT build + compare harness uses it: 18/18 identical to Go, 0.85x Go's time (JIT build was 1.02x)
 - [ ] Re-run node-capped 297-level LTS sample (-nodes 5000) to hunt divergences (first attempt aborted: Sasquatch_VI#50 slow)
-- [ ] Speed up cluster flood (60% of time): fewer floods / cheaper flood
+- [x] Cluster checker: A*, capped-set skipping, incremental region normalisation (0.46x Go time, +5 solves on Go-unsolved set); `-parity` keeps Go-identical mode (0.75x)
+- [ ] Remaining hot spots (SokHard_36 profile): Regions() 12%, piCorral 9%, pairDeadlock 6%, apply 13% — carry region bitmaps / incremental region count; bitboard pair offsets
 
 ## Phase 3 — Remaining lanes (from `laneTable` in `.reference/lane.go`)
 - [ ] reverse (pull) search — `.reference/reverse/` (3.6k lines)
