@@ -75,6 +75,7 @@ public sealed unsafe partial class FullSolver
         {
             long planDeadline = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(250, timeLimitSec * 1000 / 10);
             mPlan = MBuildPackingPlan(4096, planDeadline);
+            if (mPlan != null && Feat(4)) mPlan.Dag = CompilePackingDag(mPlan); // installPlanStats: PackingObligations
         }
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
         m3P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref m3[0]);
@@ -94,7 +95,7 @@ public sealed unsafe partial class FullSolver
     void MacroReport(SolveResult res)
     {
         res.Fingerprint = $"expanded={res.Nodes} stored={nodes.Count} generated={stats.Generated} duplicates={stats.Duplicates} hash={s1Hash:x16}";
-        if (s1Env) { Console.Error.WriteLine($"S1FEAT corral_dead={stats.CorralDead} frontier_corrals={stats.FrontierCorrals} disp_adv={stats.DispAdvisor} corridor={stats.CorridorFlow}"); Console.Error.WriteLine("S1HASH " + res.Fingerprint); }
+        if (s1Env) { Console.Error.WriteLine($"S1FEAT corral_dead={stats.CorralDead} frontier_corrals={stats.FrontierCorrals} disp_adv={stats.DispAdvisor} corridor={stats.CorridorFlow} prep={stats.PackingPrepQueries} picks={stats.PackingPrepPicks}"); Console.Error.WriteLine("S1HASH " + res.Fingerprint); }
     }
     static readonly bool s1Env = Environment.GetEnvironmentVariable("SOKSOLV_S1") == "1";
     /// <summary>Maintain the per-move fingerprint (tests / parity runs). Off in production runs.</summary>

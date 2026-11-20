@@ -21,9 +21,12 @@ public static class ReverseRunner
         try { lv = Level.Parse(rows, template.CloseHoles); }
         catch (InvalidDataException e) { return new SolveResult { Reason = e.Message }; }
         long nodes = 0; int quick = 0;
+        // Go -stall-scale (default on, exp-349): fixed wall-clock constants scale with the budget: CellsAfter = 2 s * t/600 for t < 600 s
+        double cellsAfter = template.CellsAfterSec;
+        if (template.StallScale && timeLimitSec > 0 && timeLimitSec < 600) cellsAfter *= timeLimitSec / 600;
         for (int phase = 0; ; phase++)
         {
-            var o = Clone(template); o.Phase = phase;
+            var o = Clone(template); o.Phase = phase; o.CellsAfterSec = cellsAfter;
             tweak?.Invoke(o);
             long begun = sw.ElapsedMilliseconds;
             SolveResult r;

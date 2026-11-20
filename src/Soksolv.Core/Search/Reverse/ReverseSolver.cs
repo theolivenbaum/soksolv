@@ -20,6 +20,7 @@ public sealed class RevOptions
     public ulong MemLimitBytes;   // process backstop (0 = off)
     public bool CloseHoles = true;
     public double CellsAfterSec = 2.0;
+    public bool StallScale = true;  // Go -stall-scale: CellsAfter scales with the time limit (t/600) when t < 600 s
     public long CellsAfterExp = 40000;
     public int TypesEvery = 4;
     public long WalkAfter = 5000; public int WalkCount = 16, WalkLen = 50;

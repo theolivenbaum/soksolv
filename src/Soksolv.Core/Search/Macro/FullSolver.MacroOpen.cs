@@ -43,6 +43,8 @@ public sealed unsafe partial class FullSolver
         if (Feat(1)) corral = FirstPushCorral(nodes.Player(id), st); // FrontierCorral (corral_frontier.go)
         if (corral == 0) corral = PiCorral(st);
         if (corral != 0) stats.Corrals++;
+        packPrepared = false;
+        if (Feat(4)) PreparePackingObligations();
         mPlan?.NodeSetup(cur);
         Prof.Stop(5, tc);
         mOpenId = id; mOpenSt = st; mParentOop = parentOop; mParentRoom = parentRoom; mHotCounts = counts;
@@ -100,6 +102,12 @@ public sealed unsafe partial class FullSolver
                     if (gIdxT < 0 || (displaceMask & (1UL << gIdxT)) == 0) MChoose(ref dispK, k);
                 }
             }
+        }
+        if (packingK < 0 && packPrepared)
+        {
+            int pk = -1;
+            bool clearing = PackingObligationAdvice(k => MChoose(ref pk, k));
+            if (pk >= 0) { packingK = pk; stats.PackingPrepPicks++; if (clearing) stats.PackingPrepClears++; }
         }
         if (mWeights.Length < nm) { mWeights = new int[nm * 2]; mKeys = new MKey[nm * 2]; }
         for (int k = 0; k < nm; k++) mWeights[k] = 1;

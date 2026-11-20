@@ -11,6 +11,9 @@ public sealed unsafe partial class FullSolver
     {
         public int[][] Required = [];          // per phase (best first, root last as built by the planner chain walk)
         public int[][] Check = [];
+        public int[] Players = [];             // per phase: normalized player cell
+        public PMove[] Moves = [];             // per phase: witnessed pull move from the next phase to this one
+        public PackingDag? Dag; public int CausalVisits;
         public ulong[] In = [];                // per phase bitset of required cells
         public int InW;
         public bool Complete; public int Expanded, Parkings, Remaining;
@@ -377,14 +380,14 @@ public sealed unsafe partial class FullSolver
             }
             var bn = nodes[best];
             var res = new PackingPlan { Complete = bn.Boxes.Length == 0, Expanded = expanded, Remaining = bn.Boxes.Length };
-            var req = new List<int[]>();
+            var req = new List<int[]>(); var plr = new List<int>(); var mvs = new List<PMove>();
             for (int id = best; id >= 0; id = nodes[id].Parent)
             {
                 var n = nodes[id];
-                req.Add((int[])n.Boxes.Clone());
+                req.Add((int[])n.Boxes.Clone()); plr.Add(n.Player); mvs.Add(n.Move);
                 if (n.Parent >= 0 && !n.Move.Remove) res.Parkings++;
             }
-            res.Required = req.ToArray();
+            res.Required = req.ToArray(); res.Players = plr.ToArray(); res.Moves = mvs.ToArray();
             return res;
         }
     }
