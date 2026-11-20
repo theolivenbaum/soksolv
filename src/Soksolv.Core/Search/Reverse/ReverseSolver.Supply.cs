@@ -233,7 +233,9 @@ public sealed unsafe partial class ReverseSolver
             g = GraphFor(f, p);
         }
         if (sp.ReachOf.Length < sp.Off.Count) Array.Resize(ref sp.ReachOf, sp.Off.Count * 2);
-        sp.Cache ??= new SupEntry[Supply.SupCache];
+        // the reach cache is a pure memo (results never depend on it): start small, double while misses outgrow it
+        if (sp.Cache == null) sp.Cache = new SupEntry[1 << 12];
+        else if (sp.Misses > (long)sp.Cache.Length * 2 && sp.Cache.Length < Supply.SupCache) sp.Cache = new SupEntry[sp.Cache.Length * 2];
         for (int oi = 0; oi < sp.Off.Count; oi++)
         {
             int b = sp.Off[oi];
@@ -244,7 +246,7 @@ public sealed unsafe partial class ReverseSolver
                 ulong fp = (hf ^ (ulong)b << 3 ^ (ulong)l) * 0x9E3779B97F4A7C15UL | 1;
                 fp ^= fp >> 29;
                 fp |= 1;
-                ref var e = ref sp.Cache[(int)(fp & (Supply.SupCache - 1))];
+                ref var e = ref sp.Cache[(int)(fp & (ulong)(sp.Cache.Length - 1))];
                 if (e.Fp == fp) r = e.R;
                 else
                 {
