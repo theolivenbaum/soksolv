@@ -33,7 +33,7 @@ public sealed unsafe partial class FullSolver
 
     struct MCand
     {
-        public int I, B, T, R, Packed, Plen, Side, Room, Oop;
+        public int I, B, T, R, Packed, Plen, Side, Room, Oop, Progress;
         public ulong ScoreKey;
     }
     struct MKey { public int W, Oop, Packed, R, Room, Plen, Idx; }
@@ -64,6 +64,11 @@ public sealed unsafe partial class FullSolver
         mSetupDeadlineMs = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(100, timeLimitSec * 1000 / 10);
         mNodeLimit = opt.NodeBudget;
         if (MacroStage >= 2) { MComputeRooms(); MComputeBasin(); }
+        if (MacroStage >= 3)
+        {
+            long planDeadline = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(250, timeLimitSec * 1000 / 10);
+            mPlan = MBuildPackingPlan(4096, planDeadline);
+        }
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
         m3P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref m3[0]);
         mpost = new uint[4 * cells]; mseen = new uint[4 * cells]; mtseen = new uint[4 * cells];
@@ -115,6 +120,7 @@ public sealed unsafe partial class FullSolver
     /// <summary>Boxes on goals (no sink plan: Go packedWith with plan == nil).</summary>
     int MPacked()
     {
+        if (mPlan != null) return mPlan.Status(occ).packed;
         int c = 0;
         foreach (int g in goals) if (occ[g]) c++;
         return c;

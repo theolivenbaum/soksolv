@@ -266,7 +266,7 @@ public sealed unsafe partial class FullSolver
     {
         basinInside = null; basinDist = null;
         if (rmRooms.Length == 0) return;
-        bool[]? best = null; int bestBoxes = -1, bestRoom = -1;
+        bool[]? best = null; int bestBoxes = -1, bestRoom = -1, bestSink = -1;
         foreach (int g in goals)
         {
             var inside = TargetBasin(g);
@@ -278,10 +278,10 @@ public sealed unsafe partial class FullSolver
             int sink = -1, roomSize = 0;
             for (int r = 0; r < rcounts.Length; r++) if (rcounts[r] > roomSize) { sink = r; roomSize = rcounts[r]; }
             if (sink < 0) continue;
-            if (boxes > bestBoxes || boxes == bestBoxes && roomSize > bestRoom) { bestBoxes = boxes; bestRoom = roomSize; best = inside; }
+            if (boxes > bestBoxes || boxes == bestBoxes && roomSize > bestRoom) { bestBoxes = boxes; bestRoom = roomSize; best = inside; bestSink = sink; }
         }
         if (best == null) return;
-        basinInside = best;
+        basinInside = best; basinSink = bestSink;
         var d = new int[cells]; Array.Fill(d, -1);
         var q = new List<int>();
         for (int c = 0; c < cells; c++) if (best[c]) { d[c] = 0; q.Add(c); }
@@ -294,14 +294,22 @@ public sealed unsafe partial class FullSolver
         basinDist = d;
     }
 
-    /// <summary>One box's out-of-plan term (no plan: a box outside the basin counts unless it is on a goal).</summary>
+    /// <summary>One box's out-of-plan term without a plan (boxes outside the basin count unless on a goal).</summary>
     int OopOne(int c) => basinInside != null && !basinInside[c] && !goal[c] ? 1 : 0;
 
-    int MOutOfPlan(ReadOnlySpan<int> boxes)
+    /// <summary>Go outOfPlanStep: boxes outside the basin that are neither placed in the plan's phase row nor on a goal. phase -2: look up from occ.</summary>
+    int MOutOfPlan(ReadOnlySpan<int> boxes, int phase = -2, int replaceIdx = -1, int replaceCell = 0)
     {
         if (basinInside == null) return 0;
+        if (mPlan != null && phase == -2) phase = mPlan.Status(occ).phase;
         int n2 = 0;
-        foreach (int b in boxes) n2 += OopOne(b);
+        for (int j = 0; j < boxes.Length; j++)
+        {
+            int b = j == replaceIdx ? replaceCell : boxes[j];
+            if (basinInside[b]) continue;
+            bool ok = mPlan != null ? mPlan.PlacedRow(phase, b) : goal[b] && occ[b];
+            if (!ok && !goal[b]) n2++;
+        }
         return n2;
     }
 

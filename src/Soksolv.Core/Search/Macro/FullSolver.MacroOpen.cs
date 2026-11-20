@@ -23,8 +23,10 @@ public sealed unsafe partial class FullSolver
         int parentConn = maux[id].Reg;
         int parentRoom = MRoomConnectivity();
         int parentOop = MOutOfPlan(cur);
+        int parentPhase = mPlan != null ? mPlan.Status(occ).phase : -1;
         uint corral = PiCorral(st);
         if (corral != 0) stats.Corrals++;
+        mPlan?.NodeSetup(cur);
         mOpenId = id; mOpenSt = st; mParentOop = parentOop;
         for (int i = 0; i < cur.Length; i++)
         {
@@ -44,13 +46,13 @@ public sealed unsafe partial class FullSolver
             for (int i = 0; i < cur.Length; i++)
             {
                 int b = cur[i];
-                if (!basinInside[b] && !goal[b] && (nearest < 0 || basinDist![b] < basinDist[cur[nearest]])) nearest = i;
+                if (!basinInside[b] && !(mPlan != null ? mPlan.Placed(b, parentPhase) : goal[b]) && (nearest < 0 || basinDist![b] < basinDist[cur[nearest]])) nearest = i;
             }
         int oopFrom = nearest >= 0 ? cur[nearest] : 0, oopNear = 1 << 30;
         for (int k = 0; k < nm; k++)
         {
             ref var m = ref mCands[k];
-            if (m.Packed > parentPacked) MChoose(ref packingK, k);
+            if (m.Packed > parentPacked || mPlan != null && m.Progress > parentPhase) MChoose(ref packingK, k);
             if (m.R < parentConn) MChoose(ref connK, k);
             if (m.Room < parentRoom) MChoose(ref roomK, k);
             if (nearest >= 0 && m.R <= parentConn && basinInside![m.T] && !basinInside[m.B])
@@ -125,7 +127,15 @@ public sealed unsafe partial class FullSolver
             }
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
             if (mCandN == mCands.Length) Array.Resize(ref mCands, mCandN * 2);
-            mCands[mCandN++] = new MCand { I = i, B = cur[i], T = t, R = r, Packed = MPacked(), Plen = plen, Side = k & 3, Room = MRoomConnectivity(), Oop = mParentOop - OopOne(cur[i]) + OopOne(t) };
+            int room = MRoomConnectivity(), packed, oop, progress = -2;
+            if (mPlan != null)
+            {
+                var (cphase, cpacked) = mPlan.ChildStatus(cur[i], t);
+                packed = cpacked; progress = cphase;
+                oop = MOutOfPlan(cur, cphase, i, t);
+            }
+            else { packed = MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
+            mCands[mCandN++] = new MCand { I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress };
         }
         SetOcc(t, false);
         return true;
