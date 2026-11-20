@@ -19,6 +19,7 @@ for (int i = 0; i < args.Length; i++)
         case "-nodes": nodes = long.Parse(args[++i]); break;
         case "-header": header = true; break;
         case "-parity": ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; break; // Go-identical cluster proofs (BFS, no skipping)
+        case "-macro-stage": FullSolver.MacroStage = int.Parse(args[++i]); break;
         case "-cluster-astar": ClusterChecker.AStar = true; break;
         case "-cluster-check": ClusterChecker.CheckFast = true; break;
         case "-cluster-skipcap": ClusterChecker.SkipCapped = true; break;

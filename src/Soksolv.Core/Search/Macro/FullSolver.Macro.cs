@@ -33,10 +33,10 @@ public sealed unsafe partial class FullSolver
 
     struct MCand
     {
-        public int I, B, T, R, Packed, Plen, Side;
+        public int I, B, T, R, Packed, Plen, Side, Room, Oop;
         public ulong ScoreKey;
     }
-    struct MKey { public int W, Packed, R, Plen, Idx; }
+    struct MKey { public int W, Oop, Packed, R, Room, Plen, Idx; }
     MCand[] mCands = new MCand[64]; int mCandN;
     int[] mWeights = new int[64]; MKey[] mKeys = new MKey[64];
 
@@ -61,6 +61,9 @@ public sealed unsafe partial class FullSolver
             var bd = new ClusterBoard(wall, goal, deadSq, W, salt: true);
             cl = new ClusterChecker(bd) { Shared = opt.SharedClusters, SharedPen = null };
         }
+        mSetupDeadlineMs = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(100, timeLimitSec * 1000 / 10);
+        mNodeLimit = opt.NodeBudget;
+        if (MacroStage >= 2) { MComputeRooms(); MComputeBasin(); }
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
         m3P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref m3[0]);
         mpost = new uint[4 * cells]; mseen = new uint[4 * cells]; mtseen = new uint[4 * cells];
@@ -180,7 +183,7 @@ public sealed unsafe partial class FullSolver
         mLastAdded = id;
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = Regions();
-        var cell = new FeatureCell(MPacked(), reg, 0, 0);
+        var cell = new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
         int bucket = Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell });
         if (nodes.NeedsGrow) nodes.Grow();

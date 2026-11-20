@@ -8,7 +8,7 @@ scratch = os.environ.get("SCRATCH", "/tmp")
 go = os.environ.get("GO_S1", f"{scratch}/soksolv-s1")
 aot = f"{root}/artifacts/aot-macro/Soksolv.Cli"
 cs = os.environ.get("CS_BIN", aot if os.path.exists(aot) else f"dotnet {root}/src/Soksolv.Cli/bin/Release/net11.0/Soksolv.Cli.dll")
-nodes = 20000; specs = []; a = sys.argv[1:]; files = []
+stage = int(os.environ.get("STAGE", "1")); nodes = 20000; specs = []; a = sys.argv[1:]; files = []
 while a:
     x = a.pop(0)
     if x == "-nodes": nodes = int(a.pop(0))
@@ -23,11 +23,11 @@ def run(cmd, extra):
     m = re.search(r"S1HASH (.*)", r.stderr)
     return (m.group(1) if m else "NO-S1HASH " + r.stderr[-150:].replace("\n", " ")), r.stdout
 print(subprocess.run(f"{cs} -header -strategy macro -nodes 1 '{specs[0][0]}' 1 2>&1 >/dev/null | head -8", shell=True, capture_output=True, text=True, env=env).stdout, end="")
-print(f"nodes cap {nodes}; go={go}; cs={cs}")
+print(f"stage {stage}; nodes cap {nodes}; go={go}; cs={cs}")
 bad = 0; tg = tc = 0
 for f, i in specs:
-    t0 = time.time(); g, gout = run(f"{go} -strategy macro -procs 1 -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_STAGE1": "1"}); t1 = time.time()
-    c, cout = run(f"{cs} -parity -strategy macro -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_S1": "1"}); t2 = time.time()
+    t0 = time.time(); g, gout = run(f"{go} -strategy macro -procs 1 -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_STAGE": str(stage)}); t1 = time.time()
+    c, cout = run(f"{cs} -parity -macro-stage {stage} -strategy macro -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_S1": "1"}); t2 = time.time()
     tg += t1 - t0; tc += t2 - t1
     ok = g == c
     if not ok: bad += 1

@@ -75,11 +75,40 @@ for tag, fn, i, rows in levels():
     if key in done: continue
     n += 1
     if limit and n > limit: break
-    cmd = f"'{go_bin}' -t {tl} -mem 12000 -procs {gop} {extra} '{fn}' {i}" if who == "go" else f"'{cs_bin}' -t {tl} -mem 12000 {extra} '{fn}' {i}"
-    t0 = time.time()
-    try: r = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env, timeout=tl + 30)
-    except subprocess.TimeoutExpired: r = None
-    el = time.time() - t0
+    if who == "go2":
+        # Go restricted to the lanes ported so far (full + reverse), run concurrently, first verified solution wins:
+        # the apples-to-apples baseline for the C# portfolio (2 threads).
+        cmds = [f"'{go_bin}' -strategy full -procs 1 -t {tl} -mem 6000 {extra} '{fn}' {i}",
+                f"'{go_bin}' -strategy reverse -procs 1 -t {tl} -mem 6000 {extra} '{fn}' {i}"]
+        t0 = time.time()
+        procs = [subprocess.Popen(c, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env, preexec_fn=os.setsid) for c in cmds]
+        best = None; outs = [None, None]
+        pending = set(range(2))
+        import select
+        while pending and time.time() - t0 < tl + 30:
+            for k in list(pending):
+                if procs[k].poll() is not None:
+                    outs[k] = procs[k].stdout.read(); pending.discard(k)
+                    try:
+                        j = json.loads(outs[k])
+                        if j.get("solved") and best is None: best = (k, j)
+                    except Exception: pass
+            if best: break
+            time.sleep(0.005)
+        for k, pr in enumerate(procs):
+            if pr.poll() is None:
+                try: os.killpg(os.getpgid(pr.pid), 9)
+                except Exception: pass
+        el = time.time() - t0
+        class R: pass
+        r = R(); r.stdout = json.dumps(best[1]) if best else "{}"
+        if best: best[1]["time_ms"] = el * 1000; r.stdout = json.dumps(best[1])
+    else:
+        cmd = f"'{go_bin}' -t {tl} -mem 12000 -procs {gop} {extra} '{fn}' {i}" if who == "go" else f"'{cs_bin}' -t {tl} -mem 12000 {extra} '{fn}' {i}"
+        t0 = time.time()
+        try: r = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env, timeout=tl + 30)
+        except subprocess.TimeoutExpired: r = None
+        el = time.time() - t0
     solved = False; moves = pushes = 0; peak = 0.0; ts = el
     if r:
         try:
