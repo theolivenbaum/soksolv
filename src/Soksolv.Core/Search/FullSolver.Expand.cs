@@ -41,6 +41,65 @@ public sealed unsafe partial class FullSolver
         return cnt;
     }
 
+    // ---- incremental child region counts (port of Go artic.go) -----------------------------------------------------
+    // For the board with box b removed, one iterative Tarjan pass over the free cells gives the number of
+    // empty-floor components and, for each free cell t, how many pieces t's component splits into when a box is
+    // placed on t. A child moving b to t then has comps - 1 + pieces[t] regions: O(1) per candidate.
+    int[]? artDisc, artLow, artPieces; uint[]? artSeen; uint artStamp; int artComps;
+    int[]? artStackC, artStackP; sbyte[]? artStackNext;
+    /// <summary>Test hook: verify every incremental region count against a full flood.</summary>
+    public static bool CheckRegions;
+
+    void ComputeArticulation()
+    {
+        if (artDisc == null)
+        {
+            artDisc = new int[cells]; artLow = new int[cells]; artPieces = new int[cells]; artSeen = new uint[cells];
+            artStackC = new int[cells + 1]; artStackP = new int[cells + 1]; artStackNext = new sbyte[cells + 1];
+        }
+        var disc = artDisc; var low = artLow!; var pieces = artPieces!; var seen = artSeen!;
+        var sc = artStackC!; var sp = artStackP!; var sn = artStackNext!;
+        uint st = ++artStamp;
+        artComps = 0;
+        int timer = 0;
+        foreach (int root in FloorCells())
+        {
+            if (blk[root] != 0 || seen[root] == st) continue;
+            artComps++;
+            timer++;
+            disc[root] = timer; low[root] = timer; pieces[root] = 0; seen[root] = st;
+            int sz = 0; sc[0] = root; sp[0] = -1; sn[0] = 0; sz = 1;
+            while (sz > 0)
+            {
+                int top = sz - 1;
+                if (sn[top] < 4)
+                {
+                    int y = sc[top] + dirs[sn[top]++];
+                    if (blk[y] != 0) continue;
+                    if (seen[y] != st)
+                    {
+                        timer++;
+                        disc[y] = timer; low[y] = timer; pieces[y] = 1; seen[y] = st;
+                        sc[sz] = y; sp[sz] = sc[top]; sn[sz] = 0; sz++;
+                    }
+                    else if (y != sp[top])
+                    {
+                        int c = sc[top];
+                        if (disc[y] < low[c]) low[c] = disc[y];
+                    }
+                    continue;
+                }
+                int cc = sc[top], pp = sp[top];
+                sz--;
+                if (pp < 0) continue;
+                if (low[cc] < low[pp]) low[pp] = low[cc];
+                if (low[cc] >= disc[pp]) pieces[pp]++;
+            }
+        }
+    }
+
+    int ChildRegions(int t) => artComps - 1 + artPieces![t];
+
     // ---- PI-corral ---------------------------------------------------------------------------------------------------
     uint PiCorral(uint st)
     {
@@ -340,6 +399,7 @@ public sealed unsafe partial class FullSolver
             {
                 int b = cur[i];
                 if (corral != 0 && cmark[b] != corral) continue;
+                int cands = 0;
                 for (int di = 0; di < 4; di++)
                 {
                     int d = dirs[di], t = b + d;
@@ -359,7 +419,16 @@ public sealed unsafe partial class FullSolver
                     {
                         stats.Generated++;
                         t0 = Prof.Start();
-                        int r = Regions();
+                        int r;
+                        switch (++cands)
+                        {
+                            case 1: r = Regions(); break;
+                            case 2:
+                                SetOcc(t, false); ComputeArticulation(); SetOcc(t, true);
+                                r = ChildRegions(t); break;
+                            default: r = ChildRegions(t); break;
+                        }
+                        if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
                         Prof.Stop(1, t0);
                         int pen = 0;
                         if (opt.Penalties && cl != null && noise == null)

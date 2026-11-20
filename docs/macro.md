@@ -53,3 +53,45 @@ Components reusable from the existing port: `ClusterChecker`, `SideDead`, `GoalA
 FullSolver's flood/normalize/feasible/PI-corral/pair-dead code (to be factored into shared internal helpers in step 1).
 
 Estimate: ~7k lines of C#, comparable to everything ported so far combined; it should be a dedicated effort.
+
+
+## Attempt 2 (steps 1–2): findings — the proposed step order does not work
+
+A second pass tried to port steps 1–2 (FESS skeleton + sink packing plan) against a Go copy with every switchable
+experiment flag off (`-plan4-macro=false -corral-frontier=false -packing-obligations=false -lazy-child=false
+-access-novelty=false -rev-groups=false -novelty2=false -displacement-landmarks=false -corridor-flow=false
+-corral-dead 0 -move-window 0 -pair-side=false`; `novelty` is already 0 by default). Coverage of that build
+(20k nodes × 18 testdata levels) still executes, outside already-ported code:
+
+| executed lines | file | why it can't be skipped |
+|---|---|---|
+| 766 | solver.go | boxSearch (macro move enumeration), apply/add, pushDead pipeline, packedWith, reconstruct |
+| 390 | rooms.go | **room map: the packing plan's sink (`computeBasin`→`rooms.rooms[basin.sink]`), `roomConn*` score term, room advisor** |
+| 354 | packing_plan.go | backward pull planner (weights, heap) used for `packedChild`/`childStatus`/`placedRow` |
+| 307 / 259 | fess_search.go / fess_moves.go | frontier cells, heap entries, windows (`enqueue`/`reopen`), `open()` scoring and sort |
+| 263 | cutscan.go | executed by the room-connectivity bookkeeping |
+| 223 | hotspots.go | hotspot counts feed the hot score term and the opener advisor |
+| 128 | advisors.go | 7 advisors: packing, connectivity, room, hotspots, explorer, opener, out-of-plan |
+| 115 / 107 / 97 / 90 | basin.go / boxflood.go / pairbits.go / moveaccess.go | out-of-plan basin; bitboard flood (result-equal to the plain flood); bit pair-dead (equal to pairDead); mobility/explorer terms |
+
+Consequences:
+* **Rooms must come before the plan** (the plan's sink basin is chosen from the room graph) — the previous order had
+  rooms in step 3. Basin/OOP, hotspots (opener advisor) and move-access (explorer advisor, mobility tie-break) are
+  also unconditional parts of `open()`'s ranking, so there is no smaller exactly-reproducible configuration:
+  the minimum parity target is ≈ 3.5k Go lines (rooms 390, cutscan 263, hotspots 223, basin 115, plan 354,
+  solver core 766, FESS loop/open 560, advisors 128, access 90 + small helpers), i.e. a dedicated multi-day port.
+* Zeroing rooms/hotspots/access in a patched Go copy (room/hot terms → 0, `computeRooms` → nil ⇒ basin nil ⇒ OOP 0)
+  would give an exactly reproducible *reduced* lane for staged validation, but it is a different (weaker) search
+  than the real macro lane, so the staged port must still end up porting everything above.
+* Recommended order: (1) core push/macro-move machinery + `articulation` (done, see below) + FESS frontier with
+  the 4 cell features and scores (oop/packed/conn) against Go with room/hot/access zeroed; (2) rooms+cutscan+basin
+  (adds `room` term + room advisor + OOP); (3) sink plan; (4) hotspots; (5) move-access; (6) the flag features.
+  Validate each stage with a Go copy where only the *later* stages' score terms are zeroed.
+
+### Spin-off delivered from this attempt
+`articulation` (Go artic.go) is ported into `FullSolver` as incremental child region counts (one iterative Tarjan
+pass per box from its second candidate on, O(1) per candidate): bit-exact with the flood count
+(`FullSolver.CheckRegions` test hook, `IncrementalChildRegionCount_AgreesWithFlood`), parity-mode node counts
+unchanged (Holland_81_57 152817, SokHard_163_36 362653), fast mode ≈ 7% faster
+(Holland_81_57 3.73 → 3.41 s, SokHard_163_36 5.77 → 5.37 s, JIT build). The same code is what `open()` of the
+macro lane uses (`regionsChild`/`childRegions`), so it is reusable when the lane is ported.

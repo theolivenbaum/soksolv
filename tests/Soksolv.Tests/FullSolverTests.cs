@@ -79,6 +79,23 @@ public class FullSolverTests
     }
 
     [Fact]
+    public void IncrementalChildRegionCount_AgreesWithFlood()
+    {
+        bool a = ClusterChecker.AStar, s = ClusterChecker.SkipCapped, c = FullSolver.CheckRegions;
+        ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; FullSolver.CheckRegions = true;
+        try
+        {
+            foreach (var lv in new[] { "Holland_81_27", "SokHard_163_23", "Sasquatch_VI_50_24" })
+            {
+                var opt = Parity();
+                opt.NodeBudget = 6000;
+                FullSolver.Solve(TestData.Rows(lv), opt, 60); // throws on any disagreement
+            }
+        }
+        finally { ClusterChecker.AStar = a; ClusterChecker.SkipCapped = s; FullSolver.CheckRegions = c; }
+    }
+
+    [Fact]
     public void Verifier_RejectsBadSolutions()
     {
         string[] rows = ["######", "#@$ .#", "######"];
