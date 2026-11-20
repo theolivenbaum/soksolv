@@ -25,6 +25,7 @@ go_bin = os.environ.get("GO_SOKSOLV", f"{scratch}/soksolv-go")
 aot = f"{root}/artifacts/aot/Soksolv.Cli"
 cs_dll = f"{root}/src/Soksolv.Cli/bin/Release/net11.0/Soksolv.Cli.dll"
 CS_FLAGS = os.environ.get("CS_FLAGS", "")
+if "-strategy" not in CS_FLAGS: CS_FLAGS = "-strategy full " + CS_FLAGS
 GO_FLAGS = os.environ.get("GO_FLAGS", "-strategy full -procs 1")
 CS = aot if os.path.exists(aot) and not os.environ.get("CS_JIT") else f"dotnet {cs_dll}"   # Native AOT by default (bench/publish-aot.sh)
 env = dict(os.environ, PATH=os.environ["PATH"] + ":/root/.dotnet:/usr/local/go/bin", DOTNET_TieredPGO="1")

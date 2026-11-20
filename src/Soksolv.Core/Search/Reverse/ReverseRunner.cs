@@ -34,7 +34,7 @@ public static class ReverseRunner
             }
             nodes += r.Nodes; r.Nodes = nodes;
             double remaining = timeLimitSec > 0 ? timeLimitSec - sw.Elapsed.TotalSeconds : double.MaxValue;
-            if (r.Reason == "memory" && remaining > 1.0 && !template.Stop && template.NodeBudget == 0)
+            if (r.Reason == "memory" && remaining > 1.0 && !template.Stop && !(template.Cancel?.Stopped ?? false) && template.NodeBudget == 0)
             {
                 GC.Collect();
                 // restart backoff: quick failures sleep with exponential backoff (20 ms .. 1 s)

@@ -24,6 +24,7 @@ public sealed class RevOptions
     public int TypesEvery = 4;
     public long WalkAfter = 5000; public int WalkCount = 16, WalkLen = 50;
     public volatile bool Stop;
+    public CancelFlag? Cancel;
 }
 
 /// <summary>
@@ -492,7 +493,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             if ((expanded & 255) == 0)
             {
                 long now = clock.ElapsedMilliseconds;
-                if ((limitMs > 0 && now > limitMs && opt.NodeBudget == 0) || opt.Stop) return new SolveResult { Reason = "timeout", Nodes = expanded };
+                if ((limitMs > 0 && now > limitMs && opt.NodeBudget == 0) || opt.Stop || (opt.Cancel?.Stopped ?? false)) return new SolveResult { Reason = "timeout", Nodes = expanded };
                 if (now - lastMem > 50)
                 {
                     lastMem = now;

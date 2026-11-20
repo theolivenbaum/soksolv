@@ -14,8 +14,11 @@ public sealed class SolveStats
 public sealed class SolveResult
 {
     public bool Solved; public string Reason = ""; public string Solution = ""; public long Nodes; public SolveStats Stats = new();
-    public double TimeMs; public long PeakBytes;
+    public double TimeMs; public long PeakBytes; public string Strategy = "";
 }
+
+/// <summary>Shared cancellation: set by the portfolio when one lane solved or the deadline passed.</summary>
+public sealed class CancelFlag { volatile bool stopped; public bool Stopped => stopped; public void Cancel() => stopped = true; }
 
 public sealed class FullOptions
 {
@@ -25,6 +28,7 @@ public sealed class FullOptions
     public int Seed;
     public ClusterTable? SharedClusters, SharedPenalties;
     public volatile bool Stop;
+    public CancelFlag? Cancel;
 }
 
 /// <summary>

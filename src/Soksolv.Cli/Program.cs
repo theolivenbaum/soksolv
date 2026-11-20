@@ -7,7 +7,7 @@ using Soksolv.Search.Reverse;
 
 // soksolv [-t seconds] [-mem MiB] [-nodes N] [-header] <file.xsb> [level index (1-based)]
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
-string strategy = "full"; int revLanes = 2, revSupply = 4, revExtra = 0;
+string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
 for (int i = 0; i < args.Length; i++)
@@ -45,14 +45,24 @@ var opt = new FullOptions
     SharedClusters = new ClusterTable(16),
     SharedPenalties = new ClusterTable(16),
 };
-SolveResult res;
-if (strategy == "reverse")
+SolveResult Run(string[] r, double tl)
 {
-    var ro = ReverseRunner.Config(revLanes, revSupply);
-    ro.NodeBudget = nodes; ro.BudgetBytes = opt.BudgetBytes; ro.MemLimitBytes = (ulong)memMb * 1024 * 1024;
-    res = ReverseRunner.Solve(rows, ro, tLimit);
+    if (strategy == "reverse")
+    {
+        var ro = ReverseRunner.Config(revLanes, revSupply);
+        ro.NodeBudget = nodes; ro.BudgetBytes = opt.BudgetBytes; ro.MemLimitBytes = (ulong)memMb * 1024 * 1024;
+        return ReverseRunner.Solve(r, ro, tl);
+    }
+    if (strategy == "full") return FullSolver.Solve(r, opt, tl);
+    return Portfolio.Solve(r, new PortfolioOptions { NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
 }
-else res = FullSolver.Solve(rows, opt, tLimit);
+SolveResult res;
+{
+    Level lvl;
+    try { lvl = Level.Parse(rows); } catch (InvalidDataException) { lvl = null!; }
+    // levels that start solved need a solution with at least one push: try each first push (circular.go)
+    res = lvl != null && strategy != "all" && Circular.StartsSolved(lvl) ? Circular.Solve(rows, Run, tLimit) : Run(rows, tLimit);
+}
 string? verr = res.Solved ? Verifier.CheckSolution(rows, res.Solution) : null;
 int pushes = res.Solution.Count(char.IsUpper);
 var sb = new StringBuilder();
@@ -65,6 +75,6 @@ sb.Append(CultureInfo.InvariantCulture, $"  \"peak_memory_mb\": {res.PeakBytes /
 sb.Append($"  \"stored\": {res.Stats.Stored},\n  \"generated\": {res.Stats.Generated},\n  \"duplicates\": {res.Stats.Duplicates},\n");
 sb.Append($"  \"reason\": \"{res.Reason}\",\n");
 if (verr != null) sb.Append($"  \"verify_error\": \"{verr}\",\n");
-sb.Append($"  \"solution\": \"{res.Solution}\",\n  \"strategy\": \"{strategy}\"\n}}\n");
+sb.Append($"  \"solution\": \"{res.Solution}\",\n  \"strategy\": \"{(res.Strategy != "" ? res.Strategy : strategy)}\"\n}}\n");
 Console.Out.Write(sb.ToString());
 return res.Solved && verr == null ? 0 : 1;

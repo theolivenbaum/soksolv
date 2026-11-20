@@ -70,7 +70,7 @@ public sealed unsafe partial class FullSolver
             if ((expanded & 255) == 0)
             {
                 long now = sw.ElapsedMilliseconds;
-                if ((opt.NodeBudget == 0 && limitMs > 0 && now > limitMs) || opt.Stop) return new SolveResult { Reason = "timeout", Nodes = expanded };
+                if ((opt.NodeBudget == 0 && limitMs > 0 && now > limitMs) || opt.Stop || (opt.Cancel?.Stopped ?? false)) return new SolveResult { Reason = "timeout", Nodes = expanded };
                 if (now - lastMemCheck > 50)
                 {
                     lastMemCheck = now;
