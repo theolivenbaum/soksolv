@@ -262,3 +262,23 @@ it is still ~2.2x slower: Go uses word-parallel variants of the box-search flood
 * Timed-mode sanity (`bench/macro-timed.py`, macro lane stage 5 + FEAT 31 on both sides, 28 hard levels at `-t 10`, 4-core shared VM): **Go 7 solved, C# 8 solved**; on the 7 levels both
   solve C# needs 20.0 s vs Go 21.1 s; deterministic cases have identical node counts (75506, 55512, 55507, 266151); on very wide unsolved levels C# reaches 10-50% fewer nodes in
   the 10 s (same gap as in the -nodes timing: word-parallel box-search/move-access/region variants not yet ported), on narrower ones (SokHard_163) it reaches more.
+
+
+## Status after stage 6e (what is and is not the Go default)
+
+Ported with exact fingerprint parity (patched Go reference, `SOKSOLV_STAGE=5 SOKSOLV_FEAT=31`): stages 1-5, move windows/reopen (6a), corral deadzone proofs + frontier
+corral (6b), displacement landmarks (6c), corridor flow (6d), packing obligations (6e); plus the timed-mode StallFinish/StallScale. `-strategy macro` and the portfolio's macro lane now
+default to `-macro-stage 5 -macro-features 31`. 141 tests pass.
+
+**Not ported (the macro lane is still weaker than Go's default):**
+* **6f plan4** (`-plan4-macro`, `-plan4-anytime`, `-plan4-anytime-restart`, all default on; macro lane only): Festival's BASE_SEARCH-style packing planner
+  `planner2`/`planner4` (`packing_plan2.go` ~280 executed lines, `packing_plan4.go` ~800, `packing_fest.go` ~70) whose witness gives the macro lane its *Festival prefix* `packed`
+  feature (`festPacked`; `plan.fest.packed(occ)` in `solver.go packed()` and the child variant at `solver.go:927`), the anytime stepping inside the loop (`stepPlan4`, `-plan4-anytime-ratio 8`)
+  and the restart when it completes (`Result{Reason:"replan"}` -> the lane ring in `lane.go`). The functions that actually run are listed by coverage (`bench/macro-scope.sh`, executed-lines per function
+  in the session notes): `newPlanner4`, `expand4`, `computeElim4`, `start4/step4/finish4`, `separated/festRoomSep`, `keepParks4/parkKids4/sortKids`, `endPlan4`, `planAnytime`,
+  `labelRegions`, and in planner2 `kid`, `addNode`, `result`, the matching helpers (`matchOK`/`matchSkip*` are one result-identical pair: port `matchOK`), `seenInsert`, `flood`.
+  Under `-nodes` the plan4 phase is bounded only by the planner's own caps, so it is deterministic and comparable with the same fingerprint method (flag `SOKSOLV_FEAT` bit 5).
+* 6g: `macroalt.go` (second engine on the same core, ~50 executed lines), rev-groups/novelty hooks (flag-gated, not executed by default), pair-side (bit7, flag-gated).
+* The portfolio wrapper around the lane (`lane.go` ring: replan/revive restarts) and elastic memory.
+* Speed: Go's word-parallel variants of the box-search flood (`boxflood.go`), move access (`moveaccess.go` bits), child region counts (`regionsChild`) and the pair search (`pairbits.go`) are
+  not ported; on wide levels (hundreds of candidate moves per open) C# is ~2x slower than Go (10-50% fewer nodes in a timed run), at parity or faster on narrow ones.
