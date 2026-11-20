@@ -1,3 +1,4 @@
+using System.Numerics;
 namespace Soksolv.Search;
 
 public sealed unsafe partial class FullSolver
@@ -210,12 +211,154 @@ public sealed unsafe partial class FullSolver
 
     bool PairDead(int a, int b) => PairDeadFrom(a, b, -1);
 
-    /// <summary>pairDeadFromScan: two boxes alone on the board; from >= 0 restricts the start to the player's region around that cell.</summary>
-    bool PairDeadFrom(int a, int b, int from)
+    // ---- word-parallel pair search (Go pairbits.go: pairDeadFromBits; boards up to 64 wide) -------------------------------------------
+    ulong[]? bbFloorA, bbFreeA, bbRegA, bbRemA;
+    ulong* bbFloor, bbFree, bbReg, bbRem; int bbRows;
+    public static bool PairBitsOff, PairBitsCheck;   // test hooks
+
+    static void FloodRows(ulong* free, ulong* reg, int rows, int rp, int cp)
+    {
+        for (int i = 0; i < rows; i++) reg[i] = 0;
+        reg[rp] = FillRow(1UL << cp, free[rp]);
+        int last = rows - 2;
+        while (true)
+        {
+            bool changed = false;
+            for (int r = 1; r <= last; r++)
+            {
+                ulong y = reg[r] | (reg[r - 1] | reg[r + 1]) & free[r];
+                if (y == reg[r]) continue;
+                y = FillRow(y, free[r]);
+                if (y != reg[r]) { reg[r] = y; changed = true; }
+            }
+            if (!changed) return;
+            changed = false;
+            for (int r = last; r >= 1; r--)
+            {
+                ulong y = reg[r] | (reg[r - 1] | reg[r + 1]) & free[r];
+                if (y == reg[r]) continue;
+                y = FillRow(y, free[r]);
+                if (y != reg[r]) { reg[r] = y; changed = true; }
+            }
+            if (!changed) return;
+        }
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    static ulong FillRow(ulong y, ulong f)
+    {
+        while (true)
+        {
+            ulong z = (y | y << 1 | y >> 1) & f;
+            if (z == y) return y;
+            y = z;
+        }
+    }
+
+    /// <summary>Floods the player's region from p over the free rows (the start cell counts as reachable even if blocked); returns the region's minimum cell (reg holds the region).</summary>
+    int BbReach(int p)
+    {
+        int Wd = W, rp = p / Wd + 1, cp = p % Wd;
+        ulong saved = bbFree[rp];
+        bbFree[rp] |= 1UL << cp;
+        FloodRows(bbFree, bbReg, bbRows, rp, cp);
+        bbFree[rp] = saved;
+        for (int r = 1; r <= bbRows - 2; r++) if (bbReg[r] != 0) return (r - 1) * Wd + BitOperations.TrailingZeroCount(bbReg[r]);
+        return p;
+    }
+
+    bool PairDeadFromBits(int a, int b, int from)
     {
         const int capStates = 200;
-        if (pbA == null)
+        int Wd = W, H = lv.H;
+        if (bbFloorA == null)
         {
+            bbRows = H + 2;
+            bbFloorA = GC.AllocateArray<ulong>(bbRows, pinned: true); bbFreeA = GC.AllocateArray<ulong>(bbRows, pinned: true);
+            bbRegA = GC.AllocateArray<ulong>(bbRows, pinned: true); bbRemA = GC.AllocateArray<ulong>(bbRows, pinned: true);
+            bbFloor = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref bbFloorA[0]); bbFree = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref bbFreeA[0]);
+            bbReg = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref bbRegA[0]); bbRem = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref bbRemA[0]);
+            ulong all = Wd < 64 ? (1UL << Wd) - 1 : ~0UL;
+            for (int r = 0; r < H; r++) { ulong wallRow = 0; for (int x = 0; x < Wd; x++) if (wall[r * Wd + x]) wallRow |= 1UL << x; bbFloor[r + 1] = all & ~wallRow; }
+            if (pstarts.Length == 0) pstarts = new int[cells];
+        }
+        ulong* free = bbFree; ulong* reg = bbReg;
+        for (int i = 0; i < bbRows; i++) free[i] = bbFloor[i];
+        free[a / Wd + 1] ^= 1UL << (a % Wd); free[b / Wd + 1] ^= 1UL << (b % Wd);
+        int nstarts = 0;
+        if (from >= 0) pstarts[nstarts++] = BbReach(from);
+        else
+        {
+            ulong* rem = bbRem;
+            for (int i = 0; i < bbRows; i++) rem[i] = free[i];
+            for (int r = 1; r <= H; r++)
+                while (rem[r] != 0)
+                {
+                    int c = (r - 1) * Wd + BitOperations.TrailingZeroCount(rem[r]);
+                    pstarts[nstarts++] = BbReach(c);
+                    for (int k = 0; k < bbRows; k++) rem[k] &= ~reg[k];
+                }
+        }
+        Span<int> mvBox = stackalloc int[8], mvT = stackalloc int[8], mvOther = stackalloc int[8];
+        for (int si = 0; si < nstarts; si++)
+        {
+            int p0 = pstarts[si];
+            if (++pgen == 0) { Array.Clear(pvis); pgen = 1; }
+            PVisit(a, b, p0);
+            int nseen = 1, qn = 1;
+            pqx[0] = a; pqy[0] = b; pqp[0] = p0;
+            for (int i = 0; i < qn; i++)
+            {
+                if (nseen > capStates) return false;
+                int cx = pqx[i], cy = pqy[i], cp = pqp[i];
+                free[a / Wd + 1] ^= 1UL << (a % Wd); free[b / Wd + 1] ^= 1UL << (b % Wd);
+                free[cx / Wd + 1] ^= 1UL << (cx % Wd); free[cy / Wd + 1] ^= 1UL << (cy % Wd);
+                BbReach(cp);
+                int nm = 0;
+                for (int side = 0; side < 2; side++)
+                {
+                    int bx = side == 0 ? cx : cy, other = side == 0 ? cy : cx;
+                    for (int di = 0; di < 4; di++)
+                    {
+                        int d = dirs[di], t = bx + d, q = bx - d;
+                        if ((reg[q / Wd + 1] >> (q % Wd) & 1) != 0 && !wall[t] && t != other && dist[t] >= 0) { mvBox[nm] = bx; mvT[nm] = t; mvOther[nm] = other; nm++; }
+                    }
+                }
+                free[cx / Wd + 1] ^= 1UL << (cx % Wd); free[cy / Wd + 1] ^= 1UL << (cy % Wd);
+                for (int mi = 0; mi < nm; mi++)
+                {
+                    int t = mvT[mi], other = mvOther[mi];
+                    if (goal[t] && goal[other]) return false;
+                    free[t / Wd + 1] ^= 1UL << (t % Wd); free[other / Wd + 1] ^= 1UL << (other % Wd);
+                    int np = BbReach(mvBox[mi]);
+                    free[t / Wd + 1] ^= 1UL << (t % Wd); free[other / Wd + 1] ^= 1UL << (other % Wd);
+                    int nx = Math.Min(t, other), ny = Math.Max(t, other);
+                    if (PVisit(nx, ny, np))
+                    {
+                        nseen++;
+                        if (qn == pqx.Length) { Array.Resize(ref pqx, qn * 2); Array.Resize(ref pqy, qn * 2); Array.Resize(ref pqp, qn * 2); }
+                        pqx[qn] = nx; pqy[qn] = ny; pqp[qn] = np; qn++;
+                    }
+                }
+                free[a / Wd + 1] ^= 1UL << (a % Wd); free[b / Wd + 1] ^= 1UL << (b % Wd);
+            }
+        }
+        return true;
+    }
+
+    bool PairDeadFrom(int a, int b, int from)
+    {
+        if (W <= 64 && !PairBitsOff)
+        {
+            bool r = PairDeadFromBits(a, b, from);
+            if (PairBitsCheck && r != PairDeadFromScan(a, b, from)) throw new InvalidOperationException($"pair search: bits {r} != scan for ({a},{b},{from})");
+            return r;
+        }
+        return PairDeadFromScan(a, b, from);
+    }
+
+    void EnsurePairScratch()
+    {
+        if (pbA != null) return;
             pbA = GC.AllocateArray<byte>(cells, pinned: true); pmarkA = GC.AllocateArray<uint>(cells, pinned: true);
             pseenA = GC.AllocateArray<uint>(cells, pinned: true); pqA = GC.AllocateArray<int>(cells, pinned: true);
             pb = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref pbA[0]);
@@ -223,7 +366,12 @@ public sealed unsafe partial class FullSolver
             pqP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref pqA![0]);
             for (int i = 0; i < cells; i++) pbA[i] = (byte)(wall[i] ? 1 : 0);
             pstarts = new int[cells];
-        }
+    }
+
+    bool PairDeadFromScan(int a, int b, int from)
+    {
+        const int capStates = 200;
+        EnsurePairScratch();
         pb[a] = 1; pb[b] = 1;
         try
         {
@@ -304,7 +452,7 @@ public sealed unsafe partial class FullSolver
     /// <summary>pairSplits: boxes on a and b (alone on the board) leave the player's region from `from` smaller than all other floor.</summary>
     bool PairSplits(int a, int b, int from)
     {
-        if (pbA == null) PairDead(a, a); // lazily allocate the pair scratch (result unused)
+        EnsurePairScratch();
         uint st = ++pst;
         int tail = 0; pqP[tail++] = from; pmarkP[from] = st;
         for (int i = 0; i < tail; i++)

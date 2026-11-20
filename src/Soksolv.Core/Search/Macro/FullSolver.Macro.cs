@@ -84,6 +84,7 @@ public sealed unsafe partial class FullSolver
         mSetupDeadlineMs = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(100, timeLimitSec * 1000 / 10);
         mNodeLimit = nodeLimitOverride > 0 ? nodeLimitOverride : opt.NodeBudget;
         if (MacroStage >= 2) { MComputeRooms(); MComputeBasin(); }
+        long tPlan0 = clock.ElapsedMilliseconds;
         if (MacroStage >= 3)
         {
             long planDeadline = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(250, timeLimitSec * 1000 / 10);
@@ -105,6 +106,7 @@ public sealed unsafe partial class FullSolver
             else mPlan = MBuildPackingPlan(4096, planDeadline);
             if (mPlan != null && Feat(4)) mPlan.Dag = CompilePackingDag(mPlan); // installPlanStats: PackingObligations
         }
+        if (Prof.On) Console.Error.WriteLine($"setup: rooms+plan {clock.ElapsedMilliseconds - tPlan0} ms (before plan: {tPlan0} ms), plan complete={mPlan?.Complete} festPacked={mPlan?.FestPacked} p4 expanded={stats.Plan4Exp} remaining={mPlan?.Remaining}");
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
         m3P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref m3[0]);
         mpost = new uint[4 * cells]; mseen = new uint[4 * cells]; mtseen = new uint[4 * cells];

@@ -275,4 +275,27 @@ public class MacroTests
         }
         finally { ClusterChecker.AStar = a; ClusterChecker.SkipCapped = s; }
     }
+
+    [Theory]
+    [InlineData("Holland_81_27")]
+    [InlineData("SokHard_163_36")]
+    [InlineData("GrigrSpecial_40_3")]
+    public void PairSearch_BitsAgreeWithScan(string level)
+    {
+        FullSolver.PairBitsCheck = true;
+        try { Run(level, 6000, 5, 255); }   // throws on any disagreement between the row-bitset and the queue-flood pair search
+        finally { FullSolver.PairBitsCheck = false; }
+    }
+
+    [Theory]
+    [InlineData("Holland_81_27")]
+    [InlineData("SokHard_163_36")]
+    [InlineData("GrigrSpecial_40_3")]
+    [InlineData("Sasquatch_IV_50_42")]
+    public void Plan4_CutScanAgreesWithFlood(string level)
+    {
+        FullSolver.CheckCut = true;
+        try { var r = Run(level, 3000, 5, 255); Assert.True(r.Nodes > 0); }   // throws on any scan/flood disagreement
+        finally { FullSolver.CheckCut = false; }
+    }
 }
