@@ -47,7 +47,7 @@ public sealed unsafe partial class FullSolver
         try { lv = Level.Parse(rows, opt.CloseHoles); }
         catch (InvalidDataException e) { return new SolveResult { Reason = e.Message }; }
         opt.Penalties = false; // the macro lane's cluster checker has no distance table (no penalties)
-        using var s = new FullSolver(lv, opt);
+        using var s = new FullSolver(lv, opt) { mRows = rows };
         return s.RunMacro(timeLimitSec);
     }
 
@@ -292,7 +292,24 @@ public sealed unsafe partial class FullSolver
     void MNoteBest(int id)
     {
         if (id < 0 || maux[id].Dead != 0) return;
-        if (mBest < 0 || maux[mBest].Dead != 0 || ProgressBetter(maux[id].Actual, maux[mBest].Actual)) mBest = id;
+        if (mBest < 0 || maux[mBest].Dead != 0 || ProgressBetter(maux[id].Actual, maux[mBest].Actual)) { mBest = id; mLastImproveMs = clock.ElapsedMilliseconds; }
+    }
+
+    // ---- StallFinish (Go fess_search.go finishFromBest) ------------------------------------------------------------------------------------
+    string[]? mRows; long mLastImproveMs, mSearchStartMs; int mStallTries;
+
+    /// <summary>A short private backward search from the solved position toward the best-so-far node; null if it fails.</summary>
+    string? MFinishFromBest()
+    {
+        int best = mBest;
+        string prefix = MReconstruct(best);
+        var boxes = new int[n];
+        nodes.Unpack(best, boxes);
+        int player = Reverse.ReverseToward.EndCell(prefix, lv.Player, W);
+        double leftMs = mDeadlineMs > 0 ? mDeadlineMs - clock.ElapsedMilliseconds : double.MaxValue;
+        double untilMs = Math.Min(1000.0 * opt.StallScale, leftMs / 10);
+        var r = Reverse.ReverseToward.Solve(mRows!, boxes, player, prefix, untilMs / 1000, opt.StallScale, opt.Cancel);
+        return r.Solved ? r.Solution : null;
     }
 
     // ---- box search (Go boxSearch): BFS over pushes of box b, others fixed -------------------------------------------------------

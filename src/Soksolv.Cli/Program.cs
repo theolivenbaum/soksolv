@@ -59,7 +59,7 @@ SolveResult Run(string[] r, double tl)
         return ReverseRunner.Solve(r, ro, tl);
     }
     if (strategy == "full") return FullSolver.Solve(r, opt, tl);
-    if (strategy == "macro") return FullSolver.SolveMacro(r, opt, tl);
+    if (strategy == "macro") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveMacro(r, opt, tl); } // main.go -stall-scale
     return Portfolio.Solve(r, new PortfolioOptions { NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
 }
 SolveResult res;

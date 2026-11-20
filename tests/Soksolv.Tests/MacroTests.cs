@@ -196,4 +196,21 @@ public class MacroTests
     [InlineData("Sasquatch_VI_50_24", 20000, "expanded=20000 stored=6906 generated=235264 duplicates=6852 hash=f47e39482c4ebba0")]
     public void Stage6c_Displacement_MatchGoReferenceFingerprint(string level, long nodes, string golden)
         => Assert.Equal(golden, Run(level, nodes, 5, 7).Fingerprint);
+
+    // 6d (corridor flow, bit 3) + 6e (packing obligations/causal DAG, bit 4) on top of bits 0-2: goldens from the patched Go reference (SOKSOLV_FEAT=31).
+    [Theory]
+    [InlineData("Holland_81_27", 1, "expanded=1 stored=2 generated=8 duplicates=0 hash=a944444f3a9250ce")]
+    [InlineData("Holland_81_27", 10, "expanded=10 stored=6 generated=26 duplicates=1 hash=5d67c10129207748")]
+    [InlineData("Holland_81_27", 100, "expanded=100 stored=48 generated=713 duplicates=16 hash=0efab8aaa13fa41c")]
+    [InlineData("Holland_81_27", 1000, "expanded=1000 stored=338 generated=7265 duplicates=294 hash=4f2477acb8105e90")]
+    [InlineData("Holland_81_27", 20000, "expanded=3438 stored=1154 generated=27096 duplicates=1193 hash=27f76d42d3dc2866")]
+    [InlineData("Aymeric_Du_Peloux_282_22", 20000, "expanded=302 stored=94 generated=620 duplicates=157 hash=a05bca34a5467b35")]
+    [InlineData("Microban_155_65", 20000, "expanded=14 stored=8 generated=147 duplicates=3 hash=3dad979af95d13b7")]
+    [InlineData("SokEvo_107_55", 20000, "expanded=4357 stored=578 generated=10261 duplicates=2780 hash=dd13a9e18955a485")]
+    [InlineData("Sven_1623_100", 20000, "expanded=73 stored=37 generated=473 duplicates=21 hash=4d2db01fc1479bcd")]
+    [InlineData("SokHard_163_36", 20000, "expanded=20000 stored=2701 generated=59635 duplicates=8717 hash=36037fa03fb8c8a7")]
+    [InlineData("Sasquatch_VI_50_24", 20000, "expanded=20000 stored=8550 generated=298977 duplicates=5049 hash=da7919fa75ea1dc4")]
+    [InlineData("CorridorFlow_synth", 5000, "expanded=21 stored=12 generated=99 duplicates=8 hash=6173fae931a53589")]
+    public void Stage6e_ObligationsAndCorridor_MatchGoReferenceFingerprint(string level, long nodes, string golden)
+        => Assert.Equal(golden, Run(level, nodes, 5, 31).Fingerprint);
 }

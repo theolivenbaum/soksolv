@@ -75,7 +75,7 @@ public static class Portfolio
             Lane("macro", () => FullSolver.SolveMacro(rows, new FullOptions
             {
                 NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared,
-                MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures,
+                MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
             }, timeLimitSec));
         foreach (var t in threads) t.Join();
 

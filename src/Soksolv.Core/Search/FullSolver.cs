@@ -32,6 +32,10 @@ public sealed class FullOptions
     public CancelFlag? Cancel;
     /// <summary>Macro lane: highest ported feature stage (1..5) and the stage-6 default-on feature mask (bit0 move windows, ...).</summary>
     public int MacroStage = 5, MacroFeatures = 1;
+    /// <summary>Go StallFinish (timed runs only): when the best node stops improving, try a short private backward search toward it.
+    /// StallScale = timeLimit/600 s when the limit is below 600 s (main.go -stall-scale), scaling the 1 s cap/floor.</summary>
+    public bool StallFinish = true;
+    public double StallScale = 1.0;
 }
 
 /// <summary>

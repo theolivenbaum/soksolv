@@ -325,11 +325,24 @@ public sealed unsafe partial class FullSolver
         int root = MAdd(nodes.HashOf(start, p0), p0, -1, -1, -1, 0, h0, 0, -1, start);
         if (root >= 0) { MOpen(root, start, h0, st0); PropagateDead(root); MEnqueue(root); }
         mBest = 0;
+        mSearchStartMs = mLastImproveMs = clock.ElapsedMilliseconds;
         foreach (int b in start) SetOcc(b, false);
         var cur = mCur; var child = mChild;
         while (true)
         {
             if (MExpired()) return new SolveResult { Reason = "timeout", Nodes = expanded };
+            if (opt.StallFinish && opt.NodeBudget == 0 && mRows != null && mStallTries < 3 && mBest > 0)
+            {
+                long now = clock.ElapsedMilliseconds;
+                double stalled = now - mLastImproveMs;
+                if (stalled > Math.Max(1000.0 * opt.StallScale, (now - mSearchStartMs) * 15 / 100))
+                {
+                    mStallTries++;
+                    mLastImproveMs = clock.ElapsedMilliseconds;
+                    var sol = MFinishFromBest();
+                    if (sol != null) return new SolveResult { Solved = true, Solution = sol, Nodes = expanded };
+                }
+            }
             if (!MSelect(out var e))
             {
                 if (MExpired()) return new SolveResult { Reason = "timeout", Nodes = expanded };
