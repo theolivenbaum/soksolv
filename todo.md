@@ -7,17 +7,15 @@ Legend: [x] done, [~] in progress, [ ] todo
 - [x] Solution + projects (Core, Cli, Tests, Bench), `Directory.Build.props`
 - [x] CLAUDE.md, todo.md
 - [x] Install .NET 11 SDK (RC3), Go 1.27 builds reference
-- [ ] `Diagnostics.MachineInfo` (CPU/mem/OS/calibration header) used by every benchmark
+- [x] `Diagnostics.MachineInfo` (CPU/mem/OS/calibration header) used by every benchmark
 
-## Phase 1 — Data-model exploration (small test subset)
-- [ ] Select subset `testdata/` (levels solvable by Go `-strategy full` in 0.3–20 s)
-- [ ] Level/parse/verify in Core
-- [ ] Prototype push-search with pluggable state stores; measure bytes/state, states/s, allocs:
-  - [ ] A: bitset-over-floor-cells key (Go layout)
-  - [ ] B: sorted ushort box list key
-  - [ ] C: hash table layout: open addressing int32 ids + fingerprints vs. embedded keys
-  - [ ] D: SIMD key compare / hashing, stackalloc scratch, unmanaged chunked arena
-- [ ] Record results + decision in `docs/data-model.md`
+## Phase 1 — Data-model exploration (small test subset) — DONE, see docs/data-model.md
+- [x] Subset `testdata/` (18 levels, manifest.tsv)
+- [x] Level/parse/verify/MachineInfo in Core
+- [x] State store variants (V1 Go-like / V2 unmanaged AoS+packed slots / V3 list key) → V2
+- [x] Bitboards: flood (no win), push-gen (~1.15x, optional later), key as floor-bitset (adopted)
+- [x] Zobrist + incremental key/hash (6-60x cheaper per child) → adopted
+- [ ] (later) bitboard frozen/2x2/dead-push masks for W<=64; SIMD key compare for nw>=4
 
 ## Phase 2 — Core port (`full` lane = best-first FESS over push states)
 Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `meet`, `memtrace`, `trace`, `holes`, `arena`
