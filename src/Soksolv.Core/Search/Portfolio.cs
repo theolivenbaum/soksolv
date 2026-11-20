@@ -38,7 +38,7 @@ public static class Portfolio
         int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0) + (po.Macro ? 1 : 0);
         if (lanes == 0) return new SolveResult { Reason = "no lanes" };
         ulong budget = po.MemBytes / 100 * 70 / (ulong)lanes;
-        var shared = new ClusterTable(16); var sharedPen = new ClusterTable(16);
+        var shared = new ClusterTable(16); var sharedPen = new ClusterTable(16); var sharedDz = new Search.DeadZone.DeadZoneTable(18);
         SolveResult? winner = null; var all = new List<SolveResult>(); var gate = new object();
         var threads = new List<Thread>();
 
@@ -63,7 +63,7 @@ public static class Portfolio
         if (po.Full)
             Lane("full", () => FullSolver.Solve(rows, new FullOptions
             {
-                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedPenalties = sharedPen,
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedPenalties = sharedPen, SharedDeadZone = sharedDz,
             }, timeLimitSec));
         if (po.Reverse)
         {

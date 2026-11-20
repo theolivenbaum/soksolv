@@ -7,7 +7,7 @@ public struct Push { public int From; public sbyte Dir; public Push(int f, sbyte
 
 public sealed class SolveStats
 {
-    public long Generated, Duplicates, DeadSquare, Frozen2x2, GoalArea, Freeze, PairDead, ClusterDead, SideDead, Assignment, Macros, ConnAdvisor, Corrals, Penalized, PairsTried, PairsDead;
+    public long Generated, Duplicates, CorralDead, FrontierCorrals, DeadSquare, Frozen2x2, GoalArea, Freeze, PairDead, ClusterDead, SideDead, Assignment, Macros, ConnAdvisor, Corrals, Penalized, PairsTried, PairsDead;
     public int Stored; public int LeanAt;
 }
 
@@ -27,6 +27,7 @@ public sealed class FullOptions
     public ulong BudgetBytes;         // 0: unlimited (tracked data structures)
     public int Seed;
     public ClusterTable? SharedClusters, SharedPenalties;
+    public Search.DeadZone.DeadZoneTable? SharedDeadZone;
     public volatile bool Stop;
     public CancelFlag? Cancel;
     /// <summary>Macro lane: highest ported feature stage (1..5) and the stage-6 default-on feature mask (bit0 move windows, ...).</summary>

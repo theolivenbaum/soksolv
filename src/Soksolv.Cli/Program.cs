@@ -47,6 +47,7 @@ var opt = new FullOptions
     BudgetBytes = (ulong)memMb * 1024 * 1024 / 100 * 70,
     SharedClusters = new ClusterTable(16),
     SharedPenalties = new ClusterTable(16),
+    SharedDeadZone = new Soksolv.Search.DeadZone.DeadZoneTable(18),
     MacroStage = macroStage, MacroFeatures = macroFeat,
 };
 SolveResult Run(string[] r, double tl)

@@ -20,16 +20,18 @@ env = dict(os.environ, PATH=os.environ["PATH"] + ":/root/.dotnet", DOTNET_ROOT="
 def run(cmd, extra):
     e = dict(env, **extra)
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=e)
-    m = re.search(r"S1HASH (.*)", r.stderr)
+    m = re.search(r"S1HASH (.*)", r.stderr); f = re.search(r"S1FEAT (.*)", r.stderr)
+    global lastfeat; lastfeat = f.group(1) if f else ""
     return (m.group(1) if m else "NO-S1HASH " + r.stderr[-150:].replace("\n", " ")), r.stdout
 print(subprocess.run(f"{cs} -header -strategy macro -nodes 1 '{specs[0][0]}' 1 2>&1 >/dev/null | head -8", shell=True, capture_output=True, text=True, env=env).stdout, end="")
 print(f"stage {stage} feat {feat}; nodes cap {nodes}; go={go}; cs={cs}")
-bad = 0; tg = tc = 0
+bad = 0; tg = tc = 0; lastfeat = ""
 for f, i in specs:
     t0 = time.time(); g, gout = run(f"{go} -strategy macro -procs 1 -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_STAGE": str(stage), "SOKSOLV_FEAT": feat}); t1 = time.time()
     c, cout = run(f"{cs} -parity -macro-stage {stage} -macro-features {feat} -strategy macro -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_S1": "1"}); t2 = time.time()
     tg += t1 - t0; tc += t2 - t1
+    csfeat = lastfeat
     ok = g == c
     if not ok: bad += 1
-    print(f"{'OK  ' if ok else 'DIFF'} {os.path.basename(f)[:-4]}#{i:<4} go {t1-t0:6.2f}s cs {t2-t1:6.2f}s  {g if ok else 'GO: ' + g + '  CS: ' + c}", flush=True)
+    print(f"{'OK  ' if ok else 'DIFF'} {os.path.basename(f)[:-4]}#{i:<4} go {t1-t0:6.2f}s cs {t2-t1:6.2f}s  [{csfeat}] {g if ok else 'GO: ' + g + '  CS: ' + c}", flush=True)
 print(f"{len(specs)} levels, {bad} differences; wall go {tg:.1f}s cs {tc:.1f}s")

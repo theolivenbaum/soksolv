@@ -27,7 +27,9 @@ public sealed unsafe partial class FullSolver
         int parentHot = counts != null ? HotspotCount(counts) : 0;
         int parentPhase = mPlan != null ? mPlan.Status(occ).phase : -1;
         long tc = Prof.Start();
-        uint corral = PiCorral(st);
+        uint corral = 0;
+        if (Feat(1)) corral = FirstPushCorral(nodes.Player(id), st); // FrontierCorral (corral_frontier.go)
+        if (corral == 0) corral = PiCorral(st);
         if (corral != 0) stats.Corrals++;
         mPlan?.NodeSetup(cur);
         Prof.Stop(5, tc);
@@ -213,6 +215,12 @@ public sealed unsafe partial class FullSolver
         if (cl != null && cl.Dead(occ, t, sideC, mark2, stamp, -1))
         {
             stats.ClusterDead++;
+            SetOcc(t, false); SetOcc(b, true);
+            return -1;
+        }
+        if (dz != null && dz.DeadAfter(occ, child, sideC, t))
+        {
+            stats.CorralDead++;
             SetOcc(t, false); SetOcc(b, true);
             return -1;
         }

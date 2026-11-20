@@ -15,7 +15,7 @@ public class MacroTests
         ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; FullSolver.MacroFingerprint = true;
         try
         {
-            return FullSolver.SolveMacro(TestData.Rows(level), new FullOptions { NodeBudget = nodes, SharedClusters = new ClusterTable(16), MacroStage = stage, MacroFeatures = features }, 120);
+            return FullSolver.SolveMacro(TestData.Rows(level), new FullOptions { NodeBudget = nodes, SharedClusters = new ClusterTable(16), SharedDeadZone = new Soksolv.Search.DeadZone.DeadZoneTable(18), MacroStage = stage, MacroFeatures = features }, 120);
         }
         finally { ClusterChecker.AStar = a; ClusterChecker.SkipCapped = s; FullSolver.MacroFingerprint = f; }
     }
@@ -154,4 +154,30 @@ public class MacroTests
     [InlineData("SokHard_163_36", 20000, "expanded=20000 stored=5349 generated=45598 duplicates=11840 hash=6deb6265aa6b16bf")]
     public void Stage6a_MoveWindows_MatchGoReferenceFingerprint(string level, long nodes, string golden)
         => Assert.Equal(golden, Run(level, nodes, 5, 1).Fingerprint);
+
+    // 6b: corral deadzone proofs + frontier corral (feature bit 1) on top of move windows (bit 0): goldens from the patched Go reference (SOKSOLV_FEAT=3).
+    [Theory]
+    [InlineData("Holland_81_27", 1, "expanded=1 stored=2 generated=8 duplicates=0 hash=a944444f3a9250ce")]
+    [InlineData("Holland_81_27", 10, "expanded=10 stored=8 generated=45 duplicates=0 hash=160b92e1ba625730")]
+    [InlineData("Holland_81_27", 100, "expanded=100 stored=39 generated=465 duplicates=7 hash=e49077e8804a11ac")]
+    [InlineData("Holland_81_27", 1000, "expanded=1000 stored=311 generated=6400 duplicates=261 hash=0c3197838916ad90")]
+    [InlineData("Holland_81_27", 20000, "expanded=3580 stored=1195 generated=23546 duplicates=1086 hash=86fc489e460dc5d2")]
+    [InlineData("Aymeric_Du_Peloux_282_22", 20000, "expanded=348 stored=94 generated=622 duplicates=192 hash=6295dfc3805dc2e8")]
+    [InlineData("Microban_155_65", 20000, "expanded=14 stored=8 generated=147 duplicates=3 hash=3dad979af95d13b7")]
+    [InlineData("SokEvo_107_55", 20000, "expanded=4226 stored=655 generated=11342 duplicates=2552 hash=d6e2f8aa390a80f8")]
+    [InlineData("Sven_1623_100", 20000, "expanded=67 stored=35 generated=462 duplicates=17 hash=3b715637ed5c8c10")]
+    [InlineData("SokHard_163_36", 20000, "expanded=20000 stored=2771 generated=57220 duplicates=8631 hash=76bb9f01711fde5d")]
+    public void Stage6b_DeadzoneAndFrontierCorral_MatchGoReferenceFingerprint(string level, long nodes, string golden)
+        => Assert.Equal(golden, Run(level, nodes, 5, 3).Fingerprint);
+
+    [Theory]
+    [InlineData("Holland_81_27")]
+    [InlineData("SokEvo_107_55")]
+    [InlineData("Microban_155_65")]
+    public void Stage6b_SolutionsVerify(string level)
+    {
+        var r = Run(level, 200000, 5, 3);
+        Assert.True(r.Solved, r.Reason);
+        Assert.Null(Verifier.CheckSolution(TestData.Rows(level), r.Solution));
+    }
 }

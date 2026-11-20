@@ -219,3 +219,14 @@ lane therefore runs "stages 1-5 + move windows"; it is *not* the full default Go
 Wiring done: `-strategy macro` (defaults `-macro-stage 5 -macro-features 1`), a `macro` lane in `Portfolio` (own thread, shared cancel
 flag and cluster table, equal memory budget; macro lane checks its tracked bytes against the budget every 256 expansions);
 stage/features live in `FullOptions` (no statics, safe for parallel lanes/tests). 105 tests pass.
+
+
+### Hard levels (28 Go-unsolved-at-20 s levels, `-parity`, stage 5 + 6a, 20 s each, Go and C# AOT run concurrently, niced, shared cores)
+Neither solver solves any of the 27 stable ones within 20 s. One level (Sasquatch_VII_50 #13) is solved by the Go reference in ~42-64 ms
+in *some* runs (1 of 3 reruns; the other runs time out): Go's timed mode is itself nondeterministic there (time-budgeted planner/stall
+logic), the node-capped mode of the same level matches C# exactly (fingerprint identical at 100k nodes), so this is not a C# defect.
+Throughput on the 27 levels that ran to the limit: Go 6,916 nodes/s vs C# 7,976 nodes/s on average (median per-level ratio 0.89, range
+0.33–2.43 — timed searches diverge, so per-level node counts are not like-for-like work); peak tracked memory 46.7 MB (Go) vs 16.0 MB (C#), 2.9x lower.
+Speed (node-capped, equal work, AOT, 50k nodes, 6 testdata levels): Go 7.3 s vs C# 7.9 s (1.08x); per-candidate costs on Holland_81_27
+(JIT, 30k nodes): room connectivity 16%, region counts 10%, push-deadlock pipeline 6%, move access 4%, hotspots 3%.
+Next speed work (not done): Go's incremental `roomConnChild` and tree-based hotspot rows.
