@@ -51,7 +51,8 @@ public sealed unsafe partial class FullSolver : IDisposable
 
     // scratch
     readonly bool[] occ;
-    uint[] mark, mark2;
+    readonly byte[] blkArr; readonly byte* blk; // wall | box, pinned, used by flood kernels
+    uint[] mark, mark2; readonly uint* markP, mark2P, rmarkP; readonly int* queueP, cqueueP;
     uint stamp;
     readonly int[] queue;
     readonly bool[] fz;
@@ -95,9 +96,16 @@ public sealed unsafe partial class FullSolver : IDisposable
     {
         lv = level; opt = options; n = lv.Boxes.Length; cells = lv.Cells; W = lv.W;
         dirs = [-W, W, -1, 1]; wall = lv.Wall; goal = lv.Goal;
-        occ = new bool[cells]; mark = new uint[cells]; mark2 = new uint[cells]; queue = new int[cells];
-        fz = new bool[cells]; cmark = new uint[cells]; cqueue = new int[cells]; barrier = new int[cells];
-        cc = new int[cells]; ccMark = new uint[cells]; rmark = new uint[cells];
+        occ = new bool[cells];
+        mark = GC.AllocateArray<uint>(cells, pinned: true); mark2 = GC.AllocateArray<uint>(cells, pinned: true);
+        queue = GC.AllocateArray<int>(cells, pinned: true); cqueue = GC.AllocateArray<int>(cells, pinned: true);
+        rmark = GC.AllocateArray<uint>(cells, pinned: true); blkArr = GC.AllocateArray<byte>(cells, pinned: true);
+        markP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref mark[0]); mark2P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref mark2[0]);
+        queueP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref queue[0]); cqueueP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref cqueue[0]);
+        rmarkP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmark[0]); blk = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref blkArr[0]);
+        for (int i = 0; i < cells; i++) blkArr[i] = (byte)(wall[i] ? 1 : 0);
+        fz = new bool[cells]; cmark = new uint[cells]; barrier = new int[cells];
+        cc = new int[cells]; ccMark = new uint[cells];
         mark3 = new uint[cells]; bprev = new int[4 * cells];
         bseenStamp = new uint[4 * cells];
         nodes = new StateTable(wall);
@@ -181,20 +189,24 @@ public sealed unsafe partial class FullSolver : IDisposable
         return false;
     }
 
-    /// <summary>Marks cells reachable from p (not crossing walls or boxes) in mark with a fresh stamp; returns the minimum cell.</summary>
-    int Reach(int p, uint[] mk)
+    void SetOcc(int c, bool v) { occ[c] = v; blk[c] = (byte)(v ? 1 : 0); }
+
+    /// <summary>Marks cells reachable from p (not crossing walls or boxes) in mk with a fresh stamp; returns the minimum cell.</summary>
+    int Reach(int p, uint[] mk) => ReachP(p, ReferenceEquals(mk, mark) ? markP : mark2P);
+
+    int ReachP(int p, uint* mk)
     {
         if (stamp > uint.MaxValue - 4) { Array.Clear(mark); Array.Clear(mark2); stamp = 0; }
         uint st = ++stamp;
-        var q = queue; int tail = 0; q[tail++] = p; mk[p] = st; int minC = p;
+        int w = W;
+        int* q = queueP; int tail = 0; q[tail++] = p; mk[p] = st; int minC = p;
         for (int i = 0; i < tail; i++)
         {
             int c = q[i];
-            foreach (int d in dirs)
-            {
-                int nb = c + d;
-                if (mk[nb] != st && !wall[nb] && !occ[nb]) { mk[nb] = st; q[tail++] = nb; if (nb < minC) minC = nb; }
-            }
+            int y = c - w; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; if (y < minC) minC = y; }
+            y = c + w; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; }
+            y = c - 1; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; if (y < minC) minC = y; }
+            y = c + 1; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; }
         }
         return minC;
     }

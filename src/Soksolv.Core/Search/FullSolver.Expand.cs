@@ -21,19 +21,22 @@ public sealed unsafe partial class FullSolver
             floorCells = [.. l];
         }
         uint rs = ++rstamp;
-        int cnt = 0;
+        int cnt = 0, w = W;
+        int* q = cqueueP;
         foreach (int c in floorCells)
         {
-            if (occ[c] || rmark[c] == rs) continue;
+            if (blk[c] != 0 || rmarkP[c] == rs) continue;
             cnt++;
-            rmark[c] = rs;
-            var q = cqueue; int tail = 0; q[tail++] = c;
+            rmarkP[c] = rs;
+            int tail = 0; q[tail++] = c;
             for (int i = 0; i < tail; i++)
-                foreach (int d in dirs)
-                {
-                    int y = q[i] + d;
-                    if (rmark[y] != rs && !wall[y] && !occ[y]) { rmark[y] = rs; q[tail++] = y; }
-                }
+            {
+                int x = q[i];
+                int y = x - w; if (rmarkP[y] != rs && blk[y] == 0) { rmarkP[y] = rs; q[tail++] = y; }
+                y = x + w; if (rmarkP[y] != rs && blk[y] == 0) { rmarkP[y] = rs; q[tail++] = y; }
+                y = x - 1; if (rmarkP[y] != rs && blk[y] == 0) { rmarkP[y] = rs; q[tail++] = y; }
+                y = x + 1; if (rmarkP[y] != rs && blk[y] == 0) { rmarkP[y] = rs; q[tail++] = y; }
+            }
         }
         return cnt;
     }
@@ -255,7 +258,7 @@ public sealed unsafe partial class FullSolver
             int d = dirs[di];
             if (mark[b - d] == st) { int k = b * 4 + di; bseenStamp[k] = bs; bprev[k] = -1; q.Add(k); }
         }
-        occ[b] = false;
+        SetOcc(b, false);
         try
         {
             for (int i = 0; i < q.Count && i < limit; i++)
@@ -271,7 +274,7 @@ public sealed unsafe partial class FullSolver
                     seq.Reverse();
                     return seq.ToArray();
                 }
-                occ[nc] = true;
+                SetOcc(nc, true);
                 uint ps = ++pstamp;
                 var pq = cqueue; int tail = 0; pq[tail++] = c; mark3[c] = ps;
                 for (int j = 0; j < tail; j++)
@@ -283,7 +286,7 @@ public sealed unsafe partial class FullSolver
                         if (mark3[y] != ps && !wall[y] && !occ[y]) { mark3[y] = ps; pq[tail++] = y; }
                     }
                 }
-                occ[nc] = false;
+                SetOcc(nc, false);
                 for (int d2i = 0; d2i < 4; d2i++)
                 {
                     int k2 = nc * 4 + d2i;
@@ -292,7 +295,7 @@ public sealed unsafe partial class FullSolver
             }
             return null;
         }
-        finally { occ[b] = true; }
+        finally { SetOcc(b, true); }
     }
 
     // ---- move encoding --------------------------------------------------------------------------------------------------------
@@ -342,7 +345,7 @@ public sealed unsafe partial class FullSolver
                     int d = dirs[di], t = b + d;
                     if (mark[b - d] != st || wall[t] || occ[t]) continue;
                     if (dist[t] < 0) { stats.DeadSquare++; continue; }
-                    occ[b] = false; occ[t] = true;
+                    SetOcc(b, false); SetOcc(t, true);
                     long t0 = Prof.Start();
                     bool f1 = Frozen2x2(t) ? (stats.Frozen2x2++ >= 0) : FreezeDeadlock(t) && (stats.Freeze++ >= 0);
                     Prof.Stop(2, t0); t0 = Prof.Start();
@@ -367,7 +370,7 @@ public sealed unsafe partial class FullSolver
                         pushes1[np++] = new Push1 { I = i, B = b, T = t, Dir = (sbyte)di, R = r, Pen = pen };
                         if (r < best) { best = r; bestK = np - 1; }
                     }
-                    occ[b] = true; occ[t] = false;
+                    SetOcc(b, true); SetOcc(t, false);
                 }
             }
             int last = -1;
@@ -449,12 +452,12 @@ public sealed unsafe partial class FullSolver
             int ix = ((ReadOnlySpan<int>)cur).IndexOf(b);
             child[ix] = g;
             Flip(b); Flip(g);
-            occ[b] = false; occ[g] = true;
+            SetOcc(b, false); SetOcc(g, true);
             int np = Reach(g - dirs[last.Dir], mark2);
             ch = h - Hc(b);
             ulong zh = parentHash ^ nodes.ZBox(b) ^ nodes.ZBox(g) ^ nodes.ZPlayer(pp) ^ nodes.ZPlayer(np);
             int cid = Add(zh, np, id, b, last.Dir, seq, nodes.G(id) + seq.Length, ch, nodes.W(id), -1, child);
-            occ[b] = true; occ[g] = false;
+            SetOcc(b, true); SetOcc(g, false);
             return cid;
         }
         else
@@ -463,12 +466,12 @@ public sealed unsafe partial class FullSolver
             int t = b + dirs[dir];
             child[i] = t;
             Flip(b); Flip(t);
-            occ[b] = false; occ[t] = true;
+            SetOcc(b, false); SetOcc(t, true);
             int np = Normalize(b, t, nodes.Player(id), st);
             ch = h - Hc(b) + Hc(t);
             ulong zh = parentHash ^ nodes.ZBox(b) ^ nodes.ZBox(t) ^ nodes.ZPlayer(pp) ^ nodes.ZPlayer(np);
             int cid = Add(zh, np, id, b, (sbyte)dir, null, nodes.G(id) + 1, ch, nodes.W(id) + wd, r, child);
-            occ[b] = true; occ[t] = false;
+            SetOcc(b, true); SetOcc(t, false);
             return cid;
         }
     }

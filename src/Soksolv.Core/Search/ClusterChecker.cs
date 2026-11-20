@@ -67,19 +67,28 @@ public sealed unsafe class ClusterChecker
 {
     public static int MaxBoxes = 5;
     public static int StateCap = 1000;
+    /// <summary>A* proof search (goal-directed; same minimal cost, far fewer states for alive clusters). false = Go-identical BFS.</summary>
+    public static bool AStar = false;
+    /// <summary>Remember box sets whose proof search hit the state cap and skip them for other player sides (alive: always safe, may lose a proof).</summary>
+    public static bool SkipCapped = false;
 
     public ClusterTable? Shared, SharedPen;
     public bool Private;
     public long Checked;
+    public HashSet<ulong> CapSets = new(), AllSets = new(); public long CapRepeat, CapSkipped;
+    public long StDead, StAlive, StCap, NDead, NAlive, NCap, SplitFloods, DeadCalls, SplitFail;
     public int Pen { get; private set; }
 
     readonly ClusterBoard b;
     readonly ulong[] proven = new ulong[1 << 18];
+    readonly ulong[] cappedSets = new ulong[1 << 14];
     // pinned (POH) scratch so hot loops use raw pointers: blk = wall | cluster box, mark = flood stamps
     readonly byte[] blkArr; readonly uint[] markArr; readonly int[] queueArr; readonly byte[] deadArr, goalArr;
     readonly byte* blk; readonly uint* mark; readonly int* queue; readonly byte* deadP, goalP;
     uint stamp;
     int qlen;
+    readonly int[] queue2Arr; readonly uint[] mark2Arr;
+    public static bool CheckFast = false;
 
     // proof-search scratch
     Key[] cq = new Key[2048];
@@ -106,6 +115,8 @@ public sealed unsafe class ClusterChecker
         for (int i = 0; i < n; i++) { blkArr[i] = (byte)(board.Wall[i] ? 1 : 0); deadArr[i] = (byte)(board.Dead[i] ? 1 : 0); goalArr[i] = (byte)(board.Goal[i] ? 1 : 0); }
         blk = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref blkArr[0]); mark = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref markArr[0]);
         queue = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref queueArr[0]);
+        queue2Arr = GC.AllocateArray<int>(n, pinned: true); mark2Arr = GC.AllocateArray<uint>(n, pinned: true);
+        queue2 = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref queue2Arr[0]); mark2 = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref mark2Arr[0]);
         deadP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref deadArr[0]); goalP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref goalArr[0]);
     }
 
@@ -127,7 +138,7 @@ public sealed unsafe class ClusterChecker
     /// </summary>
     public bool Dead(bool[] occIn, int t, int side, uint[] regionMark, uint regionStamp, int extra)
     {
-        Pen = 0;
+        Pen = 0; DeadCalls++;
         Span<int> cl = stackalloc int[8];
         int n = 1; cl[0] = t;
         int w = b.W;
@@ -164,10 +175,20 @@ public sealed unsafe class ClusterChecker
         if (shared != null && shared.Has(k)) { Interlocked.Increment(ref shared.Hits); return true; }
         for (int i = 0; i < n; i++) blk[cells[i]] = 1;
         Region(side);
+        SplitFloods++;
         bool split = qlen < b.NFloor - n;
+        if (!split) SplitFail++;
         for (int i = 0; i < n; i++) blk[cells[i]] = 0;
         if (!split) { SetLocal(k, 0); return false; }
+        ulong setKey = 0;
+        if (SkipCapped)
+        {
+            setKey = KeyOf(cells, 0) ^ (b.Salt & ~0xFFUL);
+            if (cappedSets[(int)(setKey & (ulong)(cappedSets.Length - 1))] == setKey) { SetLocal(k, 0); CapSkipped++; return false; }
+        }
         var (dead, cost) = SearchCap(cells, side, StateCap);
+        if (SkipCapped && !dead && cost == 0) cappedSets[(int)(setKey & (ulong)(cappedSets.Length - 1))] = setKey;
+        if (Prof.On) { ulong ks = KeyOf(cells, 0); AllSets.Add(ks); if (!dead && cost == 0) { if (!CapSets.Add(ks)) CapRepeat++; } }
         if (dead) shared?.Add(k);
         else
         {
@@ -227,6 +248,9 @@ public sealed unsafe class ClusterChecker
 
     /// <summary>Exhaustive BFS over cluster positions (other boxes removed). Returns (dead, cost): cost = BFS depth of the first all-on-goals state when alive, else 0.</summary>
     public (bool dead, int cost) SearchCap(ReadOnlySpan<int> start, int side, int capStates)
+        => AStar && b.Dist != null ? SearchAStar(start, side, capStates) : SearchBfs(start, side, capStates);
+
+    (bool dead, int cost) SearchBfs(ReadOnlySpan<int> start, int side, int capStates)
     {
         Checked++; if (Prof.On) Prof.Calls[13]++;
         int n = start.Length;
@@ -269,7 +293,7 @@ public sealed unsafe class ClusterChecker
         var dirs = b.Dirs;
         for (int head = 0; head < qn; head++)
         {
-            if (seenCount > capStates) return (false, 0);
+            if (seenCount > capStates) { NCap++; StCap += head; return (false, 0); }
             if (Prof.On) Prof.Calls[14]++;
             var st = cq[head]; int depth = cdepth[head];
             for (int i = 0; i < n; i++) cur[i] = (int)((i < 4 ? st.Lo >> (i * 16) : st.Hi >> ((i - 4) * 16)) & 0xFFFF);
@@ -298,60 +322,225 @@ public sealed unsafe class ClusterChecker
                 nb.Sort();
                 bool done = true;
                 for (int i = 0; i < n; i++) if (goalP[nb[i]] == 0) { done = false; break; }
-                if (done) return (false, depth + 1);
-                int np = m.Np;
-                if (np < 0)
-                {
-                    for (int i = 0; i < n; i++) blk[nb[i]] = 1;
-                    np = Region(m.From);
-                    for (int i = 0; i < n; i++) blk[nb[i]] = 0;
-                }
+                if (done) { NAlive++; StAlive += head; return (false, depth + 1); }
+                int np = ResolveNp(m.Np, m.From, nb);
                 TryAdd(MkKey(nb, np), depth + 1);
             }
         }
+        NDead++; StDead += qn;
         return (true, 0);
+    }
+
+
+    int[] ch = new int[2048];       // per queued state: h
+    int[] cgv = new int[2048];      // per queued state: best g
+    ulong[] open = new ulong[4096]; int openN;
+
+    void OpenPush(ulong k)
+    {
+        if (openN == open.Length) Array.Resize(ref open, openN * 2);
+        int i = openN++;
+        while (i > 0) { int p = (i - 1) >> 1; if (k >= open[p]) break; open[i] = open[p]; i = p; }
+        open[i] = k;
+    }
+    ulong OpenPop()
+    {
+        ulong top = open[0]; ulong x = open[--openN]; int i = 0;
+        while (true)
+        {
+            int l = 2 * i + 1; if (l >= openN) break;
+            int m = l; if (l + 1 < openN && open[l + 1] < open[l]) m = l + 1;
+            if (open[m] >= x) break;
+            open[i] = open[m]; i = m;
+        }
+        if (openN > 0) open[i] = x;
+        return top;
+    }
+
+    /// <summary>
+    /// A* over cluster positions with h = sum of per-box push distance to the nearest goal (admissible and
+    /// consistent), so the first all-on-goals state popped has the minimal push count (same cost as BFS).
+    /// Dead proofs are still exhaustive. Entry key: f(16) | (0xFFFF-g)(16) | idx(32); stale entries skipped by g.
+    /// </summary>
+    (bool dead, int cost) SearchAStar(ReadOnlySpan<int> start, int side, int capStates)
+    {
+        Checked++; if (Prof.On) Prof.Calls[13]++;
+        int n = start.Length;
+        if (n > 7) return (false, 0);
+        var dist = b.Dist!;
+        for (int i = 0; i < n; i++) blk[start[i]] = 1;
+        int p0 = Region(side);
+        for (int i = 0; i < n; i++) blk[start[i]] = 0;
+
+        int tsize = 8192;
+        while (tsize < capStates * 4 + 128) tsize <<= 1;
+        if (seenSlots.Length < tsize) seenSlots = new ulong[tsize];
+        int tmask = seenSlots.Length - 1;
+        if (++seenStamp == 0) { Array.Clear(seenSlots); seenStamp = 1; }
+        uint ss = seenStamp;
+        int qn = 0; openN = 0;
+
+        // returns state index, adding if new; improves g if better
+        int Touch(in Key k, int g, int h, out bool isNew)
+        {
+            int i = (int)(k.Hash() & (ulong)tmask);
+            while (true)
+            {
+                ulong sl = seenSlots[i];
+                if ((uint)(sl >> 32) != ss) break;
+                int idx = (int)(uint)sl - 1;
+                if (cq[idx].Equals(k)) { isNew = false; if (g < cgv[idx]) { cgv[idx] = g; return idx; } return -1; }
+                i = (i + 1) & tmask;
+            }
+            if (qn == cq.Length) { Array.Resize(ref cq, qn * 2); Array.Resize(ref cdepth, qn * 2); Array.Resize(ref ch, qn * 2); Array.Resize(ref cgv, qn * 2); }
+            cq[qn] = k; ch[qn] = h; cgv[qn] = g; qn++;
+            seenSlots[i] = ((ulong)ss << 32) | (uint)qn;
+            isNew = true;
+            return qn - 1;
+        }
+
+        Span<int> cur = stackalloc int[8];
+        Span<int> nb = stackalloc int[8];
+        cur = cur[..n]; nb = nb[..n];
+        int h0 = 0; for (int i = 0; i < n; i++) h0 += dist[start[i]];
+        int s0 = Touch(MkKey(start, p0), 0, h0, out _);
+        OpenPush(((ulong)Math.Min(h0, 0xFFFF) << 48) | ((ulong)0xFFFF << 32) | (uint)s0);
+        Span<Move> moves = stackalloc Move[32];
+        var dirs = b.Dirs;
+        while (openN > 0)
+        {
+            ulong e = OpenPop();
+            int idx = (int)(uint)e;
+            int g = 0xFFFF - (int)((e >> 32) & 0xFFFF);
+            if (g != cgv[idx]) continue; // stale
+            if (qn > capStates) { NCap++; StCap += qn; return (false, 0); }
+            if (Prof.On) Prof.Calls[14]++;
+            int hh = ch[idx];
+            if (hh == 0) { NAlive++; StAlive += qn; return (false, g); }
+            var st = cq[idx];
+            for (int i = 0; i < n; i++) cur[i] = (int)((i < 4 ? st.Lo >> (i * 16) : st.Hi >> ((i - 4) * 16)) & 0xFFFF);
+            int stp = (int)((st.Hi >> 48) & 0xFFFF);
+            for (int i = 0; i < n; i++) blk[cur[i]] = 1;
+            Region(stp);
+            uint rs = stamp;
+            int nm = 0;
+            for (int i = 0; i < n; i++)
+            {
+                int x = cur[i];
+                foreach (int d in dirs)
+                {
+                    int to = x + d;
+                    if (mark[x - d] == rs && blk[to] == 0 && deadP[to] == 0)
+                        moves[nm++] = new Move { I = i, To = to, From = x, Np = FastPlayer(x, to, stp, rs) };
+                }
+            }
+            for (int i = 0; i < n; i++) blk[cur[i]] = 0;
+            for (int mi = 0; mi < nm; mi++)
+            {
+                ref var m = ref moves[mi];
+                cur.CopyTo(nb);
+                nb[m.I] = m.To;
+                nb.Sort();
+                int np = ResolveNp(m.Np, m.From, nb);
+                int ng = g + 1, nh = hh - dist[m.From] + dist[m.To];
+                int ci = Touch(MkKey(nb, np), ng, nh, out _);
+                if (ci >= 0) OpenPush(((ulong)Math.Min(ng + nh, 0xFFFF) << 48) | ((ulong)(0xFFFF - ng) << 32) | (uint)ci);
+            }
+        }
+        NDead++; StDead += qn;
+        return (true, 0);
+    }
+
+    int ResolveNp(int fast, int from, ReadOnlySpan<int> nb)
+    {
+        if (fast >= 0 && !CheckFast) return fast;
+        uint saved = stamp;
+        for (int i = 0; i < nb.Length; i++) blk[nb[i]] = 1;
+        int slow = Region(from);
+        for (int i = 0; i < nb.Length; i++) blk[nb[i]] = 0;
+        if (fast >= 0 && fast != slow) throw new InvalidOperationException($"cluster fast normalization {fast} != flood {slow}");
+        return slow;
     }
 
     struct Move { public int I, To, From, Np; }
 
-    /// <summary>See Go cluster.fastPlayer: child's normalized player after a box moves x -> t, or -1 if a flood is needed.</summary>
+    // second flood scratch for pocket floods (must not disturb the parent's region stamp/queue)
+    int* queue2; uint* mark2; uint stamp2;
+
+    /// <summary>
+    /// Child's normalized player (minimum cell of the child's region) after a box moves x -> t with the player
+    /// ending on x, computed from the parent's region R (stamped rs, minimum minR, cells in queue[0..qlen)):
+    ///  - if t is in R and its removal might split R (8-ring has more than one run touching an orthogonal
+    ///    neighbour) the caller must flood (-1);
+    ///  - cells behind the old box position (neighbours of x outside R) form pockets that merge into the region
+    ///    through x: flood only those pockets (t blocked);
+    ///  - if t was R's minimum the new minimum is rescanned from R's cell list.
+    /// </summary>
     int FastPlayer(int x, int t, int minR, uint rs)
     {
-        foreach (int d in b.Dirs)
-        {
-            int y = x + d;
-            if (y != t && blk[y] == 0 && mark[y] != rs) return -1;
-        }
-        if (t == minR) return -1;
         int w = b.W;
-        Span<int> ring = [-w - 1, -w, -w + 1, 1, w + 1, w, w - 1, -1]; // circular; odd indices are orthogonal
-        Span<bool> free = stackalloc bool[8];
-        int start = -1;
-        for (int k = 0; k < 8; k++)
+        bool tInR = mark[t] == rs;
+        if (tInR)
         {
-            int y = t + ring[k];
-            free[k] = blk[y] == 0 || y == x;
-            if (!free[k] && start < 0) start = k;
+            Span<int> ring = [-w - 1, -w, -w + 1, 1, w + 1, w, w - 1, -1]; // circular; odd indices are orthogonal
+            Span<bool> free = stackalloc bool[8];
+            int start = -1;
+            for (int k = 0; k < 8; k++)
+            {
+                int y = t + ring[k];
+                free[k] = blk[y] == 0 || y == x;
+                if (!free[k] && start < 0) start = k;
+            }
+            if (start >= 0)
+            {
+                int runsWithOrth = 0;
+                bool inRun = false, hasOrth = false;
+                for (int i = 1; i <= 8; i++)
+                {
+                    int k = (start + i) % 8;
+                    if (free[k])
+                    {
+                        if (!inRun) { inRun = true; hasOrth = false; }
+                        if (k % 2 == 1) hasOrth = true;
+                    }
+                    else if (inRun)
+                    {
+                        if (hasOrth) runsWithOrth++;
+                        inRun = false;
+                    }
+                }
+                if (inRun && hasOrth) runsWithOrth++;
+                if (runsWithOrth > 1) return -1;
+            }
         }
-        if (start < 0) return Math.Min(minR, x);
-        int runsWithOrth = 0;
-        bool inRun = false, hasOrth = false;
-        for (int i = 1; i <= 8; i++)
+        int min = x;
+        if (tInR && t == minR)
         {
-            int k = (start + i) % 8;
-            if (free[k])
+            int m2 = int.MaxValue;
+            for (int i = 0; i < qlen; i++) { int c = queue[i]; if (c != t && c < m2) m2 = c; }
+            min = Math.Min(min, m2);
+        }
+        else min = Math.Min(min, minR);
+        // pockets opened behind x
+        uint st2 = 0;
+        for (int di = 0; di < 4; di++)
+        {
+            int y0 = x + b.Dirs[di];
+            if (y0 == t || blk[y0] != 0 || mark[y0] == rs) continue;
+            if (st2 == 0) st2 = ++stamp2;
+            if (mark2[y0] == st2) continue;
+            int tail = 0; queue2[tail++] = y0; mark2[y0] = st2;
+            for (int i = 0; i < tail; i++)
             {
-                if (!inRun) { inRun = true; hasOrth = false; }
-                if (k % 2 == 1) hasOrth = true;
-            }
-            else if (inRun)
-            {
-                if (hasOrth) runsWithOrth++;
-                inRun = false;
+                int c = queue2[i];
+                if (c < min) min = c;
+                for (int dj = 0; dj < 4; dj++)
+                {
+                    int y = c + b.Dirs[dj];
+                    if (mark2[y] != st2 && blk[y] == 0 && y != t && mark[y] != rs) { mark2[y] = st2; queue2[tail++] = y; }
+                }
             }
         }
-        if (inRun && hasOrth) runsWithOrth++;
-        if (runsWithOrth > 1) return -1;
-        return Math.Min(minR, x);
+        return min;
     }
 }

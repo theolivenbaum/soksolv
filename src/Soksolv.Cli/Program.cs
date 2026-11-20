@@ -5,6 +5,7 @@ using Soksolv.Model;
 using Soksolv.Search;
 
 // soksolv [-t seconds] [-mem MiB] [-nodes N] [-header] <file.xsb> [level index (1-based)]
+ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
 for (int i = 0; i < args.Length; i++)
@@ -15,6 +16,11 @@ for (int i = 0; i < args.Length; i++)
         case "-mem": memMb = int.Parse(args[++i]); break;
         case "-nodes": nodes = long.Parse(args[++i]); break;
         case "-header": header = true; break;
+        case "-parity": ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; break; // Go-identical cluster proofs (BFS, no skipping)
+        case "-cluster-astar": ClusterChecker.AStar = true; break;
+        case "-cluster-check": ClusterChecker.CheckFast = true; break;
+        case "-cluster-skipcap": ClusterChecker.SkipCapped = true; break;
+        case "-cluster-cap": ClusterChecker.StateCap = int.Parse(args[++i]); break;
         case "-procs": i++; break; // accepted for CLI compatibility (single lane for now)
         case "-strategy": i++; break;
         default: pos.Add(args[i]); break;

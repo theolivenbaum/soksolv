@@ -30,6 +30,7 @@ public sealed unsafe partial class FullSolver
         }
         var res = Search(timeLimitSec, sw);
         res.TimeMs = sw.Elapsed.TotalMilliseconds;
+        if (cl != null && Prof.On) Console.Error.WriteLine($"cluster: calls {cl.DeadCalls} splitFloods {cl.SplitFloods} (nosplit {cl.SplitFail}) searches dead {cl.NDead} ({cl.StDead} st) alive {cl.NAlive} ({cl.StAlive} st) cap {cl.NCap} ({cl.StCap} st) | distinct sets {cl.AllSets.Count}, capped distinct {cl.CapSets.Count}, capped repeats of a set {cl.CapRepeat}, skipped {cl.CapSkipped}");
         Prof.Report(res.TimeMs);
         res.Stats = stats; stats.Stored = nodes.Count;
         res.PeakBytes = (long)TrackedBytes();
@@ -48,13 +49,13 @@ public sealed unsafe partial class FullSolver
             if (dist[b] < 0) return new SolveResult { Reason = "box on dead square" };
             h0 += dist[b];
         }
-        foreach (int b in start) occ[b] = true;
+        foreach (int b in start) SetOcc(b, true);
         int p0 = Reach(lv.Player, mark);
         // root: key from boxes
         for (int w = 0; w < nodes.Nw; w++) ckey[w] = 0;
         foreach (int b in start) Flip(b);
         Add(nodes.HashOf(start, p0), p0, -1, -1, -1, null, 0, h0, 0, -1, start);
-        foreach (int b in start) occ[b] = false;
+        foreach (int b in start) SetOcc(b, false);
         if (h0 == 0) return new SolveResult { Solved = true, Solution = "", Nodes = 0 };
 
         var cur = new int[n]; var child = new int[n];
@@ -79,7 +80,7 @@ public sealed unsafe partial class FullSolver
                 }
             }
             nodes.Unpack(id, cur);
-            foreach (int b in cur) occ[b] = true;
+            foreach (int b in cur) SetOcc(b, true);
             int h = SetCosts(cur);
             int pl = nodes.Player(id);
             Reach(pl, mark);
@@ -108,7 +109,7 @@ public sealed unsafe partial class FullSolver
                 var (nh, nw) = MoveKeyAt(id, NextMove(id, src, cur, h), cur, h);
                 PushTo(src, nh, nw, id);
             }
-            foreach (int b in cur) occ[b] = false;
+            foreach (int b in cur) SetOcc(b, false);
             if (solved >= 0) return new SolveResult { Solved = true, Solution = Reconstruct(solved), Nodes = expanded };
         }
         return new SolveResult { Reason = "exhausted", Nodes = expanded };
@@ -127,7 +128,7 @@ public sealed unsafe partial class FullSolver
             pushes.Add((nodes.From(id), nodes.Dir(id)));
         }
         pushes.Reverse();
-        foreach (int b in lv.Boxes) occ[b] = true;
+        foreach (int b in lv.Boxes) SetOcc(b, true);
         var prev = new sbyte[cells];
         var sb = new StringBuilder();
         int p = lv.Player;
@@ -150,10 +151,10 @@ public sealed unsafe partial class FullSolver
             for (int c = target; c != p; c -= dirs[prev[c]]) walk.Add(DirChars[prev[c]]);
             for (int i = walk.Count - 1; i >= 0; i--) sb.Append(walk[i]);
             sb.Append((char)(DirChars[di] - 'a' + 'A'));
-            occ[from] = false; occ[from + dirs[di]] = true;
+            SetOcc(from, false); occ[from + dirs[di]] = true;
             p = from;
         }
-        Array.Clear(occ);
+        for (int c = 0; c < cells; c++) if (occ[c]) SetOcc(c, false);
         return sb.ToString();
     }
 }
