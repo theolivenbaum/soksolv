@@ -21,21 +21,47 @@ var stageN = func() int {
 }()
 var stage1On = stageN >= 1
 
+// stage-6 feature mask (SOKSOLV_FEAT, decimal): bit0 move windows, bit1 deadzone corral proofs + frontier corral,
+// bit2 displacement landmarks, bit3 corridor flow, bit4 packing obligations, bit5 plan4 (macro), bit6 rev-groups/novelty
+// hooks, bit7 pair-side deadlock. A set bit leaves that feature at its flag default (on); a clear bit forces it off.
+var featMask = func() int {
+	n := 0
+	fmt.Sscanf(os.Getenv("SOKSOLV_FEAT"), "%d", &n)
+	return n
+}()
+
 func stage1Overrides() {
-	RevGroups = false
-	MoveWindow = 0
-	Novelty = 0
+	on := func(bit int) bool { return featMask&(1<<bit) != 0 }
+	if !on(6) {
+		RevGroups = false
+		Novelty = 0
+		Novelty2 = false
+		AccessNovelty = false
+	}
+	if !on(0) {
+		MoveWindow = 0
+	}
 	LazyChild = false
-	AccessNovelty = false
-	Novelty2 = false
-	DisplacementLandmarksOn = false
-	CorridorFlow = false
-	CorralDead = 0
-	PairSide = false
-	FrontierCorral = false
-	PackingObligations = false
-	Plan4Macro = false
-	Plan4 = false
+	if !on(2) {
+		DisplacementLandmarksOn = false
+	}
+	if !on(3) {
+		CorridorFlow = false
+	}
+	if !on(1) {
+		CorralDead = 0
+		FrontierCorral = false
+	}
+	if !on(7) {
+		PairSide = false
+	}
+	if !on(4) {
+		PackingObligations = false
+	}
+	if !on(5) {
+		Plan4Macro = false
+		Plan4 = false
+	}
 	FrozenHall = false
 	InefficientPrune = false
 	_ = cluster.MaxBoxes

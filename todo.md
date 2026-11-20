@@ -49,5 +49,8 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [x] Stage 3: sink packing plan (planner + plan queries; cutscan replaced by floods) — exact parity (18 testdata + 42 LTS @20k)
 - [x] Stage 4: hotspots (hot term, hotspot + opener advisors) — exact parity (18 + 42 @20k)
 - [x] Stage 5: move access (mobility, explorer advisor) — exact parity (18 + 42 @20k)
-- [ ] Stage 6: flag features: move window/lazy children/reopen, novelty (+access), rev-groups, frontier corral, corral deadzone, displacement landmarks, corridor flow, obligations, plan4 + anytime ring, macro-alt engine
+- [x] Stage 6a: move windows + reopen (exact parity 18 + 42 @20k); lazy children = perf only, not ported
+- [ ] Stage 6b: deadzone corral proofs (Search/DeadZone, reusable) + frontier corral   - [ ] 6c displacement landmarks   - [ ] 6d corridor flow
+- [ ] 6e packing obligations/causal   - [ ] 6f plan4 (+ anytime ring)   - [ ] 6g alt engine, rev-groups, novelty hooks, pair-side
+- [x] macro lane in Portfolio (stages 1-5 + 6a); [ ] switch to full default config once 6b-6g land
 - [ ] Stage-1 speed tuning (HashOf per expansion, first-candidate Regions flood, apply path BFS cache)

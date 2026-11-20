@@ -199,3 +199,23 @@ flow, packing obligations, plan4 (+ anytime ring), the macro-alt engine and the 
 tuned since Stage 1 (full room-connectivity recompute per candidate; plan/hot rows computed from definitions): C# JIT wall time is
 ~1.0-1.7x the Go reference's on 20k-node runs (dominated by .NET startup/JIT on short runs); optimisation is the next job once
 stage 6 lands (Go's incremental `roomConnChild` and tree-based hotspot rows are the known speed-ups).
+
+
+## Stage 6a — move windows / reopen: DONE (exact parity); 6b-6g NOT ported
+
+`SOKSOLV_FEAT` / `-macro-features` is a bitmask of the stage-6 default-on features (bit0 move windows+reopen, bit1 deadzone
+corral proofs + frontier corral, bit2 displacement landmarks, bit3 corridor flow, bit4 packing obligations, bit5 plan4,
+bit6 rev-groups/novelty hooks, bit7 pair-side); the Go reference forces every clear bit off, C# mirrors it. Implemented: bit0
+(window of 8 stored moves per opening, `mvOff`, reopen loop in the search loop incl. the `expired()` guard, re-opening a node
+re-runs candidate generation exactly as Go does). `LazyChild` (partial selection, incremental packed/oop) is performance-only
+(`checkRegions` invariants) and not ported. Parity (`STAGE=5 FEAT=1`, 20k nodes): Holland_81_27 @1/10/100/1000/20000, testdata 18/18,
+LTS sample 42/42 identical; 10 goldens in `MacroTests.Stage6a_*`.
+
+Not yet ported (each needs its own reference toggle, already in the Go patch): 6b deadzone corral proofs (`deadzone` ~1.5k lines) +
+frontier corral (`corral_frontier.go`, read in full, ~130 lines), 6c displacement landmarks, 6d corridor flow, 6e packing
+obligations/causal, 6f plan4 (+anytime ring), 6g alt engine / rev-groups / novelty hooks, pair-side (bit7). The CLI/portfolio macro
+lane therefore runs "stages 1-5 + move windows"; it is *not* the full default Go macro lane.
+
+Wiring done: `-strategy macro` (defaults `-macro-stage 5 -macro-features 1`), a `macro` lane in `Portfolio` (own thread, shared cancel
+flag and cluster table, equal memory budget; macro lane checks its tracked bytes against the budget every 256 expansions);
+stage/features live in `FullOptions` (no statics, safe for parallel lanes/tests). 105 tests pass.
