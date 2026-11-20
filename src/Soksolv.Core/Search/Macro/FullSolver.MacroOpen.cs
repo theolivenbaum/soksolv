@@ -6,7 +6,7 @@ namespace Soksolv.Search;
 public sealed unsafe partial class FullSolver
 {
     // ---- open(): evaluate all macro moves of a node once (Go fess_moves.go open, Stage 1 configuration) ----------------------------
-    int mOpenId, mOpenCands, mParentOop; uint mOpenSt;
+    int mOpenId, mOpenCands, mParentOop; uint mOpenSt; int[]? mHotCounts;
 
     void MOpen(int id, int[] cur, int h, uint st)
     {
@@ -23,11 +23,13 @@ public sealed unsafe partial class FullSolver
         int parentConn = maux[id].Reg;
         int parentRoom = MRoomConnectivity();
         int parentOop = MOutOfPlan(cur);
+        int[]? counts = MacroStage >= 4 ? HotCounts(cur) : null;
+        int parentHot = counts != null ? HotspotCount(counts) : 0;
         int parentPhase = mPlan != null ? mPlan.Status(occ).phase : -1;
         uint corral = PiCorral(st);
         if (corral != 0) stats.Corrals++;
         mPlan?.NodeSetup(cur);
-        mOpenId = id; mOpenSt = st; mParentOop = parentOop;
+        mOpenId = id; mOpenSt = st; mParentOop = parentOop; mHotCounts = counts;
         for (int i = 0; i < cur.Length; i++)
         {
             int b = cur[i];
@@ -40,7 +42,10 @@ public sealed unsafe partial class FullSolver
 
         int nm = mCandN;
         // advisors: packing, connectivity, room, out-of-plan (each picks its best-scored eligible move)
-        int packingK = -1, connK = -1, roomK = -1, oopK = -1;
+        int packingK = -1, connK = -1, roomK = -1, oopK = -1, hotK = -1, openerK = -1, explorerK = -1;
+        int hottest = -1;
+        if (counts != null) for (int i = 0; i < counts.Length; i++) if (counts[i] > 0 && (hottest < 0 || counts[i] > counts[hottest])) hottest = i;
+        int hotFrom = hottest >= 0 ? cur[hottest] : 0, openerNear = 1 << 30;
         int nearest = -1;
         if (basinInside != null)
             for (int i = 0; i < cur.Length; i++)
@@ -55,6 +60,14 @@ public sealed unsafe partial class FullSolver
             if (m.Packed > parentPacked || mPlan != null && m.Progress > parentPhase) MChoose(ref packingK, k);
             if (m.R < parentConn) MChoose(ref connK, k);
             if (m.Room < parentRoom) MChoose(ref roomK, k);
+            if (m.Hot < parentHot) MChoose(ref hotK, k);
+            if (m.Explorer) MChoose(ref explorerK, k);
+            if (hottest >= 0 && m.I != hottest && m.R <= parentConn && MWalk(hotFrom, m.T) > MWalk(hotFrom, m.B))
+            {
+                int dd = MWalk(hotFrom, m.B);
+                if (dd < openerNear) { openerNear = dd; openerK = -1; }
+                if (dd == openerNear) MChoose(ref openerK, k);
+            }
             if (nearest >= 0 && m.R <= parentConn && basinInside![m.T] && !basinInside[m.B])
             {
                 int d = MWalk(oopFrom, m.B);
@@ -67,8 +80,11 @@ public sealed unsafe partial class FullSolver
         if (packingK >= 0) { mWeights[packingK] = 0; stats.Macros++; }
         if (connK >= 0) { mWeights[connK] = 0; stats.ConnAdvisor++; }
         if (roomK >= 0) mWeights[roomK] = 0;
+        if (hotK >= 0) mWeights[hotK] = 0;
+        if (explorerK >= 0) mWeights[explorerK] = 0;
+        if (openerK >= 0) mWeights[openerK] = 0;
         if (oopK >= 0) mWeights[oopK] = 0;
-        for (int k = 0; k < nm; k++) mKeys[k] = new MKey { W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Plen = mCands[k].Plen, Idx = k };
+        for (int k = 0; k < nm; k++) mKeys[k] = new MKey { W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = mCands[k].Plen, Idx = k };
         mKeys.AsSpan(0, nm).Sort(static (x, y) =>
         {
             if (x.W != y.W) return x.W < y.W ? -1 : 1;
@@ -76,6 +92,8 @@ public sealed unsafe partial class FullSolver
             if (x.Packed != y.Packed) return x.Packed > y.Packed ? -1 : 1; // -packed
             if (x.R != y.R) return x.R < y.R ? -1 : 1;
             if (x.Room != y.Room) return x.Room < y.Room ? -1 : 1;
+            if (x.Hot != y.Hot) return x.Hot < y.Hot ? -1 : 1;
+            if (x.Mobility != y.Mobility) return x.Mobility > y.Mobility ? -1 : 1;
             if (x.Plen != y.Plen) return x.Plen < y.Plen ? -1 : 1;
             return x.Idx < y.Idx ? -1 : 1;
         });
@@ -85,7 +103,7 @@ public sealed unsafe partial class FullSolver
             ref var m = ref mCands[k];
             ulong word = (ulong)m.I | (ulong)m.T << 15 | (ulong)mWeights[k] << 30 | (ulong)m.Side << 31 | (ulong)m.R << 33;
             mmv.Add(word);
-            mmvScore.Add(new MoveScore { Oop = (ushort)m.Oop, Packed = (ushort)m.Packed, Conn = (ushort)m.R, Hot = 0, Room = (uint)m.Room, Mobility = 0 });
+            mmvScore.Add(new MoveScore { Oop = (ushort)m.Oop, Packed = (ushort)m.Packed, Conn = (ushort)m.R, Hot = (ushort)Math.Min(m.Hot, 65535), Room = (uint)m.Room, Mobility = (uint)m.Mobility });
         }
         ref var a = ref maux[id];
         a.MvLen = (uint)nm; a.MvNext = 0; a.MvTotal = (uint)nm; a.MvLeft = (uint)nm;
@@ -95,7 +113,7 @@ public sealed unsafe partial class FullSolver
     {
         if (slot < 0) { slot = k; return; }
         ref var m = ref mCands[k]; ref var o = ref mCands[slot];
-        int c = m.Oop != o.Oop ? (m.Oop < o.Oop ? -1 : 1) : m.Packed != o.Packed ? (m.Packed > o.Packed ? -1 : 1) : m.R != o.R ? (m.R < o.R ? -1 : 1) : m.Room != o.Room ? (m.Room < o.Room ? -1 : 1) : 0;
+        int c = m.Oop != o.Oop ? (m.Oop < o.Oop ? -1 : 1) : m.Packed != o.Packed ? (m.Packed > o.Packed ? -1 : 1) : m.R != o.R ? (m.R < o.R ? -1 : 1) : m.Room != o.Room ? (m.Room < o.Room ? -1 : 1) : m.Hot != o.Hot ? (m.Hot < o.Hot ? -1 : 1) : m.Mobility != o.Mobility ? (m.Mobility > o.Mobility ? -1 : 1) : 0;
         if (c < 0 || c == 0 && m.Plen < o.Plen) slot = k;
     }
 
@@ -127,6 +145,7 @@ public sealed unsafe partial class FullSolver
             }
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
             if (mCandN == mCands.Length) Array.Resize(ref mCands, mCandN * 2);
+            var (mob, expl) = MacroStage >= 5 ? MMoveAccess(cur, i, t) : (0, false);
             int room = MRoomConnectivity(), packed, oop, progress = -2;
             if (mPlan != null)
             {
@@ -135,7 +154,7 @@ public sealed unsafe partial class FullSolver
                 oop = MOutOfPlan(cur, cphase, i, t);
             }
             else { packed = MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
-            mCands[mCandN++] = new MCand { I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress };
+            mCands[mCandN++] = new MCand { I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = mHotCounts != null ? HotAfter(cur, mHotCounts, i, t) : 0, Mobility = mob, Explorer = expl };
         }
         SetOcc(t, false);
         return true;

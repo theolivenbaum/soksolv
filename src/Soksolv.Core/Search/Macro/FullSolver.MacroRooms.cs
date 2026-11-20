@@ -313,23 +313,23 @@ public sealed unsafe partial class FullSolver
         return n2;
     }
 
-    // walking distance (walls only) from a fixed source, cached per source
-    int mWalkSrc = -1; int[]? mWalkD;
+    // walking distance (walls only) from a source, cached per source (opener and out-of-plan advisors use fixed sources per node)
+    readonly Dictionary<int, int[]> mWalkCache = new();
     int MWalk(int from, int to)
     {
-        if (mWalkSrc != from)
+        if (!mWalkCache.TryGetValue(from, out var d))
         {
-            mWalkD ??= new int[cells];
-            Array.Fill(mWalkD, -1);
-            var q = new List<int> { from }; mWalkD[from] = 0;
+            if (mWalkCache.Count > 256) mWalkCache.Clear();
+            d = new int[cells]; Array.Fill(d, -1);
+            var q = new List<int> { from }; d[from] = 0;
             for (int i = 0; i < q.Count; i++)
-                foreach (int d in dirs)
+                foreach (int dd in dirs)
                 {
-                    int x = q[i] + d;
-                    if (!wall[x] && mWalkD[x] < 0) { mWalkD[x] = mWalkD[q[i]] + 1; q.Add(x); }
+                    int x = q[i] + dd;
+                    if (!wall[x] && d[x] < 0) { d[x] = d[q[i]] + 1; q.Add(x); }
                 }
-            mWalkSrc = from;
+            mWalkCache[from] = d;
         }
-        return mWalkD![to];
+        return d[to];
     }
 }

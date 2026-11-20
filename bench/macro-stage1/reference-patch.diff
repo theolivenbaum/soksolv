@@ -23,12 +23,12 @@ diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/fess_se
  	}
 diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/hotspots.go go-macro/hotspots.go
 --- /home/user/soksolv/.reference/hotspots.go	2026-11-20 20:15:07.408601596 +0000
-+++ go-macro/hotspots.go	2026-11-20 21:49:15.678392064 +0000
++++ go-macro/hotspots.go	2026-11-20 22:09:27.545844773 +0000
 @@ -248,6 +248,9 @@
  // It also readies the per-node scratch that after() uses: after() must be
  // called for the same boxes, until the next counts().
  func (h *hotspotTable) counts(s *solver, boxes []int32) []int {
-+	if stage1On {
++	if stage1On && stageN < 4 {
 +		return make([]int, len(boxes))
 +	}
  	counts := make([]int, len(boxes))
@@ -38,7 +38,7 @@ diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/hotspot
  // fixed, so a candidate only needs the boxes whose count would drop to zero
  // (lmask) that the target hits, and whether the target's row hits any box.
  func (h *hotspotTable) after(s *solver, boxes []int32, counts []int, moved int, target int32) int {
-+	if stage1On {
++	if stage1On && stageN < 4 {
 +		return 0
 +	}
  	old, now := h.nodeIdx[moved], s.fidx[target]
@@ -58,12 +58,12 @@ diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/macroal
  	b := newBaton([3]bool{true, true, false})
 diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/moveaccess.go go-macro/moveaccess.go
 --- /home/user/soksolv/.reference/moveaccess.go	2026-11-20 20:15:07.422034313 +0000
-+++ go-macro/moveaccess.go	2026-11-20 21:49:15.678466898 +0000
++++ go-macro/moveaccess.go	2026-11-20 22:10:45.581827709 +0000
 @@ -20,6 +20,9 @@
  // consumers do not depend on (set membership only). Wider boards use
  // moveAccessScan, which is also the test reference (checkAccess).
  func (s *solver) moveAccess(cur []int32, moved int, origB, target int32, st uint32, cmdMask, unpinMask uint64, unpackedRegime bool) (mobility int, explorer bool, accStart, accLen int32) {
-+	if stage1On {
++	if stage1On && stageN < 5 {
 +		return 0, false, int32(len(s.accBuf)), 0
 +	}
  	bb := s.bb

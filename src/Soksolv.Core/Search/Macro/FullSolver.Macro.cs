@@ -33,10 +33,10 @@ public sealed unsafe partial class FullSolver
 
     struct MCand
     {
-        public int I, B, T, R, Packed, Plen, Side, Room, Oop, Progress;
+        public int I, B, T, R, Packed, Plen, Side, Room, Oop, Progress, Hot, Mobility; public bool Explorer;
         public ulong ScoreKey;
     }
-    struct MKey { public int W, Oop, Packed, R, Room, Plen, Idx; }
+    struct MKey { public int W, Oop, Packed, R, Room, Hot, Mobility, Plen, Idx; }
     MCand[] mCands = new MCand[64]; int mCandN;
     int[] mWeights = new int[64]; MKey[] mKeys = new MKey[64];
 
