@@ -79,6 +79,7 @@ public sealed unsafe partial class FullSolver
         res.Stats = stats; stats.Stored = nodes.Count;
         res.PeakBytes = (long)(nodes.Bytes + mmv.Bytes + mmvScore.Bytes + maux.Bytes);
         MacroReport(res);
+        if (Prof.On) { Prof.Names[0] = "pushDead"; Prof.Names[1] = "roomConn"; Prof.Names[2] = "hotAfter"; Prof.Names[3] = "moveAccess"; Prof.Names[4] = "regions"; Prof.Names[5] = "piCorral+setup"; Prof.Report(res.TimeMs); }
         return res;
     }
 

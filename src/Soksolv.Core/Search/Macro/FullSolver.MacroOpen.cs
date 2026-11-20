@@ -6,7 +6,7 @@ namespace Soksolv.Search;
 public sealed unsafe partial class FullSolver
 {
     // ---- open(): evaluate all macro moves of a node once (Go fess_moves.go open, Stage 1 configuration) ----------------------------
-    int mOpenId, mOpenCands, mParentOop; uint mOpenSt; int[]? mHotCounts;
+    int mOpenId, mOpenCands, mParentOop, mParentRoom; uint mOpenSt; int[]? mHotCounts;
 
     void MOpen(int id, int[] cur, int h, uint st)
     {
@@ -26,10 +26,12 @@ public sealed unsafe partial class FullSolver
         int[]? counts = MacroStage >= 4 ? HotCounts(cur) : null;
         int parentHot = counts != null ? HotspotCount(counts) : 0;
         int parentPhase = mPlan != null ? mPlan.Status(occ).phase : -1;
+        long tc = Prof.Start();
         uint corral = PiCorral(st);
         if (corral != 0) stats.Corrals++;
         mPlan?.NodeSetup(cur);
-        mOpenId = id; mOpenSt = st; mParentOop = parentOop; mHotCounts = counts;
+        Prof.Stop(5, tc);
+        mOpenId = id; mOpenSt = st; mParentOop = parentOop; mParentRoom = parentRoom; mHotCounts = counts;
         for (int i = 0; i < cur.Length; i++)
         {
             int b = cur[i];
@@ -125,18 +127,22 @@ public sealed unsafe partial class FullSolver
     {
         int i = mVisitI;
         int canonical = 0;
+        long tp;
         for (int side = 0; side < 4; side++)
             if (m3[t - dirs[side]] == mpstamp) { canonical = side; break; }
         int endpoint = t * 4 + canonical;
         if (mtseen[endpoint] == mtst) return true;
         mtseen[endpoint] = mtst;
         SetOcc(t, true);
+        tp = Prof.Start();
         int dead = MPushDead(cur, i, t, canonical);
+        Prof.Stop(0, tp);
         if (dead == 0)
         {
             stats.Generated++;
             int plen = 1;
             for (int x = mbprev[k]; x >= 0; x = mbprev[x]) plen++;
+            tp = Prof.Start();
             int r;
             switch (++mOpenCands)
             {
@@ -146,10 +152,15 @@ public sealed unsafe partial class FullSolver
                     r = ChildRegions(t); break;
                 default: r = ChildRegions(t); break;
             }
+            Prof.Stop(4, tp);
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
             if (mCandN == mCands.Length) Array.Resize(ref mCands, mCandN * 2);
+            tp = Prof.Start();
             var (mob, expl) = MacroStage >= 5 ? MMoveAccess(cur, i, t) : (0, false);
-            int room = MRoomConnectivity(), packed, oop, progress = -2;
+            Prof.Stop(3, tp);
+            tp = Prof.Start();
+            int room = t == cur[i] ? mParentRoom : MRoomConnectivity(), packed, oop, progress = -2;
+            Prof.Stop(1, tp);
             if (mPlan != null)
             {
                 var (cphase, cpacked) = mPlan.ChildStatus(cur[i], t);
@@ -157,7 +168,7 @@ public sealed unsafe partial class FullSolver
                 oop = MOutOfPlan(cur, cphase, i, t);
             }
             else { packed = MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
-            mCands[mCandN++] = new MCand { I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = mHotCounts != null ? HotAfter(cur, mHotCounts, i, t) : 0, Mobility = mob, Explorer = expl };
+            mCands[mCandN++] = new MCand { I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl };
         }
         SetOcc(t, false);
         return true;
@@ -354,4 +365,6 @@ public sealed unsafe partial class FullSolver
         for (int c = 0; c < cells; c++) if (occ[c]) SetOcc(c, false);
         return sb.ToString();
     }
+
+    int HotAfterP(ReadOnlySpan<int> cur, int i, int t) { long tp = Prof.Start(); int h = HotAfter(cur, mHotCounts!, i, t); Prof.Stop(2, tp); return h; }
 }
