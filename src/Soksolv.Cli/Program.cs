@@ -8,6 +8,7 @@ using Soksolv.Search.Reverse;
 // soksolv [-t seconds] [-mem MiB] [-nodes N] [-header] <file.xsb> [level index (1-based)]
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
+int macroStage = 5, macroFeat = 1;
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
 for (int i = 0; i < args.Length; i++)
@@ -19,7 +20,8 @@ for (int i = 0; i < args.Length; i++)
         case "-nodes": nodes = long.Parse(args[++i]); break;
         case "-header": header = true; break;
         case "-parity": ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; break; // Go-identical cluster proofs (BFS, no skipping)
-        case "-macro-stage": FullSolver.MacroStage = int.Parse(args[++i]); break;
+        case "-macro-features": macroFeat = int.Parse(args[++i]); break;
+        case "-macro-stage": macroStage = int.Parse(args[++i]); break;
         case "-cluster-astar": ClusterChecker.AStar = true; break;
         case "-cluster-check": ClusterChecker.CheckFast = true; break;
         case "-cluster-skipcap": ClusterChecker.SkipCapped = true; break;
@@ -45,6 +47,7 @@ var opt = new FullOptions
     BudgetBytes = (ulong)memMb * 1024 * 1024 / 100 * 70,
     SharedClusters = new ClusterTable(16),
     SharedPenalties = new ClusterTable(16),
+    MacroStage = macroStage, MacroFeatures = macroFeat,
 };
 SolveResult Run(string[] r, double tl)
 {

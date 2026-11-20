@@ -97,7 +97,10 @@ public sealed unsafe partial class FullSolver
             if (x.Plen != y.Plen) return x.Plen < y.Plen ? -1 : 1;
             return x.Idx < y.Idx ? -1 : 1;
         });
-        for (int j = 0; j < nm; j++)
+        int off = (int)Math.Min(maux[id].MvOff, (uint)nm);
+        int win = nm - off;
+        if (MoveWindow > 0 && win > MoveWindow) win = MoveWindow;
+        for (int j = off; j < off + win; j++)
         {
             int k = mKeys[j].Idx;
             ref var m = ref mCands[k];
@@ -106,7 +109,7 @@ public sealed unsafe partial class FullSolver
             mmvScore.Add(new MoveScore { Oop = (ushort)m.Oop, Packed = (ushort)m.Packed, Conn = (ushort)m.R, Hot = (ushort)Math.Min(m.Hot, 65535), Room = (uint)m.Room, Mobility = (uint)m.Mobility });
         }
         ref var a = ref maux[id];
-        a.MvLen = (uint)nm; a.MvNext = 0; a.MvTotal = (uint)nm; a.MvLeft = (uint)nm;
+        a.MvLen = (uint)win; a.MvNext = 0; a.MvTotal = (uint)nm; a.MvLeft = (uint)(nm - off);
     }
 
     void MChoose(ref int slot, int k)
@@ -253,6 +256,8 @@ public sealed unsafe partial class FullSolver
             int h = 0;
             foreach (int b in cur) { SetOcc(b, true); h += dist[b]; }
             expanded++; mExpandedN++;
+            if ((expanded & 255) == 0 && opt.BudgetBytes > 0 && (ulong)(nodes.Bytes + mmv.Bytes + mmvScore.Bytes + maux.Bytes) > opt.BudgetBytes)
+                return new SolveResult { Reason = "memory", Nodes = expanded };
             int pl = nodes.Player(id);
             Reach(pl, mark);
             uint st = stamp;
@@ -264,7 +269,16 @@ public sealed unsafe partial class FullSolver
             if (s1On) S1Step(expanded, id, (int)(e.Move - maux[id].MvStart), cid);
             RecordEdge(id, mLastAdded);
             PropagateDead(id);
+            mReopen = -1;
             MEnqueue(id);
+            while (mReopen == id && maux[id].Dead == 0 && !MExpired())
+            {
+                maux[id].MvOff += maux[id].MvLen;
+                Reach(pl, mark);
+                MOpen(id, cur, h, stamp);
+                mReopen = -1;
+                MEnqueue(id);
+            }
             foreach (int b in cur) SetOcc(b, false);
             if (cid < 0) continue;
             MNoteBest(cid);

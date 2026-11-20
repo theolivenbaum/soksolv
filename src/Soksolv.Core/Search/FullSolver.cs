@@ -29,6 +29,8 @@ public sealed class FullOptions
     public ClusterTable? SharedClusters, SharedPenalties;
     public volatile bool Stop;
     public CancelFlag? Cancel;
+    /// <summary>Macro lane: highest ported feature stage (1..5) and the stage-6 default-on feature mask (bit0 move windows, ...).</summary>
+    public int MacroStage = 5, MacroFeatures = 1;
 }
 
 /// <summary>

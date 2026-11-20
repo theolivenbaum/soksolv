@@ -9,16 +9,15 @@ namespace Soksolv.Tests;
 /// </summary>
 public class MacroTests
 {
-    static SolveResult Run(string level, long nodes, int stage = 1)
+    static SolveResult Run(string level, long nodes, int stage = 1, int features = 0)
     {
-        bool a = ClusterChecker.AStar, s = ClusterChecker.SkipCapped, f = FullSolver.MacroFingerprint; int st0 = FullSolver.MacroStage;
-        FullSolver.MacroStage = stage;
+        bool a = ClusterChecker.AStar, s = ClusterChecker.SkipCapped, f = FullSolver.MacroFingerprint;
         ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; FullSolver.MacroFingerprint = true;
         try
         {
-            return FullSolver.SolveMacro(TestData.Rows(level), new FullOptions { NodeBudget = nodes, SharedClusters = new ClusterTable(16) }, 120);
+            return FullSolver.SolveMacro(TestData.Rows(level), new FullOptions { NodeBudget = nodes, SharedClusters = new ClusterTable(16), MacroStage = stage, MacroFeatures = features }, 120);
         }
-        finally { ClusterChecker.AStar = a; ClusterChecker.SkipCapped = s; FullSolver.MacroFingerprint = f; FullSolver.MacroStage = st0; }
+        finally { ClusterChecker.AStar = a; ClusterChecker.SkipCapped = s; FullSolver.MacroFingerprint = f; }
     }
 
     [Theory]
@@ -140,4 +139,19 @@ public class MacroTests
         Assert.True(r.Solved, r.Reason);
         Assert.Null(Verifier.CheckSolution(TestData.Rows(level), r.Solution));
     }
+
+    // Stage 6a: + move windows / reopen (feature bit 0); Go reference SOKSOLV_STAGE=5 SOKSOLV_FEAT=1.
+    [Theory]
+    [InlineData("Holland_81_27", 1, "expanded=1 stored=2 generated=8 duplicates=0 hash=a944444f3a9250ce")]
+    [InlineData("Holland_81_27", 10, "expanded=10 stored=11 generated=93 duplicates=0 hash=bf6382948a89f0cc")]
+    [InlineData("Holland_81_27", 100, "expanded=100 stored=79 generated=1994 duplicates=22 hash=040cc00bd626b404")]
+    [InlineData("Holland_81_27", 1000, "expanded=1000 stored=440 generated=10897 duplicates=476 hash=300e374db99fb681")]
+    [InlineData("Holland_81_27", 20000, "expanded=20000 stored=8498 generated=192081 duplicates=10205 hash=bc8d3b43159ffbd0")]
+    [InlineData("Aymeric_Du_Peloux_282_22", 20000, "expanded=456 stored=136 generated=815 duplicates=287 hash=9817808ec55500e5")]
+    [InlineData("Microban_155_65", 20000, "expanded=14 stored=8 generated=147 duplicates=3 hash=3dad979af95d13b7")]
+    [InlineData("SokEvo_107_55", 20000, "expanded=10879 stored=1540 generated=24461 duplicates=7683 hash=43a63d1a4554efd3")]
+    [InlineData("Sven_1623_100", 20000, "expanded=223 stored=83 generated=936 duplicates=120 hash=3a60def86b029920")]
+    [InlineData("SokHard_163_36", 20000, "expanded=20000 stored=5349 generated=45598 duplicates=11840 hash=6deb6265aa6b16bf")]
+    public void Stage6a_MoveWindows_MatchGoReferenceFingerprint(string level, long nodes, string golden)
+        => Assert.Equal(golden, Run(level, nodes, 5, 1).Fingerprint);
 }

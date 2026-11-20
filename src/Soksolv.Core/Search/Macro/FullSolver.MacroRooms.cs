@@ -6,8 +6,9 @@ namespace Soksolv.Search;
 /// <summary>Stage 2 of the macro lane: room map (rooms.go), room connectivity, packing basin / out-of-plan (basin.go).</summary>
 public sealed unsafe partial class FullSolver
 {
-    /// <summary>Macro lane feature stage (1: packed+connectivity only; 2: + rooms, basin/out-of-plan; later stages add more).</summary>
-    public static int MacroStage = 2;
+    int MacroStage => opt.MacroStage;
+    bool Feat(int bit) => (opt.MacroFeatures & (1 << bit)) != 0;
+    int MoveWindow => Feat(0) ? 8 : 0;
 
     // ---- room map (Go roomMap) -------------------------------------------------------------------------------------------------
     int[] rmCell = [];                 // -1 none, -2 shared by rooms (corridor), r >= 0 room id

@@ -8,13 +8,14 @@ public sealed class PortfolioOptions
 {
     public long NodeBudget;
     public ulong MemBytes = 15360UL << 20;   // total budget (Go -mem); 70% goes to lane data structures, split by share
-    public bool Full = true, Reverse = true;
+    public bool Full = true, Reverse = true, Macro = true;
+    public int MacroStage = 5, MacroFeatures = 1;
     public int RevSupply = 4;
     public Action<string>? Log;
 }
 
 /// <summary>
-/// Runs the ported lanes on their own threads (full + reverse) over one level; the first verified solution wins and
+/// Runs the ported lanes on their own threads (full + reverse + macro) over one level; the first verified solution wins and
 /// cancels the others. Lanes share the cluster proof tables. Starts-solved (circular) levels are routed through
 /// <see cref="Circular"/>. Memory: 70% of -mem split equally between the running lanes (Go splits by weight, both 3).
 /// </summary>
@@ -34,7 +35,7 @@ public static class Portfolio
     {
         var sw = Stopwatch.StartNew();
         var cancel = new CancelFlag();
-        int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0);
+        int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0) + (po.Macro ? 1 : 0);
         if (lanes == 0) return new SolveResult { Reason = "no lanes" };
         ulong budget = po.MemBytes / 100 * 70 / (ulong)lanes;
         var shared = new ClusterTable(16); var sharedPen = new ClusterTable(16);
@@ -70,6 +71,12 @@ public static class Portfolio
             ro.NodeBudget = po.NodeBudget; ro.BudgetBytes = budget; ro.MemLimitBytes = po.MemBytes; ro.Cancel = cancel;
             Lane("reverse", () => ReverseRunner.Solve(rows, ro, timeLimitSec));
         }
+        if (po.Macro)
+            Lane("macro", () => FullSolver.SolveMacro(rows, new FullOptions
+            {
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared,
+                MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures,
+            }, timeLimitSec));
         foreach (var t in threads) t.Join();
 
         var res = winner ?? new SolveResult { Reason = string.Join("; ", all.Select(a => $"{a.Strategy}:{a.Reason}")) };

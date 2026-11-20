@@ -22,7 +22,7 @@ public sealed unsafe partial class FullSolver
     readonly List<FeatureCell> mcells = new();
     readonly List<FessHeap> mqueues = new();
     readonly Dictionary<FeatureCell, int> mcellIDs = new();
-    int mNext, mTurn, mBest = -1, mLastAdded = -1;
+    int mNext, mTurn, mBest = -1, mLastAdded = -1, mReopen = -1;
     bool mCancelled;
     long mExpandedN, mNodeLimit;
     uint[] m3 = [], mpost = [], mseen = [], mtseen = []; int[] mbprev = [], mbq = [];
@@ -244,7 +244,7 @@ public sealed unsafe partial class FullSolver
         long start = a.MvStart, end = a.MvStart + a.MvLen;
         long k = start + a.MvNext;
         while (k < end && (mmv[(int)k] & MMoveUsed) != 0) k++;
-        if (k == end) return; // window ran out: not reachable with an unbounded window (MoveWindow 0)
+        if (k == end) { if (a.MvLeft > 0) mReopen = id; return; } // window ran out: the caller re-opens the node
         a.MvNext = (uint)(k - start);
         int wd = (int)(mmv[(int)k] >> 30 & 1);
         mqueues[(int)a.Bucket].Push(new FessEntry { Node = id, Move = (int)k, Weight = nodes.W(id) + wd, Version = a.Version, Score = mmvScore[(int)k] });
