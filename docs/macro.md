@@ -245,3 +245,20 @@ Next speed work (not done): Go's incremental `roomConnChild` and tree-based hots
 Parity (`STAGE=5`, 20,000-node caps; FEAT=3 for 6b, FEAT=7 for 6c): Holland_81_27 at 1/10/100/1000/20000 identical; testdata 18/18; LTS sample 42/42 for both.
 C# is at parity or faster than Go on testdata (e.g. 13.2 s vs 15.3 s total on FEAT=7); on wide levels with ~775 candidate moves per open (Sven_1623#21)
 it is still ~2.2x slower: Go uses word-parallel variants of the box-search flood, move access, child region counts and pair search that are not yet ported.
+
+
+## Stages 6d (corridor flow) and 6e (packing obligations): DONE (exact parity); StallFinish / StallScale (timed mode)
+
+* **6d** (`FEAT` bit3): `Macro/FullSolver.MacroCorridor.cs` (1-wide cut corridors, transit-capacity rule). Parity on testdata 18/18 + LTS 42/42 (FEAT=15) - but note the
+  rule fires **0 times** on all of those levels and on ~100 further LTS levels at 12k nodes (earlier deadlock rules win), so its parity is only "never wrongly fires".
+* **6e** (bit4): `Macro/FullSolver.MacroObligations.cs` = `packing_route.go` (witness route compiler), `packing_causal.go` (event DAG, `infer`) and
+  `packing_obligations.go` (ready/blocked cells + the fallback packing advisor); the plan now keeps each phase's player and reverse move. Parity testdata 18/18 +
+  synthetic corridor level (FEAT=31); the advisor fires thousands of times per level (e.g. `prep=3940 picks=1101`).
+* **StallFinish / StallScale** (Go `fess_search.go`, timed runs only - disabled under `-nodes`): when the best node has not improved for max(1 s*scale, 15% of the search time),
+  up to 3 times, a private reverse search from the solved position toward the best node runs for min(1 s*scale, remaining/10) and its reversed pulls are appended to the
+  prefix (`ReverseToward`). `StallScale = t/600` for t < 600 s (main.go `-stall-scale`; also `CellsAfterSec = 2 s*scale` in that reverse search), set from the CLI limit / the
+  portfolio's per-call limit. Time-based constants audited in the macro path: plan budget `min(250 ms, remaining/10)`, setup deadline `min(100 ms, remaining/10)`, the 50 ms
+  memory check (not scaled in Go) - plan4's `Plan4Frac` and anytime budget will be mirrored with 6f.
+* Timed-mode sanity (`bench/macro-timed.py`, macro lane stage 5 + FEAT 31 on both sides, 28 hard levels at `-t 10`, 4-core shared VM): **Go 7 solved, C# 8 solved**; on the 7 levels both
+  solve C# needs 20.0 s vs Go 21.1 s; deterministic cases have identical node counts (75506, 55512, 55507, 266151); on very wide unsolved levels C# reaches 10-50% fewer nodes in
+  the 10 s (same gap as in the -nodes timing: word-parallel box-search/move-access/region variants not yet ported), on narrower ones (SokHard_163) it reaches more.
