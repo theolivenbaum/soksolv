@@ -7,9 +7,9 @@ namespace Soksolv.Search;
 public static class Prof
 {
     public static readonly bool On = Environment.GetEnvironmentVariable("SOKSOLV_PROF") == "1";
-    public static readonly long[] Ticks = new long[16];
-    public static readonly long[] Calls = new long[16];
-    public static readonly string[] Names = ["cluster", "regions", "frozen2x2+freeze", "goalarea", "pair", "piCorral", "normalize/reach", "add", "open(total)", "apply(total)", "feasible", "macro", "unpack/setcosts", "cl.searches", "cl.states", "cl.floods"];
+    public static readonly long[] Ticks = new long[32];
+    public static readonly long[] Calls = new long[32];
+    public static readonly string[] Names = ["cluster", "regions", "frozen2x2+freeze", "goalarea", "pair", "piCorral", "normalize/reach", "add", "open(total)", "apply(total)", "feasible", "macro", "unpack/setcosts", "cl.searches", "cl.states", "cl.floods", "rev.supplyU", "rev.feasible+inherits", "rev.pullLoop", "rev.popNext", "rev.addKeyed", "rev.macros", "rev.walks", "rev.unpack+reach", "", "", "", "", "", "", "", ""];
     [MethodImpl(MethodImplOptions.AggressiveInlining)] public static long Start() => On ? Stopwatch.GetTimestamp() : 0;
     [MethodImpl(MethodImplOptions.AggressiveInlining)] public static void Stop(int slot, long t0) { if (On) { Ticks[slot] += Stopwatch.GetTimestamp() - t0; Calls[slot]++; } }
     public static void Report(double totalMs)

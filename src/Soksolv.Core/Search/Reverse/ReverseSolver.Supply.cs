@@ -45,7 +45,6 @@ public sealed class Supply
     public readonly SupGraph[] Slots;
     public readonly SupGraph Scratch;
     public SupEntry[]? Cache;
-    public List<int> Stk = new(), Order = new();
     public readonly sbyte[] It;
     public readonly int[] TIdx, TLow; public readonly uint[] TStamp; public uint Tst;
     public List<int> TStk = new(), TFr = new();
@@ -68,6 +67,7 @@ public sealed class Supply
         while (nslots < 1024 && 2L * nslots * Cells * SupSlotBytes <= 8 << 20) nslots *= 2;
         Obst = new bool[Cells]; Slots = new SupGraph[nslots];
         for (int i = 0; i < nslots; i++) Slots[i] = new SupGraph();
+        StkArr = new int[Cells + 1]; OrderArr = new int[Cells + 1];
         It = new sbyte[Cells]; TIdx = new int[4 * Cells]; TLow = new int[4 * Cells]; TStamp = new uint[4 * Cells];
         Seen = new uint[Cells * 4]; Prev = new int[Cells * 4];
         MatchOf = new int[s.BoxCount]; Gs = new uint[s.BoxCount];
@@ -89,40 +89,48 @@ public sealed class Supply
         g.Epoch = Epoch;
     }
 
-    /// <summary>Extends g's forest with the component of root (obstacles in Obst); returns its smallest cell; Order lists the component.</summary>
-    public int Dfs(ReverseSolver s, SupGraph g, int root)
+    public readonly int[] StkArr, OrderArr; public int OrderN;
+
+    /// <summary>Extends g's forest with the component of root (obstacles in Obst); returns its smallest cell; OrderArr[0..OrderN) lists the component.</summary>
+    public unsafe int Dfs(ReverseSolver s, SupGraph g, int root)
     {
         int m = root;
-        Order.Clear(); Order.Add(root);
-        g.N++;
-        g.Disc[root] = g.N; g.Low[root] = g.N; g.Par[root] = -1; g.Top[root] = root;
-        It[root] = 0;
-        Stk.Clear(); Stk.Add(root);
-        var dirs = s.Dirs;
-        while (Stk.Count > 0)
+        fixed (int* disc = g.Disc, low = g.Low, par = g.Par, top = g.Top, end = g.End, stk = StkArr, ord = OrderArr, dr = s.Dirs)
+        fixed (sbyte* it = It)
+        fixed (bool* obst = Obst)
         {
-            int v = Stk[^1];
-            int k = It[v];
-            if (k < 4)
+            int on = 0, sn = 0, gn = g.N;
+            ord[on++] = root;
+            gn++;
+            disc[root] = gn; low[root] = gn; par[root] = -1; top[root] = root;
+            it[root] = 0;
+            stk[sn++] = root;
+            while (sn > 0)
             {
-                It[v]++;
-                int w = v + dirs[k];
-                if (Obst[w]) continue;
-                if (g.Disc[w] == 0)
+                int v = stk[sn - 1];
+                int k = it[v];
+                if (k < 4)
                 {
-                    g.N++;
-                    g.Disc[w] = g.N; g.Low[w] = g.N; g.Par[w] = v; g.Top[w] = root;
-                    It[w] = 0;
-                    Stk.Add(w); Order.Add(w);
-                    if (w < m) m = w;
+                    it[v]++;
+                    int w = v + dr[k];
+                    if (obst[w]) continue;
+                    if (disc[w] == 0)
+                    {
+                        gn++;
+                        disc[w] = gn; low[w] = gn; par[w] = v; top[w] = root;
+                        it[w] = 0;
+                        stk[sn++] = w; ord[on++] = w;
+                        if (w < m) m = w;
+                    }
+                    else if (w != par[v]) { if (disc[w] < low[v]) low[v] = disc[w]; }
+                    continue;
                 }
-                else if (w != g.Par[v]) g.Low[v] = Math.Min(g.Low[v], g.Disc[w]);
-                continue;
+                sn--;
+                end[v] = gn + 1;
+                int p = par[v];
+                if (p >= 0 && low[v] < low[p]) low[p] = low[v];
             }
-            Stk.RemoveAt(Stk.Count - 1);
-            g.End[v] = g.N + 1;
-            int p = g.Par[v];
-            if (p >= 0) g.Low[p] = Math.Min(g.Low[p], g.Low[v]);
+            g.N = gn; OrderN = on;
         }
         return m;
     }
@@ -133,7 +141,7 @@ public sealed class Supply
         int n0 = g.N;
         int m = Dfs(s, g, p);
         if (m == p) return;
-        foreach (int c in Order) g.Disc[c] = 0;
+        for (int i = 0; i < OrderN; i++) g.Disc[OrderArr[i]] = 0;
         g.N = n0;
         Dfs(s, g, m);
     }

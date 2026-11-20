@@ -373,6 +373,8 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         var sw = Stopwatch.StartNew();
         var res = Search(timeLimitSec);
         res.TimeMs = sw.Elapsed.TotalMilliseconds;
+        Prof.Report(res.TimeMs);
+        if (Prof.On && sup != null) Console.Error.WriteLine($"supply: evals {sup.Evals} deferred {sup.Deferred} cache-misses {sup.Misses} graphs {sup.Graphs} macros {sup.Macros} ok {sup.MacroOK}; stored {store.Count}");
         res.PeakBytes = (long)TrackedBytes();
         Stats.Stored = store.Count;
         res.Stats = Stats;
@@ -414,9 +416,14 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             if (opt.Walks && bestId >= 0 && expandedTotal - lastImpExp > opt.WalkAfter && expandedTotal >= walkNext)
             {
                 walkNext = expandedTotal + opt.WalkAfter;
+                long tw = Prof.Start();
                 RandomWalks(bestId);
+                Prof.Stop(22, tw);
             }
-            if (!PopNext(out int id, out int h)) break;
+            long tp = Prof.Start();
+            bool got = PopNext(out int id, out int h);
+            Prof.Stop(19, tp);
+            if (!got) break;
             bool supEval = false;
             int prov = 0, curU = 0;
             if (sup != null)
@@ -427,6 +434,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
                 else if (u > 1) { Unexpand(id); continue; }
                 else if (u == 0) supEval = true;
             }
+            long tu = Prof.Start();
             store.Unpack(id, cur);
             foreach (int b in cur) SetOcc(b, true);
             if (h == BucketQueue.MaxBuckets - 1)
@@ -436,12 +444,16 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             }
             Reach(store.PlayerOf(id), markP);
             uint st = stamp;
+            Prof.Stop(23, tu);
             if (h == 0 && mark[lv.Player] == st)
             {
                 foreach (int b in cur) SetOcc(b, false);
                 return new SolveResult { Solved = true, Solution = Reconstruct(id), Nodes = expanded };
             }
-            if (h > 0 && !Inherits(id) && !Feasible(cur))
+            long tf = Prof.Start();
+            bool infeasible = h > 0 && !Inherits(id) && !Feasible(cur);
+            Prof.Stop(17, tf);
+            if (infeasible)
             {
                 pruned++;
                 foreach (int b in cur) SetOcc(b, false);
@@ -450,7 +462,9 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             bool supZero = false;
             if (supEval && h > 0 && h < BucketQueue.MaxBuckets - 1)
             {
+                long ts = Prof.Start();
                 var (u, k) = SupplyU(cur, store.PlayerOf(id));
+                Prof.Stop(16, ts);
                 u = Math.Min(u, 126);
                 SetSupU(id, u);
                 curU = u;
@@ -488,6 +502,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
                 }
             }
             // Pull: player on b+d (reachable) steps to b+2d (free), box b -> b+d. A child's key is the parent's with one bit moved.
+            long tl = Prof.Start();
             BuildKey(cur, pkey);
             ulong parentHash = store.HashOfBoxes(cur, store.PlayerOf(id));
             int pplayer = store.PlayerOf(id);
@@ -523,7 +538,10 @@ public sealed unsafe partial class ReverseSolver : IDisposable
                     SetOcc(b, true); SetOcc(p, false);
                 }
             }
+            Prof.Stop(18, tl);
+            long tm = Prof.Start();
             if (supZero && !opt.NoMacros) PlacementMacros(id, cur, child);
+            Prof.Stop(21, tm);
             foreach (int b in cur) SetOcc(b, false);
         }
         return new SolveResult { Reason = "exhausted", Nodes = expanded };
