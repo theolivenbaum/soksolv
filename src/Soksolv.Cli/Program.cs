@@ -54,6 +54,7 @@ SolveResult Run(string[] r, double tl)
         return ReverseRunner.Solve(r, ro, tl);
     }
     if (strategy == "full") return FullSolver.Solve(r, opt, tl);
+    if (strategy == "macro") return FullSolver.SolveMacro(r, opt, tl);
     return Portfolio.Solve(r, new PortfolioOptions { NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
 }
 SolveResult res;

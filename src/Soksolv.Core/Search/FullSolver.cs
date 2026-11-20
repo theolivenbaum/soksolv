@@ -14,7 +14,7 @@ public sealed class SolveStats
 public sealed class SolveResult
 {
     public bool Solved; public string Reason = ""; public string Solution = ""; public long Nodes; public SolveStats Stats = new();
-    public double TimeMs; public long PeakBytes; public string Strategy = "";
+    public double TimeMs; public long PeakBytes; public string Strategy = ""; public string Fingerprint = "";
 }
 
 /// <summary>Shared cancellation: set by the portfolio when one lane solved or the deadline passed.</summary>

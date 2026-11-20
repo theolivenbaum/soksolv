@@ -1,0 +1,113 @@
+diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/fess_search.go go-macro/fess_search.go
+--- /home/user/soksolv/.reference/fess_search.go	2026-11-20 20:15:07.406476588 +0000
++++ go-macro/fess_search.go	2026-11-20 21:49:48.892398388 +0000
+@@ -672,6 +672,9 @@
+ 			s.pfNext, s.pfHave = pfFromMove(ms), true
+ 		}
+ 		cid, ch := s.apply(id, s.mv[e.move]&^moveUsed, cur, child, h, st)
++		if stage1On {
++			s1step(s, expanded, id, e.move-s.mvStart[id], cid)
++		}
+ 		if FXDupSkip && cid < 0 && s.lastAdded >= 0 {
+ 			// exp-477: Festival never selects a move into an existing tree
+ 			// node (set_best_move skips it): no node count, no schedule turn.
+@@ -767,6 +770,9 @@
+ 
+ // finishTrace reports how the search ended and what its frontier looked like.
+ func (s *solver) finishTrace(res Result, expanded int) {
++	if stage1On {
++		s1report(s, expanded)
++	}
+ 	if s.tr == nil {
+ 		return
+ 	}
+diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/hotspots.go go-macro/hotspots.go
+--- /home/user/soksolv/.reference/hotspots.go	2026-11-20 20:15:07.408601596 +0000
++++ go-macro/hotspots.go	2026-11-20 21:49:15.678392064 +0000
+@@ -248,6 +248,9 @@
+ // It also readies the per-node scratch that after() uses: after() must be
+ // called for the same boxes, until the next counts().
+ func (h *hotspotTable) counts(s *solver, boxes []int32) []int {
++	if stage1On {
++		return make([]int, len(boxes))
++	}
+ 	counts := make([]int, len(boxes))
+ 	h.nodeRows = h.nodeRows[:0]
+ 	h.nodeIdx = h.nodeIdx[:0]
+@@ -303,6 +306,9 @@
+ // fixed, so a candidate only needs the boxes whose count would drop to zero
+ // (lmask) that the target hits, and whether the target's row hits any box.
+ func (h *hotspotTable) after(s *solver, boxes []int32, counts []int, moved int, target int32) int {
++	if stage1On {
++		return 0
++	}
+ 	old, now := h.nodeIdx[moved], s.fidx[target]
+ 	if h.mgen != moved {
+ 		h.mgen = moved
+diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/macroalt.go go-macro/macroalt.go
+--- /home/user/soksolv/.reference/macroalt.go	2026-11-20 20:15:07.422034313 +0000
++++ go-macro/macroalt.go	2026-11-20 21:50:12.360821662 +0000
+@@ -44,7 +44,7 @@
+ // macroAltStart starts the alt engine (waiting for the token); the caller's
+ // goroutine is engine 0 and holds the token.
+ func macroAltStart(lv *Level, rows []string, deadline time.Time, memLimit uint64) *macroAlt {
+-	if !MacroAltPlan {
++	if !MacroAltPlan || stage1On {
+ 		return nil
+ 	}
+ 	b := newBaton([3]bool{true, true, false})
+diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/moveaccess.go go-macro/moveaccess.go
+--- /home/user/soksolv/.reference/moveaccess.go	2026-11-20 20:15:07.422034313 +0000
++++ go-macro/moveaccess.go	2026-11-20 21:49:15.678466898 +0000
+@@ -20,6 +20,9 @@
+ // consumers do not depend on (set membership only). Wider boards use
+ // moveAccessScan, which is also the test reference (checkAccess).
+ func (s *solver) moveAccess(cur []int32, moved int, origB, target int32, st uint32, cmdMask, unpinMask uint64, unpackedRegime bool) (mobility int, explorer bool, accStart, accLen int32) {
++	if stage1On {
++		return 0, false, int32(len(s.accBuf)), 0
++	}
+ 	bb := s.bb
+ 	if bb == nil || !bb.node {
+ 		return s.moveAccessScan(cur, moved, origB, target, st, cmdMask, unpinMask, unpackedRegime)
+diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/rooms.go go-macro/rooms.go
+--- /home/user/soksolv/.reference/rooms.go	2026-11-20 20:15:07.428800052 +0000
++++ go-macro/rooms.go	2026-11-20 21:49:28.026061999 +0000
+@@ -585,6 +585,9 @@
+ }
+ 
+ func (m *roomMap) bytes() int {
++	if m == nil {
++		return 0
++	}
+ 	n := cap(m.cell)*8 + cap(m.seen)*4 + cap(m.queue)*4 + cap(m.covered)*4 + cap(m.touched)*4 + cap(m.rooms)*24 + cap(m.edges)*24
+ 	for _, r := range m.rooms {
+ 		n += cap(r) * 4
+diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/solver.go go-macro/solver.go
+--- /home/user/soksolv/.reference/solver.go	2026-11-20 20:15:07.428800052 +0000
++++ go-macro/solver.go	2026-11-20 21:49:15.678193633 +0000
+@@ -396,6 +396,9 @@
+ // newSolverDir makes a solver for lv; with pull, lv is the pull view of a
+ // level (see newPullSolver).
+ func newSolverDir(lv *Level, deadline time.Time, pull bool) *solver {
++	if stage1On {
++		stage1Overrides()
++	}
+ 	size := lv.W * lv.H
+ 	s := &solver{
+ 		pull:       pull,
+@@ -461,10 +464,14 @@
+ 	s.bpost = make([]uint32, 4*size)
+ 	s.bprev = make([]int32, 4*size)
+ 	s.computeRooms()
++	if stage1On {
++		s.rooms = nil
++		s.noPlan = true
++	}
+ 	if !deadline.IsZero() {
+ 		s.setupDeadline = time.Now().Add(min(100*time.Millisecond, time.Until(deadline)/10))
+ 	}
+-	if !pull { // goal rooms and out-of-plan are push-mode features
++	if !pull && !stage1On { // goal rooms and out-of-plan are push-mode features
+ 		s.basin = s.computeBasin()
+ 	}
+ 	s.hot = newHotspotTable(s)

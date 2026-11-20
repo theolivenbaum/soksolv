@@ -95,3 +95,54 @@ pass per box from its second candidate on, O(1) per candidate): bit-exact with t
 unchanged (Holland_81_57 152817, SokHard_163_36 362653), fast mode ≈ 7% faster
 (Holland_81_57 3.73 → 3.41 s, SokHard_163_36 5.77 → 5.37 s, JIT build). The same code is what `open()` of the
 macro lane uses (`regionsChild`/`childRegions`), so it is reusable when the lane is ported.
+
+## Stage 1 — DONE (exact parity with the patched Go reference)
+
+**What it is.** The macro lane's core with the *feature set* reduced exactly as the revised plan prescribes: FESS over
+box macro states (one box pushed to any reachable square per move), frontier cells keyed by the **packed** (boxes on
+goals) and **connectivity** (empty-floor regions) features, the packing and connectivity advisors, lexicographic move
+ranking, windowless move storage, dead-end propagation over retained edges, PI-corral restriction, the full push-deadlock
+pipeline (2×2, freeze, goal-area, pair, side-dead; cluster proofs applied lazily per applied move), and solution
+reconstruction. **Off** (zero/absent in both Go reference and C#): rooms (`room` term/advisor, `computeRooms`), hotspots
+(opener/hot terms), move access (mobility/explorer, access novelty), out-of-plan/basin, sink packing plan, plan4,
+displacement landmarks, corridor flow, rev-groups, novelty, move windows, frontier corral, obligations, corral deadzone,
+pair-side, macro-alt engine.
+
+**Reference.** `bench/macro-stage1/` holds the patch (`reference-patch.diff` + `stage1.go`, ~110 lines) applied to a copy of
+`.reference` by `build.sh` (never edits `.reference`): `SOKSOLV_STAGE1=1` overrides those flags in `newSolverDir`, nils
+rooms/basin/plan, zeroes hotspot and move-access results, disables the alt engine, and prints an `S1HASH` fingerprint:
+`expanded stored generated duplicates` + an FNV hash over every applied `(node, local move index, child id)`;
+`SOKSOLV_S1TRACE=1` prints each move. Coverage of this reference (20k nodes × 18 levels): ≈1,500 lines of Go solver logic
+actually run (solver.go 768, fess_search 294, fess_moves 251, advisors 91; plus already-ported cluster/goalarea/sidedead/artic).
+
+**C#.** `src/Soksolv.Core/Search/Macro/` — `MacroTypes.cs` (cells, move score, frontier heap, per-node aux),
+`FullSolver.Macro.cs` (state, add/dup/reparent, dead-end propagation, frontier select, box search),
+`FullSolver.MacroOpen.cs` (open/visit/pushDead/advisors/apply/loop/reconstruct): ≈800 lines. It is a *partial of
+`FullSolver`* (namespace `Soksolv.Search`, not `.Macro`) so it reuses the existing flood/normalise, freeze, goal-area,
+pair-dead, PI-corral, articulation, feasibility, cluster and side-dead kernels directly and the same unmanaged
+`StateTable`/`ChunkList` storage (per-node FESS data in a `ChunkList<MacroAux>`, move arena in `ChunkList<ulong>`).
+CLI: `-strategy macro` (use `-parity` for BFS cluster proofs like Go; `SOKSOLV_S1=1` prints the fingerprint).
+
+**Parity** (`bench/macro-parity.py`, `-parity`, fingerprints identical = same sequence of applied moves and child ids):
+
+| set | cap | result |
+|---|---|---|
+| Holland_81_27 | 1 / 10 / 100 / 1000 / 20k nodes | identical |
+| testdata/ (18 levels) | 20,000 nodes | 18/18 identical |
+| LTS sample (42 levels, every 7th of `lts_sample.tsv`, minus Sasquatch_VI_50) | 20,000 nodes | 42/42 identical |
+| testdata every 3rd (6 levels, incl. 29k-state 100k runs) | 100,000 nodes | 6/6 identical |
+Solved levels (e.g. Microban_155_65 after 142 nodes, SokEvo_107_55 after 12,504) produce verified solutions.
+Unit tests: `tests/Soksolv.Tests/MacroTests.cs` (10 golden fingerprints from the reference + 3 solve/verify).
+
+**Speed** (Native AOT, `artifacts/aot-macro`, same machine, calib alu ≈435 Mop/s, mem-latency ≈7 Mop/s; 100k-node caps,
+whole-process wall time): Go reference 8.1 s vs C# 7.4 s on 6 levels (0.91×); per level 0.76–1.02×. Not yet tuned
+(per-expansion `HashOf`, `Regions()` flood for the first candidate per box, per-apply path BFS recompute are the
+obvious hot spots, same as Go).
+
+**Not covered by Stage 1** (and therefore not claimed): any behaviour involving the later stages' features — the lane
+as the portfolio runs it differs (weaker without rooms/plan: e.g. Holland_81_27 is *not* solved in 100k nodes).
+
+### Next stages (unchanged order from the revision above)
+2. rooms + cutscan + basin (adds `room` term, room advisor, OOP) — reference: Go copy with only hotspots/access/plan zeroed.
+3. sink packing plan. 4. hotspots. 5. move access. 6. flag features (windows, lazy children, novelty, rev-groups, corral
+frontier/deadzone, displacement, corridor flow, obligations, plan4).

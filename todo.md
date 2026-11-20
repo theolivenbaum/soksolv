@@ -42,3 +42,11 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 
 ## Phase 4 — Full benchmarks
 - [ ] LTS (3,272) and OTS (10,043) vs Go at 600 s / 8 cores (`.reference/benchmark/run.sh` equivalent)
+
+### Macro lane staged port (docs/macro.md)
+- [x] Stage 1: core push/macro-move machinery + frontier (packed, connectivity), advisors 1-2, deadlock pipeline, reconstruct — exact fingerprint parity with patched Go reference (66 levels; 100k-node caps), 0.91x Go time (AOT)
+- [ ] Stage 2: rooms + cutscan + basin (room term/advisor, OOP)
+- [ ] Stage 3: sink packing plan (packing_plan/route/causal)
+- [ ] Stage 4: hotspots (opener advisor, hot term); Stage 5: move access (mobility/explorer)
+- [ ] Stage 6: flag features: move window/lazy children/reopen, novelty (+access), rev-groups, frontier corral, corral deadzone, displacement landmarks, corridor flow, obligations, plan4 + anytime ring, macro-alt engine
+- [ ] Stage-1 speed tuning (HashOf per expansion, first-candidate Regions flood, apply path BFS cache)
