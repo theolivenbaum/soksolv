@@ -84,7 +84,7 @@ diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/rooms.g
  		n += cap(r) * 4
 diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/solver.go go-macro/solver.go
 --- /home/user/soksolv/.reference/solver.go	2026-11-20 20:15:07.428800052 +0000
-+++ go-macro/solver.go	2026-11-20 21:49:15.678193633 +0000
++++ go-macro/solver.go	2026-11-20 22:05:30.979331955 +0000
 @@ -396,6 +396,9 @@
  // newSolverDir makes a solver for lv; with pull, lv is the pull view of a
  // level (see newPullSolver).
@@ -95,19 +95,21 @@ diff -ru -x stage1.go -x levels -x '*.dbg' /home/user/soksolv/.reference/solver.
  	size := lv.W * lv.H
  	s := &solver{
  		pull:       pull,
-@@ -461,10 +464,14 @@
+@@ -461,10 +464,16 @@
  	s.bpost = make([]uint32, 4*size)
  	s.bprev = make([]int32, 4*size)
  	s.computeRooms()
 +	if stage1On {
-+		s.rooms = nil
-+		s.noPlan = true
++		if stageN < 2 {
++			s.rooms = nil
++		}
++		s.noPlan = stageN < 3
 +	}
  	if !deadline.IsZero() {
  		s.setupDeadline = time.Now().Add(min(100*time.Millisecond, time.Until(deadline)/10))
  	}
 -	if !pull { // goal rooms and out-of-plan are push-mode features
-+	if !pull && !stage1On { // goal rooms and out-of-plan are push-mode features
++	if !pull && (!stage1On || stageN >= 2) { // goal rooms and out-of-plan are push-mode features
  		s.basin = s.computeBasin()
  	}
  	s.hot = newHotspotTable(s)

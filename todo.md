@@ -45,7 +45,7 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 
 ### Macro lane staged port (docs/macro.md)
 - [x] Stage 1: core push/macro-move machinery + frontier (packed, connectivity), advisors 1-2, deadlock pipeline, reconstruct — exact fingerprint parity with patched Go reference (66 levels; 100k-node caps), 0.91x Go time (AOT)
-- [ ] Stage 2: rooms + cutscan + basin (room term/advisor, OOP)
+- [x] Stage 2: rooms + basin (room term/advisor, OOP term/advisor) — exact parity: 18 testdata + 42 LTS @20k, Holland_27 @1/10/100/1000 (cutscan belongs to Stage 3)
 - [ ] Stage 3: sink packing plan (packing_plan/route/causal)
 - [ ] Stage 4: hotspots (opener advisor, hot term); Stage 5: move access (mobility/explorer)
 - [ ] Stage 6: flag features: move window/lazy children/reopen, novelty (+access), rev-groups, frontier corral, corral deadzone, displacement landmarks, corridor flow, obligations, plan4 + anytime ring, macro-alt engine

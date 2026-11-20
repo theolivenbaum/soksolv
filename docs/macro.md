@@ -146,3 +146,22 @@ as the portfolio runs it differs (weaker without rooms/plan: e.g. Holland_81_27 
 2. rooms + cutscan + basin (adds `room` term, room advisor, OOP) — reference: Go copy with only hotspots/access/plan zeroed.
 3. sink packing plan. 4. hotspots. 5. move access. 6. flag features (windows, lazy children, novelty, rev-groups, corral
 frontier/deadzone, displacement, corridor flow, obligations, plan4).
+
+
+## Stage 2 — DONE (rooms + basin/out-of-plan; exact parity)
+
+Adds the room map (`computeRooms`: 2x2-block unions, shared-cell corridors, direct room edges), room connectivity
+(corridor labelling + per-room fragment union-find; computed from scratch for every candidate — exact, the Go incremental
+`roomConnChild` is only a speed-up checked equal by `checkRooms`), the packing basin (`targetBasin`/`computeBasin`) with the
+out-of-plan term (no plan: boxes outside the basin and off goals; child counts adjusted by the moved box), the **room advisor**
+and the **out-of-plan advisor** (needs walking distance; per-source BFS cache), and the full `oop,-packed,conn,room` score
+ordering. Go reference: `SOKSOLV_STAGE=2` (rooms/basin on; plan, hotspots, access still off). `cutscan.go` is *not* part of
+this stage (only the packing planner uses it). C#: `Macro/FullSolver.MacroRooms.cs` (~330 lines); `-macro-stage N`.
+
+| set | cap | result |
+|---|---|---|
+| Holland_81_27 | 1 / 10 / 100 / 1000 / 20k | identical |
+| testdata (18) | 20,000 | 18/18 identical |
+| LTS sample (42) | 20,000 | 42/42 identical (go 47.7 s, cs JIT 81 s wall) |
+Tests: `MacroTests.Stage2_*` (10 goldens + 2 solve/verify). Not yet tuned: the full room-connectivity recompute per candidate is the
+obvious cost (Go's incremental `roomConnChild` is the speed-up to port when tuning).

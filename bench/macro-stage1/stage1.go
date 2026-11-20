@@ -8,7 +8,18 @@ import (
 
 // Stage 1 reference lane (C# port validation): the macro lane with rooms, hotspots, move access, the
 // sink plan and every default-on experiment feature switched off. Enabled by SOKSOLV_STAGE1=1.
-var stage1On = os.Getenv("SOKSOLV_STAGE1") == "1"
+var stageN = func() int {
+	if v := os.Getenv("SOKSOLV_STAGE"); v != "" {
+		n := 0
+		fmt.Sscanf(v, "%d", &n)
+		return n
+	}
+	if os.Getenv("SOKSOLV_STAGE1") == "1" {
+		return 1
+	}
+	return 0
+}()
+var stage1On = stageN >= 1
 
 func stage1Overrides() {
 	RevGroups = false
