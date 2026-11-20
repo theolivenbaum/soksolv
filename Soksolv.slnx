@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Soksolv.Core/Soksolv.Core.csproj" />
+    <Project Path="src/Soksolv.Cli/Soksolv.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Soksolv.Tests/Soksolv.Tests.csproj" />
+  </Folder>
+  <Folder Name="/bench/">
+    <Project Path="bench/Soksolv.Bench/Soksolv.Bench.csproj" />
+  </Folder>
+</Solution>
