@@ -127,6 +127,8 @@ public sealed unsafe class ClusterChecker
             rowOf = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref ra[0]); colOf = rowOf + n;
             for (int c = 0; c < n; c++) { rowOf[c] = (byte)(c / W); colOf[c] = (byte)(c % W); if (!board.Wall[c]) freeR[c / W] |= 1UL << (c % W); }
             regLo = 1; regHi = 0;
+            scrArr = GC.AllocateArray<ulong>(rows * 3 + 8, pinned: true);
+            scrR = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref scrArr[0]); pkB = scrR + rows + 2; chkR = pkB + rows + 2;
         }
         deadP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref deadArr[0]); goalP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref goalArr[0]);
     }
@@ -158,17 +160,20 @@ public sealed unsafe class ClusterChecker
     }
 
     /// <summary>Floods the player's region from p over freeR (the start cell counts as free); regR holds it. Returns the region's minimum cell.</summary>
-    int FloodBits(int p)
+    int FloodBits(int p) => FloodBitsTo(p, regR, ref regLo, ref regHi);
+
+    /// <summary>FloodBits into an arbitrary row buffer (zero outside its dirty span [lo0,hi0], which is cleared first and updated).</summary>
+    int FloodBitsTo(int p, ulong* rg, ref int lo0, ref int hi0)
     {
-        ulong* fr = freeR; ulong* rg = regR;
-        for (int r = regLo; r <= regHi; r++) rg[r] = 0;
+        ulong* fr = freeR;
+        for (int r = lo0; r <= hi0; r++) rg[r] = 0;
         int rp = rowOf[p]; int cp = colOf[p];
         ulong saved = fr[rp];
         fr[rp] = saved | 1UL << cp;
         int lo = rp, hi = rp;
         FloodDirty(fr, rg, rp, 1UL << cp, ref lo, ref hi);
         fr[rp] = saved;
-        regLo = lo; regHi = hi;
+        lo0 = lo; hi0 = hi;
         for (int r = lo; ; r++) if (rg[r] != 0) return r * b.W + System.Numerics.BitOperations.TrailingZeroCount(rg[r]);
     }
 
@@ -244,6 +249,208 @@ public sealed unsafe class ClusterChecker
         {
             for (int r = 0; r < rows; r++)
                 if (pkR[r] != 0) { int m = r * b.W + System.Numerics.BitOperations.TrailingZeroCount(pkR[r]); if (m < min) min = m; break; }
+        }
+        return min;
+    }
+
+
+    // ---- BFS with per-state stored regions (bit-row boards): the child's region is derived from the parent's, never re-flooded ------------
+    ulong[]? storeArr, scrArr; ulong* store, scrR, pkB, chkR; int storeCap; int scrLo = 1, scrHi = 0, chkLo = 1, chkHi = 0, pkLo, pkHi = -1;
+
+    void EnsureStore(int states)
+    {
+        if (storeCap >= states) return;
+        storeCap = states + 256;
+        storeArr = GC.AllocateArray<ulong>(storeCap * rows, pinned: true);
+        store = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref storeArr[0]);
+    }
+
+    (bool dead, int cost) SearchBfsBits(ReadOnlySpan<int> start, int side, int capStates)
+    {
+        Checked++; if (Prof.On) Prof.Calls[13]++;
+        int n = start.Length;
+        int rows = this.rows;
+        EnsureStore(capStates + 80);
+        for (int i = 0; i < n; i++) Block(start[i]);
+        new Span<ulong>(store, rows).Clear();
+        int rlo = 1, rhi = 0;
+        int p0 = FloodBitsTo(side, store, ref rlo, ref rhi);
+        for (int i = 0; i < n; i++) Unblock(start[i]);
+
+        int tsize = 2048;
+        while (tsize < capStates * 2 + 64) tsize <<= 1;
+        if (seenSlots.Length < tsize) seenSlots = new ulong[tsize];
+        int tmask = tsize - 1;
+        if (++seenStamp == 0) { Array.Clear(seenSlots); seenStamp = 1; }
+        uint ss = seenStamp;
+        int qn = 0;
+        int seenCount = 0;
+
+        bool TryAdd(in Key k, int depth)
+        {
+            int i = (int)(k.Hash() & (ulong)tmask);
+            while (true)
+            {
+                ulong s = seenSlots[i];
+                if ((uint)(s >> 32) != ss) break;
+                if (cq[(int)(uint)s - 1].Equals(k)) return false;
+                i = (i + 1) & tmask;
+            }
+            if (qn == cq.Length) { Array.Resize(ref cq, qn * 2); Array.Resize(ref cdepth, qn * 2); }
+            cq[qn] = k; cdepth[qn] = depth; qn++;
+            seenSlots[i] = ((ulong)ss << 32) | (uint)qn;
+            seenCount++;
+            return true;
+        }
+
+        TryAdd(MkKey(start, p0), 0);
+        int* dd = stackalloc int[4];
+        for (int k = 0; k < 4; k++) dd[k] = b.Dirs[k];
+        ushort* lanes = stackalloc ushort[8]; ushort* nl = stackalloc ushort[8];
+        byte* ro = rowOf; byte* co = colOf; byte* gl = goalP; byte* dp = deadP; byte* bk = blk;
+        for (int head = 0; head < qn; head++)
+        {
+            if (seenCount > capStates) { NCap++; StCap += head; return (false, 0); }
+            if (Prof.On) Prof.Calls[14]++;
+            var st = cq[head]; int depth = cdepth[head];
+            *(ulong*)lanes = st.Lo; *(ulong*)(lanes + 4) = st.Hi;
+            int off = 0;
+            for (int i = 0; i < n; i++) { if (gl[lanes[i]] == 0) off++; Block(lanes[i]); }
+            int minR = lanes[7]; // the stored player is the region's minimum cell
+            ulong* reg = store + (long)head * rows;
+            for (int i = 0; i < n; i++)
+            {
+                int x = lanes[i];
+                int offx = off - (gl[x] == 0 ? 1 : 0);
+                for (int k = 0; k < 4; k++)
+                {
+                    int d = dd[k];
+                    int to = x + d;
+                    int px = x - d;
+                    if ((reg[ro[px]] >> co[px] & 1) == 0 || bk[to] != 0 || dp[to] != 0) continue;
+                    if (offx + (gl[to] == 0 ? 1 : 0) == 0)
+                    {
+                        for (int j = 0; j < n; j++) Unblock(lanes[j]);
+                        NAlive++; StAlive += head; return (false, depth + 1);
+                    }
+                    int np = FastPlayerB(x, to, minR, reg);
+                    bool viaScr = np < 0;
+                    if (viaScr)
+                    {
+                        Unblock(x); Block(to);
+                        np = FloodBitsTo(x, scrR, ref scrLo, ref scrHi);
+                        Unblock(to); Block(x);
+                    }
+                    // child lanes: box i replaced by `to`, kept ascending; player in lane 7
+                    *(ulong*)nl = st.Lo; *(ulong*)(nl + 4) = st.Hi;
+                    {
+                        ushort v = (ushort)to; int j = i;
+                        if (v > nl[i]) { while (j + 1 < n && nl[j + 1] < v) { nl[j] = nl[j + 1]; j++; } }
+                        else { while (j > 0 && nl[j - 1] > v) { nl[j] = nl[j - 1]; j--; } }
+                        nl[j] = v;
+                    }
+                    nl[7] = (ushort)np;
+                    var key = new Key { Lo = *(ulong*)nl, Hi = *(ulong*)(nl + 4) };
+                    if (TryAdd(key, depth + 1))
+                    {
+                        ulong* dst = store + (long)(qn - 1) * rows;
+                        if (viaScr) Buffer.MemoryCopy(scrR, dst, rows * 8L, rows * 8L);
+                        else
+                        {
+                            Buffer.MemoryCopy(reg, dst, rows * 8L, rows * 8L);
+                            for (int r = pkLo; r <= pkHi; r++) dst[r] |= pkB[r];
+                            dst[ro[to]] &= ~(1UL << co[to]); dst[ro[x]] |= 1UL << co[x];
+                        }
+                        if (CheckFast) CheckDerived(x, to, dst);
+                    }
+                    if (!viaScr && pkHi >= pkLo) { for (int r = pkLo; r <= pkHi; r++) pkB[r] = 0; pkLo = 0; pkHi = -1; }
+                }
+            }
+            for (int i = 0; i < n; i++) Unblock(lanes[i]);
+        }
+        NDead++; StDead += qn;
+        return (true, 0);
+    }
+
+    void CheckDerived(int x, int to, ulong* dst)
+    {
+        Unblock(x); Block(to);
+        FloodBitsTo(x, chkR, ref chkLo, ref chkHi);
+        Unblock(to); Block(x);
+        for (int r = 0; r < rows; r++) if (chkR[r] != dst[r]) throw new InvalidOperationException($"cluster derived region mismatch row {r}: flood {chkR[r]:x} derived {dst[r]:x} x={x} to={to}");
+    }
+
+    /// <summary>FastPlayer for the stored-region BFS (parent region reg; pockets accumulate in pkB, rows pkLo..pkHi, cleared by the caller).</summary>
+    int FastPlayerB(int x, int t, int minR, ulong* reg)
+    {
+        int tr = rowOf[t], tc = colOf[t];
+        ulong tb = 1UL << tc;
+        bool tInR = (reg[tr] & tb) != 0;
+        if (tInR)
+        {
+            ulong* fr = freeR;
+            uint m = (uint)(fr[tr - 1] >> (tc - 1)) & 7u;
+            ulong bot = fr[tr + 1] >> (tc - 1);
+            m |= (uint)(bot & 4) << 2 | (uint)(bot & 2) << 4 | (uint)(bot & 1) << 6;
+            ulong mid = fr[tr] >> (tc - 1);
+            m |= (uint)(mid & 4) << 1 | (uint)(mid & 1) << 7;
+            int dx = x - t;
+            m |= dx == -b.W ? 2u : dx == 1 ? 8u : dx == b.W ? 32u : 128u;
+            if (SplitTab[m]) return -1;
+        }
+        int min = x;
+        if (tInR && t == minR)
+        {
+            int m2 = int.MaxValue;
+            ulong v = reg[tr] & ~tb;
+            int r = tr;
+            while (true)
+            {
+                if (v != 0) { m2 = r * b.W + System.Numerics.BitOperations.TrailingZeroCount(v); break; }
+                if (++r >= rows) break;
+                v = reg[r];
+            }
+            if (m2 < min) min = m2;
+        }
+        else if (minR < min) min = minR;
+        // pockets opened behind x: cells outside the parent region, not blocked, not t, reachable from x's neighbours
+        ulong* f = freeR; ulong* pk = pkB;
+        bool started = false; ulong fsave = 0;
+        for (int di = 0; di < 4; di++)
+        {
+            int y0 = x + b.Dirs[di];
+            if (blk[y0] != 0 || y0 == t) continue;
+            int r0 = rowOf[y0]; ulong bit0 = 1UL << colOf[y0];
+            if ((reg[r0] & bit0) != 0 || (pk[r0] & bit0) != 0) continue;
+            if (!started) { started = true; pkLo = rows; pkHi = -1; fsave = f[tr]; f[tr] = fsave & ~tb; }
+            if (r0 < pkLo) pkLo = r0; if (r0 > pkHi) pkHi = r0;
+            // dirty-row flood over cells free and outside the parent region
+            ulong y1 = FillRow(bit0 | pk[r0], f[r0] & ~reg[r0]);
+            ulong nw0 = y1 & ~pk[r0];
+            pk[r0] = y1;
+            ulong dirty = 0;
+            if ((nw0 & f[r0 - 1] & ~reg[r0 - 1] & ~pk[r0 - 1]) != 0) dirty |= 1UL << (r0 - 1);
+            if ((nw0 & f[r0 + 1] & ~reg[r0 + 1] & ~pk[r0 + 1]) != 0) dirty |= 1UL << (r0 + 1);
+            while (dirty != 0)
+            {
+                int r = System.Numerics.BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
+                ulong cu = pk[r];
+                ulong g = f[r] & ~reg[r];
+                ulong y = cu | (pk[r - 1] | pk[r + 1]) & g;
+                if (y == cu) continue;
+                y = FillRow(y, g);
+                pk[r] = y;
+                ulong nw = y & ~cu;
+                if (r < pkLo) pkLo = r; if (r > pkHi) pkHi = r;
+                if ((nw & f[r - 1] & ~reg[r - 1] & ~pk[r - 1]) != 0) dirty |= 1UL << (r - 1);
+                if ((nw & f[r + 1] & ~reg[r + 1] & ~pk[r + 1]) != 0) dirty |= 1UL << (r + 1);
+            }
+        }
+        if (started)
+        {
+            f[tr] = fsave;
+            for (int r = pkLo; r <= pkHi; r++)
+                if (pk[r] != 0) { int m = r * b.W + System.Numerics.BitOperations.TrailingZeroCount(pk[r]); if (m < min) min = m; break; }
         }
         return min;
     }
@@ -432,6 +639,9 @@ public sealed unsafe class ClusterChecker
         => AStar && b.Dist != null ? SearchAStar(start, side, capStates) : SearchBfs(start, side, capStates);
 
     (bool dead, int cost) SearchBfs(ReadOnlySpan<int> start, int side, int capStates)
+        => bits && start.Length <= 7 ? SearchBfsBits(start, side, capStates) : SearchBfsQ(start, side, capStates);
+
+    (bool dead, int cost) SearchBfsQ(ReadOnlySpan<int> start, int side, int capStates)
     {
         Checked++; if (Prof.On) Prof.Calls[13]++;
         int n = start.Length;
