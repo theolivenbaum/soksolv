@@ -99,3 +99,6 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] portfolio `toward` lane (retarget loop with the live pull best state + meetings), `-strategy toward|tfwd`
 - [ ] hub-pull / hub-gen / hub (pullfest pfOn, hubrace, hubstrata, hubgen, hub, hfsched)
 - [ ] `hf` peak-memory reporting; meetings inside the toward phase
+
+- [x] pullfest leaf functions (pushDistances/pfDist/pfHot/pfBicon/pfSpreadSum/tuple order): Search/Hub/PfFest.cs, exact vs Go goldens (18 levels x 8 samples)
+- [ ] pfOn engine hooks in the macro/pull engine (patched-Go `-strategy pull` + SOKSOLV_PFON reference), then hubstrata, hubrace, hubprobe, festb, hubgen, hub, hfsched, portfolio hub lanes + toward retargeting loop (see docs/lanes.md 'Hub family - status after the 14th fork')

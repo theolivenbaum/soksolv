@@ -68,3 +68,61 @@ public class HubTests
         Assert.True(checkedLevels >= 15);
     }
 }
+
+public class PfFestTests
+{
+    static string Golden(string name)
+    {
+        var d = new DirectoryInfo(AppContext.BaseDirectory);
+        while (d != null && !Directory.Exists(Path.Combine(d.FullName, "golden"))) d = d.Parent;
+        return Path.Combine(d!.FullName, "golden", name);
+    }
+
+    /// <summary>Golden values from Go (pfdump_test.go in a scratch copy): pfDist checksum, and pfHot/pfBicon/pfSpreadSum on 8 pseudo-random box sets per level.</summary>
+    [Fact]
+    public void PullFest_LeafFunctions_MatchGo()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Golden("pffest.json")));
+        int levels = 0, samples = 0;
+        foreach (var prop in doc.RootElement.EnumerateObject())
+        {
+            var lv = Soksolv.Model.Level.Parse(TestData.Rows(Path.GetFileNameWithoutExtension(prop.Name)));
+            // pull view: boxes start on the goals (ascending)
+            var goals = Enumerable.Range(0, lv.Cells).Where(c => lv.Goal[c]).ToArray();
+            var pf = new Soksolv.Search.Hub.PfFest(lv.Wall, lv.W, goals);
+            var g = prop.Value;
+            Assert.Equal(g.GetProperty("ngoals").GetInt32(), pf.NGoals);
+            long sum = 0, nn = 0;
+            for (int i = 0; i < pf.PfDist.Length; i++) if (pf.PfDist[i] >= 0) { nn++; sum += (long)pf.PfDist[i] * (i % 997 + 1); }
+            Assert.Equal(g.GetProperty("nonneg").GetInt64(), nn);
+            Assert.Equal(g.GetProperty("sumDist").GetInt64(), sum);
+            var occ = new bool[lv.Cells];
+            foreach (var s in g.GetProperty("samples").EnumerateArray())
+            {
+                Array.Clear(occ);
+                var boxes = s.GetProperty("boxes").EnumerateArray().Select(x => x.GetInt32()).ToArray();
+                foreach (int b in boxes) occ[b] = true;
+                Assert.Equal(s.GetProperty("hot").GetInt32(), pf.Hot(boxes, occ));
+                Assert.Equal(s.GetProperty("bicon").GetInt32(), pf.Bicon(occ));
+                Assert.Equal(s.GetProperty("spread").GetInt32(), pf.SpreadSum(boxes));
+                samples++;
+            }
+            levels++;
+        }
+        Assert.True(levels >= 18 && samples >= 144);
+    }
+
+    [Fact]
+    public void PullFest_TupleOrder_MatchesGo()
+    {
+        var a = new Soksolv.Search.Hub.PfFest.Tuple(1, 0, 2, 10, 0);
+        var b = new Soksolv.Search.Hub.PfFest.Tuple(2, 0, 0, 99, 0);
+        Assert.True(Soksolv.Search.Hub.PfFest.Tuple.Better(a, b));   // fewer regions first
+        var c = new Soksolv.Search.Hub.PfFest.Tuple(1, 0, 1, 5, 0);
+        Assert.True(Soksolv.Search.Hub.PfFest.Tuple.Better(c, a));   // one region: fewer hotspots
+        var d = new Soksolv.Search.Hub.PfFest.Tuple(1, 0, 2, 11, 0);
+        Assert.True(Soksolv.Search.Hub.PfFest.Tuple.Better(d, a));   // larger matching distance is better
+        var m = a.Mobility;
+        Assert.Equal(a, Soksolv.Search.Hub.PfFest.Tuple.FromMove(a.Reg, a.Rooms, a.Hot, m) with { });
+    }
+}

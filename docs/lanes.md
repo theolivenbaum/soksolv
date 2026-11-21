@@ -235,3 +235,30 @@ the C# CLI does not yet report `peak_memory_mb` for `hf` (not measured).
 * Meeting (`meet`) hooks inside the toward phase (forward adds / pull drain); `hf` runs `-no-meet` only.
 * `hub-pull`, `hub-gen`, `hub`: not started in this fork (they need pullfest `pfOn` (400 lines), `hubrace`/`hubstrata`/`hubgen`/`hub`/`hfsched` (~2.8k lines)
   on top of the toward machinery now available; see the scope table above).
+
+## Hub family — status after the 14th fork (pfOn leaf functions only)
+
+**Determinism finding (blocks exact `-nodes` parity for the hub lanes).** `-strategy hub-pull` and `hub-gen` ignore `-nodes`
+(only hubgen.go:858 reads `NodeBudget`); they run on wall-clock windows (`hubUnit(T)`, doubling slices, idle rings, `reviveLoop`), and two
+identical runs of the unmodified Go binary expand different node counts (hub-pull 475,136 vs 495,616; hub-gen 139,264 vs 126,976 on
+Holland_81_27, `-nodes 3000 -t 20`). Exact fingerprint parity is therefore only possible against a *patched* Go copy that bounds the
+solver by expansions and disables the timed windows — i.e. after the engine hooks below exist.
+
+**Ported and verified exactly (commit below):** `Search/Hub/PfFest.cs` = the leaf functions of `pullfest.go`:
+`pushDistances` (Festival's player-aware push distances, `-pf-exact-dist` default), the matching-distance table `pfDist`, `pfHot`
+(boxes no player can pull), `pfBicon` (free squares on no cycle), `pfSpreadSum`, the `pfTuple` order (`pfBetter`) and the packed
+`pfScore`/`pfFromMove` mobility key. Test `PfFestTests.PullFest_LeafFunctions_MatchGo` compares against goldens dumped by Go
+(`pfdump_test.go` in a scratch copy of `.reference`, `tests/Soksolv.Tests/golden/pffest.json`): pfDist checksum and non-negative count per
+level + `pfHot`/`pfBicon`/`pfSpreadSum` on 8 pseudo-random box sets per level, 18 testdata levels (144 samples): all equal.
+
+**Not ported (engine hooks of `pfOn`, each a branch next to the existing `hfRank` branches in `Macro/FullSolver.Macro*.cs`):**
+`pfAdd`/`pfReparent` (node tuples, best-on-path, bucket = `project(oop=best.reg, connectivity=best.rooms)`), root scoring (`pfInit`, `rootBare`),
+`open()` parent/child scoring (`pfFill`, `hfMatchParent/Child` dist, `pfScore` into oop/room/hot/mobility), the single Festival advisor
+with board-order ties (`pfFestAdv`), `m.b/m.t` sort keys, `pfInefficient` dead reason (ported as `FestInefficient` for hf), start-zone
+filtering (`PFReach` exact reach, `PFZoneDead`), `pfBetter` best-so-far in the frontier, type-exploration period `pfSty.types`,
+`festRooms` (`-pf-fest-rooms`), revive-diversify skipped for pfOn. Then `hubrace.go` (393), `hubstrata.go` (255), `hubprobe.go` (530),
+`festb.go` (214), `hubgen.go` (1037), `hub.go` (1112), `hfsched.go` (58) — about 3.6k Go lines — and the portfolio `toward` retargeting loop.
+
+**Suggested method for the engine hooks:** a patched Go copy (like `bench/hf-ref/build.sh`) that adds `SOKSOLV_PFON=1` to `-strategy pull`
+(sets `ps.pfOn=true`, `pfSty=festXStyle()`) so the Festival-order pull search can be fingerprint-compared under `-nodes N`, then `hubstrata`
+(deterministic), then the timed `raceAlternate`/`hubLane` with a documented solve-rate/time equivalence.
