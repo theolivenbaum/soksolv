@@ -41,6 +41,7 @@ public sealed unsafe partial class FullSolver
         int parentPacked = MPacked();
         int parentConn = maux[id].Reg;
         mCmdMask = 0; mUnpinMask = 0;
+        long tdl = Prof.Start();
         if (Feat(2) && !pull && goals.Length <= 64) // Go: DisplacementLandmarksOn && !s.pull && len(goals) <= 64
         {
             if (!dlInit) { dlInit = true; dl = DisplacementLandmarks.Create(lv, dirs, goals); }
@@ -50,10 +51,15 @@ public sealed unsafe partial class FullSolver
                 if (mCmdMask == 0) mUnpinMask = dl.ComputeCollectiveUnpacking(cur, nodes.Player(id)).candidateUnpins;
             }
         }
+        Prof.Stop(24, tdl);
         mParentConn = parentConn; mParentPackedF = parentPacked;
+        long trc = Prof.Start();
         int parentRoom = MRoomConnectivity();
         int parentOop = MOutOfPlan(cur);
+        Prof.Stop(27, trc);
+        long thc = Prof.Start();
         int[]? counts = MacroStage >= 4 ? HotCounts(cur) : null;
+        Prof.Stop(26, thc);
         int parentHot = counts != null ? HotspotCount(counts) : 0;
         int parentPhase = mPlan != null ? mPlan.Status(occ).phase : -1;
         long tc = Prof.Start();
@@ -71,6 +77,8 @@ public sealed unsafe partial class FullSolver
         mAccN = 0;
         if (pull) { long sp = 0; foreach (int bx in cur) sp += spreadDist[bx]; mParentSpread = sp; }
         { int bk0 = (int)maux[id].Bucket; mUnpackedRegime = bk0 < mcells.Count && parentPacked < mcells[bk0].Packed; }
+        long tbs = Prof.Start();
+        if (BbEnsure()) { bbNode = true; bbNodeBuilt = false; bbParentBuilt = false; }
         mOpenId = id; mOpenSt = st; mParentOop = parentOop; mParentRoom = parentRoom; mHotCounts = counts;
         for (int i = 0; i < cur.Length; i++)
         {
@@ -81,6 +89,8 @@ public sealed unsafe partial class FullSolver
             mVisitI = i;
             MBoxSearch(b, st, false, 0, 0, cur);
         }
+        Prof.Stop(25, tbs);
+        bbNode = false;
 
         int nm = mCandN;
         // advisors: packing, connectivity, room, out-of-plan (each picks its best-scored eligible move)

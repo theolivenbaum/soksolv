@@ -118,7 +118,7 @@ public sealed unsafe partial class FullSolver
         res.Stats = stats; stats.Stored = nodes.Count;
         res.PeakBytes = (long)(nodes.Bytes + mmv.Bytes + mmvScore.Bytes + maux.Bytes);
         MacroReport(res);
-        if (Prof.On) { Prof.Names[0] = "pushDead"; Prof.Names[1] = "roomConn"; Prof.Names[2] = "hotAfter"; Prof.Names[3] = "moveAccess"; Prof.Names[4] = "regions"; Prof.Names[5] = "piCorral+setup"; Prof.Names[11] = "apply:deadzone"; Prof.Names[12] = "apply:cluster"; Prof.Names[6] = "pd:freeze2x2"; Prof.Names[7] = "pd:goalarea"; Prof.Names[10] = "pd:pair"; Prof.Names[14] = "pd:sidedead"; Prof.Names[8] = "MOpen"; Prof.Names[9] = "MApply"; Prof.Report(res.TimeMs); Console.Error.WriteLine($"pairs tried {stats.PairsTried} dead {stats.PairsDead}"); if (dz != null) Console.Error.WriteLine($"dz: calls {dz.Calls} corrals {dz.Corrals} searches {dz.Searches} states {dz.States} pfloods {dz.PFloods} cfloods {dz.CFloods} escCalls {dz.EscCalls} escPasses {dz.EscPasses} cacheHits {dz.CacheHits} opened {dz.Opened} matching {dz.MatchingDead}"); }
+        if (Prof.On) { Prof.Names[0] = "pushDead"; Prof.Names[1] = "roomConn"; Prof.Names[2] = "hotAfter"; Prof.Names[3] = "moveAccess"; Prof.Names[4] = "regions"; Prof.Names[5] = "piCorral+setup"; Prof.Names[11] = "apply:deadzone"; Prof.Names[12] = "apply:cluster"; Prof.Names[6] = "pd:freeze2x2"; Prof.Names[7] = "pd:goalarea"; Prof.Names[10] = "pd:pair"; Prof.Names[14] = "pd:sidedead"; Prof.Names[8] = "MOpen"; Prof.Names[9] = "MApply"; Prof.Names[24] = "displacement"; Prof.Names[25] = "boxSearch(all)"; Prof.Names[26] = "hotCounts"; Prof.Names[27] = "roomConn+oop"; Prof.Report(res.TimeMs); Console.Error.WriteLine($"pairs tried {stats.PairsTried} dead {stats.PairsDead}"); if (dz != null) Console.Error.WriteLine($"dz: calls {dz.Calls} corrals {dz.Corrals} searches {dz.Searches} states {dz.States} pfloods {dz.PFloods} cfloods {dz.CFloods} escCalls {dz.EscCalls} escPasses {dz.EscPasses} cacheHits {dz.CacheHits} opened {dz.Opened} matching {dz.MatchingDead}"); }
         return res;
     }
 
@@ -394,6 +394,14 @@ public sealed unsafe partial class FullSolver
             int d = dirs[di];
             if (mark[Front(b, d)] == st && (!pull || !wall[b + 2 * d] && !occ[b + 2 * d])) { int k = b * 4 + di; mseen[k] = bs; mbprev[k] = -1; mbq[qn++] = k; }
         }
+        bool bbOnLocal = BbEnsure(), bbBuilt = false; int pushes = 0;
+        bool node = bbOnLocal && bbNode;
+        int rb = b / W + 1; ulong bbit = 1UL << (b % W);
+        if (node)
+        {
+            if (!bbNodeBuilt) { BbBuild(); bbNodeBuilt = true; } // occ[b] still set: rows hold every box
+            bbNFreeP[rb] |= bbit; // the searched box is lifted
+        }
         SetOcc(b, false);
         bool found = false;
         try
@@ -409,8 +417,16 @@ public sealed unsafe partial class FullSolver
                 SetOcc(nc, true);
                 uint ps = ++mpstamp;
                 int pc = PlayerAfter(nc, dirs[di]);
-                int minC = pc;
+                int minC;
+                if (node) minC = BbFlood(pc, nc, ps);
+                else if (bbOnLocal && pushes >= BoxBitAfter)
                 {
+                    if (!bbBuilt) { SetOcc(nc, false); BbBuild(); SetOcc(nc, true); bbBuilt = true; }
+                    minC = BbFlood(pc, nc, ps);
+                }
+                else
+                {
+                    minC = pc;
                     int* q = queueP; int tail = 0; q[tail++] = pc; m3P[pc] = ps;
                     int w = W;
                     for (int j = 0; j < tail; j++)
@@ -422,6 +438,7 @@ public sealed unsafe partial class FullSolver
                         y = x + 1; if (m3P[y] != ps && blk[y] == 0) { m3P[y] = ps; q[tail++] = y; if (y < minC) minC = y; }
                     }
                 }
+                pushes++;
                 mCandNP = minC;
                 SetOcc(nc, false);
                 if (pathMode)
@@ -448,7 +465,7 @@ public sealed unsafe partial class FullSolver
             }
             return found;
         }
-        finally { SetOcc(b, true); }
+        finally { SetOcc(b, true); if (node) bbNFreeP[rb] &= ~bbit; }
     }
 
     List<Push> MBoxPathTo(int b, int t, uint st, int side, ReadOnlySpan<int> cur)

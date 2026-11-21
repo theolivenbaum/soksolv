@@ -156,6 +156,21 @@ public sealed unsafe partial class FullSolver
     /// </summary>
     (int mobility, bool explorer, int accStart, int accLen) MMoveAccess(ReadOnlySpan<int> cur, int moved, int target)
     {
+        if (!bbNode) return MMoveAccessScan(cur, moved, target);
+        if (!CheckAccessBits) return MMoveAccessBits(cur, moved, target);
+        int a0 = mAccN;
+        var got = MMoveAccessBits(cur, moved, target);
+        var gotFacts = mAccBuf.AsSpan(got.accStart, got.accLen).ToArray(); Array.Sort(gotFacts);
+        mAccN = a0;
+        var want = MMoveAccessScan(cur, moved, target);
+        var wantFacts = mAccBuf.AsSpan(want.accStart, want.accLen).ToArray(); Array.Sort(wantFacts);
+        if (got.mobility != want.mobility || got.explorer != want.explorer || !gotFacts.AsSpan().SequenceEqual(wantFacts))
+            throw new InvalidOperationException($"moveAccessBits disagrees with scan: mobility {got.mobility}/{want.mobility} explorer {got.explorer}/{want.explorer} facts {gotFacts.Length}/{wantFacts.Length}");
+        return want;
+    }
+
+    (int mobility, bool explorer, int accStart, int accLen) MMoveAccessScan(ReadOnlySpan<int> cur, int moved, int target)
+    {
         uint cs = mpstamp;
         int mobility = 0; bool explorer = false;
         bool recordAcc = AccessNovelty && NoveltyBudget() > 0;
