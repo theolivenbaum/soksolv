@@ -166,4 +166,67 @@ public sealed unsafe partial class FullSolver
         }
         return (mobility, explorer, accStart, accLen);
     }
+
+    // ---- pointer-based articulation pass for the box search (same result as ComputeArticulation, interleaved per-cell record) ----------
+    struct ArtC { public int Disc, Low, Pieces; public uint Seen; }
+    struct ArtFr { public int C, P, N; }
+    ArtC[]? maArr; ArtC* maP; ArtFr[]? mfArr; ArtFr* mfP; uint maStamp; int[]? mDirsPin; int* mDirsP;
+
+    /// <summary>One iterative Tarjan pass over the free cells (blk = walls and boxes): component count in <c>artComps</c>, per-cell piece counts for <see cref="MChildRegions"/>.</summary>
+    void MArtic()
+    {
+        if (maArr == null)
+        {
+            maArr = GC.AllocateArray<ArtC>(cells, pinned: true); maP = (ArtC*)Unsafe.AsPointer(ref maArr[0]);
+            mfArr = GC.AllocateArray<ArtFr>(cells + 1, pinned: true); mfP = (ArtFr*)Unsafe.AsPointer(ref mfArr[0]);
+            mDirsPin = GC.AllocateArray<int>(4, pinned: true); mDirsP = (int*)Unsafe.AsPointer(ref mDirsPin[0]);
+            for (int i = 0; i < 4; i++) mDirsP[i] = dirs[i];
+        }
+        ArtC* ac = maP; ArtFr* stack = mfP; int* dr = mDirsP; byte* bk = blk;
+        uint st = ++maStamp;
+        if (st == 0) { Array.Clear(maArr); st = maStamp = 1; }
+        int comps = 0, timer = 0;
+        var floor = FloorCells();
+        for (int fi = 0; fi < floor.Length; fi++)
+        {
+            int root = floor[fi];
+            if (bk[root] != 0 || ac[root].Seen == st) continue;
+            comps++;
+            timer++;
+            ac[root].Disc = timer; ac[root].Low = timer; ac[root].Pieces = 0; ac[root].Seen = st;
+            stack[0].C = root; stack[0].P = -1; stack[0].N = 0;
+            int sz = 1;
+            while (sz > 0)
+            {
+                ArtFr* f = stack + (sz - 1);
+                int c = f->C;
+                bool descended = false;
+                while (f->N < 4)
+                {
+                    int y = c + dr[f->N++];
+                    if (bk[y] != 0) continue;
+                    ArtC* ay = ac + y;
+                    if (ay->Seen != st)
+                    {
+                        timer++;
+                        ay->Disc = timer; ay->Low = timer; ay->Pieces = 1; ay->Seen = st;
+                        ArtFr* nf = stack + sz;
+                        nf->C = y; nf->P = c; nf->N = 0; sz++;
+                        descended = true; break;
+                    }
+                    if (y != f->P && ay->Disc < ac[c].Low) ac[c].Low = ay->Disc;
+                }
+                if (descended) continue;
+                sz--;
+                int pp = f->P;
+                if (pp < 0) continue;
+                int lc = ac[c].Low;
+                if (lc < ac[pp].Low) ac[pp].Low = lc;
+                if (lc >= ac[pp].Disc) ac[pp].Pieces++;
+            }
+        }
+        artComps = comps;
+    }
+
+    int MChildRegions(int t) => artComps - 1 + maP[t].Pieces;
 }

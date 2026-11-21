@@ -214,6 +214,115 @@ public sealed unsafe partial class FullSolver
         return broken;
     }
 
+    // ---- incremental room connectivity (Go roomConnParent / roomConnChild) ----------------------------------------------------------
+    int[] rmShare = []; int rmParentTotal; ulong[] rmAff = []; int[] rmUndo = new int[64]; int rmUndoN;
+    public static bool CheckRooms = Environment.GetEnvironmentVariable("SOKSOLV_CHECK_ROOMS") == "1";
+
+    /// <summary>Room connectivity of the opened node (occ holds it), remembering the corridor labelling and each room's share for <see cref="MRoomConnChild"/>.</summary>
+    int MRoomConnParent()
+    {
+        if (!HasRooms || rmRooms.Length < 2) return 0;
+        if (rmShare.Length != rmRooms.Length) { rmShare = new int[rmRooms.Length]; rmAff = new ulong[Math.Max(1, rmNw)]; }
+        LabelCorridors();
+        int total = 0;
+        for (int r = 0; r < rmRooms.Length; r++) { rmShare[r] = RoomBroken(r); total += rmShare[r]; }
+        rmParentTotal = total;
+        return total;
+    }
+
+    void RmFlood(int c, ref int next, int k0)
+    {
+        int nw = rmNw, tb = next * nw;
+        for (int w = 0; w < nw; w++) rmTouch[tb + w] = 0;
+        if (rmUndoN + 2 > rmUndo.Length) Array.Resize(ref rmUndo, rmUndo.Length * 2);
+        rmUndo[rmUndoN++] = c; rmUndo[rmUndoN++] = rmLab[c];
+        rmLab[c] = next;
+        int sp = 0; rmStack[sp++] = c;
+        while (sp > 0)
+        {
+            int x = rmStack[--sp];
+            foreach (int d in dirs)
+            {
+                int y = x + d;
+                if (wall[y] || occ[y]) continue;
+                int cy = rmCell[y];
+                if (cy >= 0) rmTouch[tb + (cy >> 6)] |= 1UL << (cy & 63);
+                else if (rmLab[y] < k0)
+                {
+                    if (rmUndoN + 2 > rmUndo.Length) Array.Resize(ref rmUndo, rmUndo.Length * 2);
+                    rmUndo[rmUndoN++] = y; rmUndo[rmUndoN++] = rmLab[y];
+                    rmLab[y] = next; rmStack[sp++] = y;
+                }
+            }
+        }
+        next++;
+    }
+
+    /// <summary>Room connectivity after the box on b moved to t (occ holds the child), given <see cref="MRoomConnParent"/> for the parent: only the corridor components next to b or t are re-labelled (overlay undone before returning) and only the rooms that can see the change are re-evaluated.</summary>
+    int MRoomConnChild(int b, int t)
+    {
+        if (!HasRooms || rmRooms.Length < 2) return 0;
+        if (b == t) return rmParentTotal;
+        int nw = rmNw;
+        var aff = rmAff;
+        for (int w = 0; w < nw; w++) aff[w] = 0;
+        for (int zi = 0; zi < 2; zi++)
+        {
+            int z = zi == 0 ? b : t;
+            int r0 = rmCell[z];
+            if (r0 >= 0) aff[r0 >> 6] |= 1UL << (r0 & 63);
+            foreach (int d in dirs)
+            {
+                int n = z + d;
+                if (wall[n]) continue;
+                int r = rmCell[n];
+                if (r >= 0) aff[r >> 6] |= 1UL << (r & 63);
+                else { int k = rmLab[n]; if (k >= 0) for (int w = 0; w < nw; w++) aff[w] |= rmTouch[k * nw + w]; }
+            }
+        }
+        int k0 = rmK, next = k0;
+        rmUndoN = 0;
+        if (rmCell[b] < 0) RmFlood(b, ref next, k0);
+        for (int zi = 0; zi < 2; zi++)
+        {
+            int z = zi == 0 ? b : t;
+            foreach (int d in dirs)
+            {
+                int n = z + d;
+                if (!wall[n] && !occ[n] && rmCell[n] < 0 && rmLab[n] < k0) RmFlood(n, ref next, k0);
+            }
+        }
+        for (int zi = 0; zi < 2; zi++)
+        {
+            int z = zi == 0 ? b : t;
+            foreach (int d in dirs)
+            {
+                int n = z + d;
+                if (!wall[n] && !occ[n] && rmCell[n] < 0)
+                {
+                    int k = rmLab[n];
+                    for (int w = 0; w < nw; w++) aff[w] |= rmTouch[k * nw + w];
+                }
+            }
+        }
+        int total = rmParentTotal;
+        for (int w = 0; w < nw; w++)
+            for (ulong v = aff[w]; v != 0; v &= v - 1)
+            {
+                int r = w << 6 | BitOperations.TrailingZeroCount(v);
+                total += RoomBroken(r) - rmShare[r];
+            }
+        for (int i = rmUndoN - 2; i >= 0; i -= 2) rmLab[rmUndo[i]] = rmUndo[i + 1];
+        rmK = k0;
+        if (CheckRooms)
+        {
+            int want = MRoomConnectivity();   // clobbers the labelling: restore the parent's (occ with the box back on b)
+            if (want != total) throw new InvalidOperationException($"incremental room connectivity {total} != full {want} (b {b} t {t})");
+            SetOcc(t, false); SetOcc(b, true); LabelCorridors(); SetOcc(b, false); SetOcc(t, true);
+        }
+        return total;
+    }
+
     /// <summary>Room connectivity of the board in occ (Go roomConnectivity): total broken edges over all rooms.</summary>
     int MRoomConnectivity()
     {

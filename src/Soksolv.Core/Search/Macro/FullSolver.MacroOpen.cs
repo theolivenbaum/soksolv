@@ -55,7 +55,7 @@ public sealed unsafe partial class FullSolver
         Prof.Stop(24, tdl);
         mParentConn = parentConn; mParentPackedF = parentPacked;
         long trc = Prof.Start();
-        int parentRoom = pfOn ? 0 : MRoomConnectivity();
+        int parentRoom = pfOn ? 0 : MRoomConnParent();
         int parentOop = pfOn ? 0 : MOutOfPlan(cur);
         Prof.Stop(27, trc);
         long thc = Prof.Start();
@@ -467,9 +467,9 @@ public sealed unsafe partial class FullSolver
             {
                 case 1: r = Regions(); break;
                 case 2:
-                    SetOcc(t, false); ComputeArticulation(); SetOcc(t, true);
-                    r = ChildRegions(t); break;
-                default: r = ChildRegions(t); break;
+                    SetOcc(t, false); MArtic(); SetOcc(t, true);
+                    r = MChildRegions(t); break;
+                default: r = MChildRegions(t); break;
             }
             Prof.Stop(4, tp);
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
@@ -478,7 +478,7 @@ public sealed unsafe partial class FullSolver
             var (mob, expl, accS, accL) = MacroStage >= 5 && !pfOn ? MMoveAccess(cur, i, t) : (0, false, 0, 0);
             Prof.Stop(3, tp);
             tp = Prof.Start();
-            int room = pfOn ? 0 : t == cur[i] ? mParentRoom : MRoomConnectivity(), packed, oop, progress = -2;
+            int room = pfOn ? 0 : t == cur[i] ? mParentRoom : MRoomConnChild(cur[i], t), packed, oop, progress = -2;
             Prof.Stop(1, tp);
             if (mPlan != null)
             {
