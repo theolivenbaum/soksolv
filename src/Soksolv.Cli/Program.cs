@@ -11,6 +11,8 @@ string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
+var fa2o = new Fa2Options();
+static bool GoBool(string a) => !a.EndsWith("=false") && !a.EndsWith("=0");
 for (int i = 0; i < args.Length; i++)
 {
     switch (args[i])
@@ -33,6 +35,32 @@ for (int i = 0; i < args.Length; i++)
         case "-rev-lanes": revLanes = int.Parse(args[++i]); break;
         case "-rev-supply": revSupply = int.Parse(args[++i]); break;
         case "-rev-novelty": revExtra = 1; break;
+        case var a when a.StartsWith("-fa2-") || a.StartsWith("-hot-sides"):
+            {
+                string nm = a.Split('=')[0];
+                switch (nm)
+                {
+                    case "-fa2-plan": fa2o.Plan = args[++i]; break;
+                    case "-fa2-oopadv": fa2o.OopAdv = int.Parse(args[++i]); break;
+                    case "-fa2-edge-win": fa2o.EdgeWin = int.Parse(args[++i]); break;
+                    case "-fa2-plan-exp": fa2o.PlanExp = int.Parse(args[++i]); break;
+                    case "-fa2-smallfree": fa2o.SmallFree = GoBool(a); break;
+                    case "-fa2-opener": fa2o.Opener = GoBool(a); break;
+                    case "-fa2-noreturn": fa2o.NoReturn = GoBool(a); break;
+                    case "-fa2-verifyadv": fa2o.VerifyAdv = GoBool(a); break;
+                    case "-fa2-ooptail": fa2o.OopTail = GoBool(a); break;
+                    case "-fa2-explorer": fa2o.Explorer = GoBool(a); break;
+                    case "-fa2-rooms": fa2o.Rooms = GoBool(a); break;
+                    case "-fa2-goalhot": fa2o.GoalHot = GoBool(a); break;
+                    case "-fa2-dist": fa2o.Dist = GoBool(a); break;
+                    case "-fa2-corral": fa2o.Corral = GoBool(a); break;
+                    case "-fa2-hall": fa2o.Hall = GoBool(a); break;
+                    case "-hot-sides": fa2o.HotSides = GoBool(a); break;
+                    case "-fa2-lastkey": fa2o.Mobility = args[++i] == "mobility"; break;
+                    case "-fa2-debug": fa2o.Debug = GoBool(a); break;
+                }
+                break;
+            }
         default: pos.Add(args[i]); break;
     }
 }
@@ -50,7 +78,7 @@ var opt = new FullOptions
     SharedClusters = new ClusterTable(16),
     SharedPenalties = new ClusterTable(16),
     SharedDeadZone = new Soksolv.Search.DeadZone.DeadZoneTable(18),
-    MacroStage = macroStage, MacroFeatures = macroFeat, PlanAlt = macroPlanAlt, MacroAlt = macroAlt,
+    MacroStage = macroStage, MacroFeatures = macroFeat, PlanAlt = macroPlanAlt, MacroAlt = macroAlt, Fa2 = fa2o,
 };
 SolveResult Run(string[] r, double tl)
 {
@@ -62,6 +90,7 @@ SolveResult Run(string[] r, double tl)
     }
     if (strategy == "full") return FullSolver.Solve(r, opt, tl);
     if (strategy == "pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolvePull(r, opt, tl); }
+    if (strategy == "fa2") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveFa2(r, opt, tl); }
     if (strategy == "macro") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveMacroLane(r, opt, tl); } // main.go -stall-scale
     return Portfolio.Solve(r, new PortfolioOptions { NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
 }
