@@ -388,3 +388,145 @@ a closure + delegate per `MOpen` (`PackingObligationAdvice(k => MChoose(ref pk, 
 ### Remaining (not in this area)
 hub-pull/hf are now dominated by the macro engine and the proofs: `MPushDead` + dead-zone (11-16%), box-search floods (`BbFlood` 13%), `MArtic` 6%, `MMoveAccessDelta` 3-7%, `RoomBroken`/`MRoomConnChild` in the pull phase (5-8%);
 mine: remaining Hungarian augments of the missed children (5%), `PfFill` 2%, `FestCorral` 3% (the whole-board component labelling per expanded node), hub-gen `Local` 14% / `BiconBits` 18% / flood 15%.
+
+## flood kernels v2 (`Search/Flood/RowK.cs`, `bench/FloodBench`)
+
+Goal: one shared flood/reachability primitive for boards <= 64 columns (and <= 64 rows incl. padding), every hot flood call site on it, results bit-identical, zero allocations.
+Boards wider/taller than that keep the old queue floods (every migrated site keeps its old width/height guard); synthetic wide/tall levels (W = 61..72, H = 59..70 incl. the 64/62
+boundaries) are parity-identical to Go in macro/fa2/novelty/pull.
+
+### Method
+1. **Corpus**: a temporary hook (not committed) logged ~107k real flood queries (free rows, seed row, seed bits, source) from macro / novelty / fa2 / pull / hf / hub-pull on the testdata
+   levels (box-search/displacement/pair floods, cluster `FloodBitsTo`, dead-zone unseeded floods). Average query: 37 cells, 7.2 rows, boards of 10-21 rows. 11 row visits per query
+   even for the best kernel; 49% of the in-row fills have a single seed bit, 49% extend nothing, 73% need no downward extension after the carry fill.
+2. **Micro-benchmark** (`bench/FloodBench`, AOT, every candidate validated row by row and on lo/hi against the old kernel: 0 mismatches): instructions and *simulated mispredicts* per query
+   from callgrind (`--branch-sim=yes`), ns/query = min and median of 12 interleaved runs on the shared VM (compare ratios only).
+3. **Decision rule**: real solver CPU time (alternating A/B runs of the AOT binaries, best of 4-6), not instruction counts. **Mispredicted branches, not instructions, dominate small
+   floods**: the old kernel had 16 mispredicts per 40-cell region, and several variants with *more* instructions are faster. (Callgrind total Ir of the lanes went *up* for the final kernel
+   on some levels while the CPU time went down 8-16%.)
+
+### Micro-benchmark: every candidate (106,948 queries; `alt` = the old kernel that shipped before)
+Kernel families: `alt` = alternating up/down passes over a dirty-row mask (old `FloodRowsDirty`); `dirty` = single-order precise dirty worklist (old cluster `FloodDirty`); `chain` = chain-following
+(shipped); `sweep` = up/down passes in registers, repeated until a pass creates nothing for the other direction. Fill variants (suffix): none = per-cell smear loop (old), `add` = carry add towards
+the high bits + smear loop, `runs` = per-run extraction with tzcnt/lzcnt, `ks` = 6-step Kogge-Stone both directions, `addks` = add + Kogge-Stone with an early exit, `ks3` = add + 3 doubling steps
+(+ the long steps only when the row holds a run of 8+ cells; **shipped**). `chain2add` loads the neighbours eagerly, `chain3ks3` = touched-row mask + branchless pending bit, `chain4ks3` = + the pop
+loop folded into the main loop (**shipped as `RowK.Flood`**; `chainks3`, `chain3ks3` and `chain4ks3` are within noise of each other in time, `chain4ks3` has the fewest mispredicts), `chain5ks3` = cmov direction choice, `chainks3p` = peeled "nothing to extend" exit.
+
+| kernel | Ir/query | mispredicts/query (sim) | ns/query min | median | vs alt (min) |
+|---|---|---|---|---|---|
+| alt | 952 | 16.0 | 207 | 222 | 1.00 |
+| altadd | 898 | 13.8 | 194 | 203 | 0.94 |
+| altruns | 1336 | 15.5 | 229 | 243 | 1.11 |
+| altks | 1595 | 10.0 | 203 | 218 | 0.98 |
+| altks3 | 1049 | 10.4 | 171 | 180 | 0.83 |
+| dirty | 739 | 13.4 | 172 | 179 | 0.83 |
+| dirtyadd | 686 | 11.2 | 150 | 162 | 0.73 |
+| dirtyruns | 1166 | 16.1 | 204 | 216 | 0.99 |
+| dirtyks3 | 846 | 7.9 | 137 | 148 | 0.66 |
+| chain | 638 | 12.8 | 157 | 181 | 0.76 |
+| chainadd | 589 | 11.2 | 148 | 172 | 0.71 |
+| chainruns | 845 | 13.3 | 157 | 167 | 0.76 |
+| chainks | 1322 | 6.9 | 171 | 181 | 0.83 |
+| chainaddks | 679 | 8.9 | 143 | 154 | 0.69 |
+| chainks3 | 753 | 8.1 | 130 | 146 | 0.63 |
+| chainks3p | 616 | 9.9 | 140 | 145 | 0.68 |
+| chain2add | 685 | 10.3 | 145 | 155 | 0.70 |
+| chain3ks3 | 706 | 6.0 | 135 | 140 | 0.65 |
+| **chain4ks3 (shipped)** | 736 | 5.5 | 134 | 142 | 0.65 |
+| chain5ks3 | 846 | 7.5 | 143 | 158 | 0.69 |
+| sweep | 842 | 11.4 | 155 | 168 | 0.75 |
+| sweepadd | 806 | 8.7 | 151 | 160 | 0.73 |
+| sweepaddks | 941 | 7.3 | 147 | 154 | 0.71 |
+| sweepks | 2076 | 4.4 | 210 | 222 | 1.02 |
+| sweepks3 | 1115 | 5.7 | 162 | 170 | 0.78 |
+
+Not built: a Vector128 two-rows-per-op sweep (the vertical dependency chain serialises the rows) and whole-board dilation per BFS layer (needs path-length iterations, ~1.5k instructions for a
+20-row board).
+
+### The kernel (`RowK`)
+* **`Flood`** (chain-following dirty-row flood): fill the seed row, then continue straight into the neighbouring row that received new seeds (the other direction is deferred as one bit in a
+  row mask); when a chain ends, pop the lowest pending row and derive its seeds from its neighbours. ~11 row visits per 7.2-row region (the old alternating-pass kernel visited every candidate
+  row in both passes and re-derived most of them). The visited rows are one 64-bit mask (`bts`), so lo/hi come from tzcnt/lzcnt at the end instead of two compares per visit.
+  `FloodMasked` is the same over `f & ~ban` (pockets outside a known region). Seeds must be free cells (`-p:DefineConstants=FLOODCHECK` asserts it; the old fill tolerated a blocked seed,
+  no caller relies on that; clean on all 24 testdata levels in macro/novelty/fa2/hf/pull/dive/full at 600 nodes with every `SOKSOLV_CHECK_*` switch below on).
+* **`Fill`** (in-row run fill): towards the high bits one carry-propagating add (`((f + y) ^ f) & f | y`, exact for several seeds in one run), towards the low bits a Kogge-Stone smear for
+  distances <= 7 and the 8/16/32 steps only for rows holding a run of 8+ free cells (predictable per row type). No per-cell loop, no data-dependent loop count.
+* The old kernel is kept as `RowK.FloodOld` (self-check reference): `SOKSOLV_CHECK_FLOOD=1` compares every `FloodRowsDirty` / `FloodBitsTo` result with it; `RowKTests` runs 4 x 4000 random
+  boards (incl. 64 x 64 and 64-column rows) against it, against the masked variant and against a cell BFS, and 200k random rows against the per-cell smear fill.
+
+### Call sites moved to the kernel (all exact)
+| site | before | after |
+|---|---|---|
+| `BbFlood` (box-search flood per push, via `FloodRowsDirty`) | alternating-pass dirty-row kernel + `while (reg[lo-1] != 0)` span scans | `RowK.Flood`, span from the kernel |
+| `ClusterChecker.FloodBitsTo` / `PocketsBits` / `FastPlayerB` pockets | `FloodDirty` + per-cell `FillRow`, min cell by scan | `RowK.Flood` / `FloodMasked`; min cell = lowest bit of the first written row |
+| `RegionsBits`, hub-gen `RowFlood.One`, dead-zone unseeded `FloodFreeDirty` and `FillRow`, `RowFlood.Fill` (PfRooms), dive child region (via `FloodRowsDirty`), displacement `CanWalkRows` | per-cell smear loops | `RowK.Flood` / `RowK.Fill` |
+| `PackingRoute.Flood` (macro obligations; 3.3% of macro) | queue BFS over `blk` bytes + stamp array | `FloodF`: row flood over free rows (floor - walls - fixed boxes); visit count = popcount, so the 8M cap and the Stop/Cancel poll keep their meaning; membership by row bit (`Reach`). The BFS tree (`walkPrev`) is only needed by `Walk`, which keeps the queue version. `SOKSOLV_PACKROWS_OFF=1`, `SOKSOLV_CHECK_PACKROWS=1` (compares norm, visits and every membership bit with the queue flood) |
+| `ReachP` (node region, stamps `mark`) and `BbBuild` | queue flood; per-cell occupancy scan | row flood on the free-row mirror `frR` and stamping from row words; `BbBuild` = copy of `frR` (`SOKSOLV_REACHROWS_OFF=1`) |
+| **`MArtic` Tarjan pass -> `MPieces`** (macro `MChildRegionCount`, fa2 `Fa2Visit`) | after 2 separator candidates a whole-board low-link DFS (4.5k Ir per call) to learn the child's region count | child count = `comps(floor without t) - 1 + pieces(t)`; `comps` is learned once per box search (one `Regions()`), `pieces(t)` = number of connected groups among t's free neighbours = row floods from every neighbour but the last (217 Ir per call; Sasquatch_VI macro 1500 nodes: 2844 Tarjan passes -> 93, + 12.1k `MPieces`). Up to 6 separator candidates per box search, then the Tarjan pass takes over. `SOKSOLV_PIECES_OFF=1`; `SOKSOLV_CHECK=1` / `SOKSOLV_FA2CHECK=1` verify every count against a whole-board flood |
+| `DeadZoneChecker.EscRow` | 9-term 3x3 dilation | rows OR-ed first, then one horizontal dilation (same value) |
+
+Per-call instructions (callgrind, inclusive of the kernel, Sasquatch_VI_50_24 macro, 1500 nodes, before -> after): cluster `FloodBitsTo` 711 -> 718, `RegionsBits` 1255 -> 1330, box-search /
+displacement / pair floods 677 -> ~700 (the kernel averages 424 Ir over all 146k `RowK.Flood` calls of every site), `PackingRoute` floods 2492 -> 796 (queue -> rows), `MArtic` Tarjan 4528 Ir
+x 2844 calls -> `MPieces` 759 Ir x 12.1k calls (12.9M -> 9.2M, and the whole-board `Regions()` calls it replaces are gone from the separator path). **Instruction counts are unchanged to
+slightly higher for the same flood** (the final `Fill` spends more instructions than the per-cell loop to avoid its mispredicts, so total flood-related Ir of that run only moved 112.6M -> 104.0M);
+*time* is what moved: micro-benchmark 207 -> 134 ns per query (-35%), simulated mispredicts 16.0 -> 5.5 per query, and 8-16% CPU per lane (below). The "2x fewer instructions" target is not met
+(1.29x fewer on the corpus: 952 -> 736 Ir/query); 1.55x faster is.
+
+### Result (CPU time, AOT, alternating A/B runs on the shared VM, best of 5; baseline = origin tip fd34f72 which already has the macro/novelty/pull/dive work of the other agent)
+
+CPU seconds (user+sys), sum over 5-7 testdata levels, alternating runs, best of 5 (best of 4 for hub-pull; `abtime`-style script, same machine, load 4-8 from other jobs):
+
+| lane (nodes) | origin tip | + flood kernels v2 | ratio |
+|---|---|---|---|
+| macro (5000) | 3.37 | 3.22 | 0.957 |
+| novelty (5000) | 2.77 | 2.51 | 0.904 |
+| fa2 (5000) | 9.25 | 8.63 | 0.933 |
+| hf (5000) | 1.42 | 1.31 | 0.919 |
+| pull (5000) | 0.50 | 0.43 | 0.870 |
+| dive (5000) | 0.83 | 0.76 | 0.913 |
+| hub-pull (node slices 1000, 20000 nodes) | 3.36 | 2.85 | 0.849 |
+
+Against the pre-merge baseline (before the other agent's macro/novelty/pull work) the same kernels gave macro 0.884, novelty 0.909, fa2 0.920, hf 0.896, pull 0.843.
+
+Equal-work CPU time C# / Go (`bench/lane-cpu.py`, 22 testdata levels, `-nodes 5000`, best of 3, Go `-procs 1`, C# `-parity`; hub-pull: node slices 1000, 20000 nodes, patched Go reference; hf: `-no-meet`),
+final merged tree, node counts identical on every level:
+
+| lane | before this work (task brief) | now |
+|---|---|---|
+| full | 0.29 | 0.258 |
+| macro | 0.62 | 0.516 |
+| fa2 | 0.61 | 0.559 |
+| novelty | 0.63 | 0.428 |
+| hf | 0.57 | 0.475 |
+| dive | 0.69 | 0.490 |
+| pull | 0.83 | 0.532 |
+| hub-pull | - | 0.444 |
+
+(These totals also contain the concurrent macro/novelty/pull/dive work of the other agent that was merged in; the A/B table above isolates the flood kernels.)
+Parity after every step, final tree: `bench/lane-parity.py` full/macro/novelty/pull/fa2/dive 24/24 at 2000 nodes, `bench/hf-parity.py` 24/24 (2000), `bench/hubgen-parity.py` 24/24 (2000),
+`bench/hub-parity.py` hub-pull 24/24 (1000/20000 and 256/100000), 21 wide/tall edge-case levels and 10 wide/tall synthetic levels identical to Go in macro/fa2/novelty/pull,
+`bench/bin-parity.py` vs the pre-change binary 24/24 in 7 lanes with all `SOKSOLV_CHECK_*` switches on, `dotnet test` 282/282 (277 + `RowKTests`).
+
+### What did not work / not done
+* **Instruction counts are not the target**: variants with fewer instructions (`chainadd` 589 Ir, `dirty` 739 Ir) lose to `chain4ks3` (736 Ir, 5.5 mispredicts) in time; `runs` (tzcnt/lzcnt run extraction) loses on both.
+* **Sweeps** (`sweep*`: up/down passes in registers, no worklist): fewer mispredicts, but 800+ Ir because every pass walks the whole span and a verification pass is needed.
+* **cmov direction choice** (`chain5ks3`), eager neighbour loads (`chain2add`): slower than the branchy-but-predictable chain.
+* **Reusing one base region per box search for `BbFlood`** (child region = base component minus the new box cell when the 8-ring proves no split): the ring test passes for only 25-40% of the pushes
+  (corridors split), and a base flood per box search costs as much as the 1.3 floods a box search has on average. Not done (same conclusion as the earlier macro-open notes).
+* **Early-exit / small-side-first for the cluster `viaScr` floods**: 56-87% of those floods end with "no split" (lost cells average 8-10 vs 35-47 cells per region, so the cut-off pieces are small),
+  but any local proof (dilation from the neighbours of t, lockstep floods) costs about as much as the flood it replaces on regions this small. Per-state articulation sets (one Tarjan per stored
+  region, ~7 viaScr moves per expanded state) would save ~0.8k of ~12k instructions per state. Not done.
+* **Row-word arithmetic for the cluster try loop** (`SearchBfsBits`: region/free/alive bits instead of table lookups): +2% Ir, no CPU change; reverted. The loop is register-spill bound (22 instructions per try, 600k tries on Holland).
+* **Per-box-search Tarjan for `BbFlood`** (cut vertices + subtree sizes to flood only the small side): 4.5k Ir per call x 4168 box searches per 78 nodes on Holland vs 5.5k Ir for all the floods.
+* **Dead-zone seeded floods on the kernel** (`FloodFreeDirty` closed mode = `RowK.Flood` from the cells of p's row, open mode = a `RowK.Grow` that re-derives the dirty rows and returns the exact changed-row mask; verified
+  identical incl. `fdChg` against the old loop in all 7 lanes): instructions +1%, CPU -1.5..+2% (noise); reverted to keep the code small.
+* **`-p:IlcInstructionSet=x86-64-v3`** (BMI1/2, LZCNT, AVX2): -2.8% instructions (andn, blsr, tzcnt, shlx), +1.5% CPU at best (within noise); not adopted. The default AOT target here reports
+  `Bmi1/Bmi2/Lzcnt/Avx2/Vector256 = False` (checked with `FloodBench isa`; `Popcnt`, `Ssse3`, `Sse42`, `Vector128` = True; `BitOperations.TrailingZeroCount` compiles to `bsf`), the v3 build reports all True.
+* **Dead-zone floods** (`FloodFreeDirty` closed/open-seeded modes 120k calls = 4% of a macro run, `DeadAfterCore`/`BuildZoneCells` scalar corral floods, `SearchBits`): the cell order of the
+  BFS-built corral lists feeds zone construction, so moving them to row floods changes the exploration order and risks parity; only the order-independent parts were moved.
+* Hub-gen `BiconBits` (8-connected flood of the blocked cells) and the planners' queue floods (`Planner4.Flood`, `PiecesFlood`, `CutScan.CutDfs`: low-link DFS, 7% of macro at 1200 nodes) are not
+  row floods and were left alone.
+
+### Remaining (flood family)
+`BbFlood` is still 3-4% of macro/novelty/hf (one flood per push, 1150 Ir per call on large regions), cluster `SearchBfsBits`+`FastPlayerB` 4-7% (spill-bound try loop, ~34% of tries need a split
+flood), `RegionsBits` 1%, `MPieces` 1%, dead-zone `SearchBits`/`EscapeRows`/`FloodFreeDirty` 8-15% on dead-zone heavy levels.

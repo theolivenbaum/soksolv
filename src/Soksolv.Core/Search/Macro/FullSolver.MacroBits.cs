@@ -428,15 +428,16 @@ public sealed unsafe partial class FullSolver
         return t;
     }
 
-    int mCompsF, mSplitSeen, mPiecesUsed; bool mArtDone;
+    int mCompsF, mSplitSeen, mPiecesUsed; bool mArtDone;   // per box search: components of the free floor (searched box lifted), separator candidates served by MPieces, whether MArtic ran
     const int PiecesLimit = 6;   // separator candidates per box search served by local floods before the Tarjan pass takes over
-    public static bool PiecesOff = Environment.GetEnvironmentVariable("SOKSOLV_PIECES_OFF") == "1";   // test hook   // per box search: components of the free floor (searched box lifted), and whether MArtic ran
+    public static bool PiecesOff = Environment.GetEnvironmentVariable("SOKSOLV_PIECES_OFF") == "1";   // test hook
     public static bool RegionRingOff = Environment.GetEnvironmentVariable("SOKSOLV_REGRING_OFF") == "1";   // test hook
 
     /// <summary>
     /// Number of empty-floor regions of the child (t occupied, the searched box lifted) for the 1st, 2nd, ... alive candidate of a box search.
     /// A candidate whose 8-ring shows it cannot split its component removes 0 or 1 pieces (an isolated cell vanishes): the child's count follows from the
-    /// component count of the floor without t, learned from an earlier such candidate; only separator cells need the Tarjan pass (<see cref="MArtic"/>).
+    /// component count of the floor without t, learned from an earlier such candidate; separator cells add the local pieces count (<see cref="MPieces"/>), and only a box search with many
+    /// separator candidates falls back to the Tarjan pass (<see cref="MArtic"/>).
     /// </summary>
     int MChildRegionCount(int t, int nth)
     {
