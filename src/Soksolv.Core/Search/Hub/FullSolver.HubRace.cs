@@ -102,7 +102,7 @@ public sealed unsafe partial class FullSolver
         long slice = opt.HubNodeSlices;
         double festbUnit = nodeMode ? slice : FestbUnitMs;     // pseudo-time unit: ms (wall) or expansions (node mode)
         double pullSlice = festbUnit, fwdT = 0;
-        long nodesTotal = 0;
+        long nodesTotal = 0, peakBytes = 0;
         bool backDone = false;
         var tipBoxes = new int[ps.n];
         var v0 = st;
@@ -118,7 +118,7 @@ public sealed unsafe partial class FullSolver
         SolveResult Done(SolveResult res, string reason = "")
         {
             if (!res.Solved && reason != "") res.Reason = reason;
-            res.Nodes = nodesTotal; res.Fingerprint = Fp();
+            res.Nodes = nodesTotal; res.Fingerprint = Fp(); res.PeakBytes = Math.Max(peakBytes, (long)(ps.RaceBytes + (baseF?.RaceBytes ?? 0)));
             return res;
         }
         while (Live())
@@ -229,6 +229,7 @@ public sealed unsafe partial class FullSolver
                                      timeLimitSec, sw, out float prog, out long usedT, out bool reached, out int ext);
             trialF = null;
             S.Exp += usedT;
+            peakBytes = Math.Max(peakBytes, (long)(ps.RaceBytes + (baseF?.RaceBytes ?? 0)) + lastTrialBytes);
             baseQuota = Math.Max((long)(usedT * HubRaceBaseFrac / (1 - HubRaceBaseFrac)), HubRaceUnit);
             S.Extensions += ext;
             fwdT += nodeMode ? usedT : (sw.Elapsed - tt0).TotalMilliseconds;
@@ -247,6 +248,8 @@ public sealed unsafe partial class FullSolver
     static bool SameTarget(TowardTarget a, TowardTarget b) => a.Player == b.Player && a.Boxes.AsSpan().SequenceEqual(b.Boxes);
 
     /// <summary>Go raceTrial: one forward trial at tgt with an expansion budget, doubled while the best (boxes on hub, matching distance) improved in the window's second half (at most maxExp in all).</summary>
+    [ThreadStatic] static long lastTrialBytes;
+
     static string? RaceTrial(FullSolver ps, string[] rows, Level lv, FullOptions opt, TowardTarget tgt, long budget, long maxExp, bool nodeMode, Func<ulong> peerBytes, Action<FullSolver> register,
                              double timeLimitSec, Stopwatch sw, out float frac, out long used, out bool reached, out int ext)
     {
@@ -260,6 +263,7 @@ public sealed unsafe partial class FullSolver
         {
             double left = timeLimitSec > 0 ? Math.Max(0.001, timeLimitSec - sw.Elapsed.TotalSeconds) : 0;
             string? sol = f.TowardRun(nodeMode ? 0 : left, out var r);
+            lastTrialBytes = (long)f.RaceBytes;
             for (int id = scanned; id < f.hfOwn.Count; id++)
             {
                 var t = f.hfOwn[id];

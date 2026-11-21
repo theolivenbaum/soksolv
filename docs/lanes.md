@@ -398,3 +398,12 @@ in node-slice mode), memory: every tree counts the lane's other trees (`FullOpti
    `hub-gen` (`laneShares`: weight 1, FestB slot `Budget7/Tracked7/8/11`).
 4. **Meetings for the hub lanes**: `Back`/`Fwd` owners 4 (festb) and 5 (festx) in `MeetNet`, `meet` hooks in the toward engine (forward adds probe `Back`, posts to the pull mailbox),
    `pullCheckMail` drain while the forward trees run (Go `startDrain`), `publishPullBest` for the `toward` lane.
+
+### hub-pull results (15th fork; machine: shared 4-core Xeon, JIT build, `-strategy hub-pull -procs 1 -t 10`, 3 runs per level)
+* **Node-slice parity** (`bench/hub-parity.py`, retarget reuse on, vs the patched Go): testdata (24 files) 24/24 identical at slice/nodes 256/100k, 1000/120k, 4000/150k, 1000/20k;
+  no-reuse ablation (`RETARGET_REUSE=0`, 512/60k) 24/24; LTS 42-level list at 1000/60k 42/42. Compared: solved, pushes and the 11 HUBRACE counters (pull/base/forward expansions,
+  trials, strata created/kept, reached, extensions, retries, shared-table skips, base runs).
+* **Real wall-clock behaviour** (`bench/hub-timing.py hub-pull 10 3`): testdata 24 levels: Go 54 / C# 54 solved runs (of 72); the 28 hard levels (`hard.tsv`): Go 27 / C# 31 solved runs of 84
+  (C# solved Sasquatch_50 #30 3/3, #39 1/3, Sasquatch_VII_50 #38 3/3 where Go did not; Go solved Sasquatch_VII_50 #27 3/3 where C# did not — scheduling-sensitive levels).
+  Time per solved level is higher in C# on the quick levels (JIT start ~0.1-0.5 s; e.g. SokEvo_107_55 0.28 s vs 0.40 s) and comparable on the slow ones (Holland_81_43 3.5 s vs 4.5 s).
+  Peak memory (reported tree bytes): Holland_81_43 38 vs 27 MB, Grigr2002_40_24 26.5 vs 25.6 MB.

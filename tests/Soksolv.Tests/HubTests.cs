@@ -220,4 +220,18 @@ public class PfFestTests
         Assert.True(r.Solved, r.Reason);
         Assert.Null(Verifier.CheckSolution(rows, r.Solution));
     }
+
+    // Retarget reuse (Go default): a changed pull best retargets the base forward tree (baseRuns=2); golden from the node-slice Go reference
+    // `SOKSOLV_NODESLICES=4000 soksolv -strategy hub-pull -procs 1 -nodes 150000 -no-meet -lane-revive=false`.
+    [Fact]
+    public void HubPull_RetargetReuseMatchesGo()
+    {
+        var rows = TestData.Rows("SokEvo_107_82");
+        var o = new FullOptions { NodeBudget = 150000, HubNodeSlices = 4000, SharedClusters = new ClusterTable(16), SharedPenalties = new ClusterTable(16) };
+        var r = FullSolver.SolveHubPull(rows, o, 0);
+        Assert.True(r.Solved, r.Reason);
+        Assert.Equal("pull=16000 base=40094 trials=3 fwd=12288 strata=17 added=17 reached=0 ext=0 retries=0 shared=0 baseRuns=2", r.Fingerprint);
+        Assert.Equal(51, r.Solution.Count(char.IsUpper));
+        Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+    }
 }
