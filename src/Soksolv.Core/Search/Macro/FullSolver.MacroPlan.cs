@@ -248,7 +248,7 @@ public sealed unsafe partial class FullSolver
             var dirs = s.dirs;
             if (cut == null)
             {
-                cblk = new byte[s.cells]; cut = new CutScan(s.cells, dirs, cblk);
+                cut = new CutScan(s.cells, dirs); cblk = cut.Blk;
             }
             for (int c = 0; c < cblk!.Length; c++) cblk[c] = (byte)(s.wall[c] ? 1 : 0);
             foreach (int bx in boxes) cblk[bx] = 1;
@@ -284,7 +284,7 @@ public sealed unsafe partial class FullSolver
                     int to = c + d, pl = c + 2 * d;
                     if (s.wall[to] || occ[to] || s.wall[pl] || occ[pl]) continue;
                     // player's region with the box on `to`: flood from pl with `to` blocked (cut scan answer)
-                    var (np, sides) = cut.CutQuery(to, pl);
+                    int np = cut.CutQueryDir(to, k & 3, out int sides);
                     for (int di = 0; di < 4; di++)
                     {
                         int k2 = to * 4 + di;

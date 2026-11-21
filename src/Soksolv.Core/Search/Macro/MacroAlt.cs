@@ -116,7 +116,7 @@ public sealed unsafe partial class FullSolver
         t.Start();
         SolveResult r;
         try { r = RingRun(lv, rows, opt, timeLimitSec, sw, baton, 0); }
-        catch (Exception e) { r = new SolveResult { Reason = "macro: " + e.GetType().Name + " " + e.Message }; }
+        catch (Exception e) { if (Environment.GetEnvironmentVariable("SOKSOLV_EXTRACE") == "1") Console.Error.WriteLine(e.ToString()); r = new SolveResult { Reason = "macro: " + e.GetType().Name + " " + e.Message }; }
         baton.Done(0, r.Solved);   // a solve stops the other engine; otherwise it continues alone
         t.Join();
         SolveResult res;
