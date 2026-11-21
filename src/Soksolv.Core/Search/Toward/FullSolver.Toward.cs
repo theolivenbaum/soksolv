@@ -141,6 +141,30 @@ public sealed unsafe partial class FullSolver
         return (tail.Length > 0 || tgtFull.Tail.Length == 0) && Verifier.Check(rows, sol) == null ? sol : null;
     }
 
+    /// <summary>Go hfFrozenOff: a box off the target squares sits in a 2x2 block of walls and boxes (occ holds the position).</summary>
+    bool HfFrozenOff(ReadOnlySpan<int> boxes)
+    {
+        int w = W;
+        foreach (int t in boxes)
+        {
+            if (tgt![t]) continue;
+            Span<int> tls = [t, t - 1, t - w, t - w - 1];
+            foreach (int tl in tls)
+                if ((wall[tl] || occ[tl]) && (wall[tl + 1] || occ[tl + 1]) && (wall[tl + w] || occ[tl + w]) && (wall[tl + w + 1] || occ[tl + w + 1])) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Go hfKey.better: a matching to the target exists, fewer regions, more boxes on the target, fewer hotspots, smaller matching distance.</summary>
+    static bool HfKeyBetter(bool nmA, int regA, int onA, int hotA, int dA, bool nmB, int regB, int onB, int hotB, int dB)
+    {
+        if (nmA != nmB) return !nmA;
+        if (regA != regB) return regA < regB;
+        if (onA != onB) return onA > onB;
+        if (hotA != hotB) return hotA < hotB;
+        return dA < dB;
+    }
+
     /// <summary>The best node of a finished pull search as a toward target (Go bestTarget).</summary>
     TowardTarget? BestTarget()
     {

@@ -11,7 +11,7 @@ public sealed unsafe partial class FullSolver
     readonly List<ulong[]?> mNovSeen = new(), mNovPushSeen = new();
     readonly HashSet<ulong> mNovPairs = new(), mNovAccess = new();
     readonly List<ulong> mNovWords = new(), mNovT0 = new(), mNovT1 = new();
-    long mParentSpread;
+    long mParentSpread; bool mParentFrozen;
     int mOpenId, mOpenCands, mParentOop, mParentRoom, mParentConn, mParentPackedF; uint mOpenSt; int[]? mHotCounts;
     DisplacementLandmarks? dl; bool dlInit; ulong mCmdMask, mUnpinMask;
 
@@ -65,6 +65,9 @@ public sealed unsafe partial class FullSolver
         {
             // Festival's forward HF order: connectivity, boxes on target, hotspots against the target, min-cost matching distance
             parentOop = maux[id].Reg; parentRoom = HotRel(cur); parentHot = MatchDist(cur);
+            mParentFrozen = false;
+            if (opt.HfFrozenMatch && HfFrozenOff(cur)) { parentHot = Math.Max(parentHot, 1 << 20); mParentFrozen = true; }
+            if (opt.HfMatchFirst && parentHot >= 1 << 20) parentOop += HfNoMatch;
         }
         int parentPhase = mPlan != null ? mPlan.Status(occ).phase : -1;
         long tc = Prof.Start();
@@ -112,6 +115,21 @@ public sealed unsafe partial class FullSolver
                 if (!basinInside[b] && !(mPlan != null ? mPlan.Placed(b, parentPhase) : goal[b]) && (nearest < 0 || basinDist![b] < basinDist[cur[nearest]])) nearest = i;
             }
         int oopFrom = nearest >= 0 ? cur[nearest] : 0, oopNear = 1 << 30;
+        if (hfRank && opt.HfOneAdvisor)
+        {
+            // Festival's HF search has one advisor: the best child strictly better than the parent in its HF order
+            int bestA = -1;
+            for (int k = 0; k < nm; k++)
+            {
+                ref var m = ref mCands[k];
+                if (Feat(6) && m.RevBad) continue;
+                if (HfKeyBetter(m.Hot >= 1 << 20, m.R, m.Packed, m.Room, m.Hot, parentHot >= 1 << 20, parentConn, parentPacked, parentRoom, parentHot)
+                    && (bestA < 0 || HfKeyBetter(m.Hot >= 1 << 20, m.R, m.Packed, m.Room, m.Hot, mCands[bestA].Hot >= 1 << 20, mCands[bestA].R, mCands[bestA].Packed, mCands[bestA].Room, mCands[bestA].Hot)))
+                    bestA = k;
+            }
+            packingK = bestA;
+        }
+        else
         for (int k = 0; k < nm; k++)
         {
             ref var m = ref mCands[k];
@@ -158,6 +176,7 @@ public sealed unsafe partial class FullSolver
         if (openerK >= 0) mWeights[openerK] = 0;
         if (oopK >= 0) mWeights[oopK] = 0;
         if (dispK >= 0) { mWeights[dispK] = 0; stats.DispAdvisor++; }
+        if (hfRank && opt.HfUnweighted && (mNodeLimit <= 0 || mExpandedN < mNodeLimit * 3 / 4)) Array.Clear(mWeights, 0, nm); // Festival's HF search runs its first 3/4 unweighted
         int noveltyN = NoveltyBudget();
         for (int k = 0; k < nm; k++) mCands[k].Tier = noveltyN > 0 ? 3 : 0;
         if (noveltyN > 0)
@@ -449,6 +468,9 @@ public sealed unsafe partial class FullSolver
                 cur.CopyTo(hfBoxes);
                 hfBoxes[i] = t;
                 oop = r; room = HotRel(hfBoxes); hotOverride = MatchDist(hfBoxes);
+                // Festival predicts a child's distance with only the moved box (and the parent's frozen boxes) pinned
+                if (opt.HfFrozenMatch && (mParentFrozen || HfFrozenOff(hfBoxes.AsSpan(i, 1)))) hotOverride = Math.Max(hotOverride, 1 << 20);
+                if (opt.HfMatchFirst && hotOverride >= 1 << 20) oop += HfNoMatch;
             }
             bool cUndo = false, cInternal = false, cDeadChild = false, cGroupDup = false, cDistinct = false; ulong cExit = 0;
             if (Feat(6) && !mReopening)

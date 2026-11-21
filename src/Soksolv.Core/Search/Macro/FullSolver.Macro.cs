@@ -150,8 +150,14 @@ public sealed unsafe partial class FullSolver
         if (a.Connectivity != b.Connectivity) return a.Connectivity < b.Connectivity;
         return a.RoomConnectivity < b.RoomConnectivity;
     }
-    static bool ProgressBetter(in FeatureCell a, in FeatureCell b)
+    bool ProgressBetter(in FeatureCell a, in FeatureCell b)
     {
+        if (hfRank && opt.HfBestFest) // best-so-far in Festival's HF order: connectivity, imagine, hotspots
+        {
+            if (a.Oop != b.Oop) return a.Oop < b.Oop;
+            if (a.Packed != b.Packed) return a.Packed > b.Packed;
+            return a.Connectivity < b.Connectivity;
+        }
         if (a.Packed != b.Packed) return a.Packed > b.Packed;
         if (a.Connectivity != b.Connectivity) return a.Connectivity < b.Connectivity;
         if (a.RoomConnectivity != b.RoomConnectivity) return a.RoomConnectivity < b.RoomConnectivity;
@@ -238,7 +244,7 @@ public sealed unsafe partial class FullSolver
         if (opt.Net != null) { if (pull) PullMeetAdd(id, boxes, player); else MeetAdd(id, boxes, player); }
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = Regions();
-        var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
+        var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
                           : new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
         int bucket = Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
