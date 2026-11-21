@@ -82,3 +82,32 @@ What helped
 What did not work
 * Skipping repeated cluster/dead-zone proofs (memo of (state,t) results, and skipping the pop-time check for edges verified at expansion) saved 5-15% but is NOT parity-exact: the checkers are history dependent (Sven_1623#901 diverges, 1298 vs 1314 nodes). Kept behind `SOKSOLV_FA2MEMO=1`, off by default.
 * Remaining fa2 gap is the dead-zone prover (`DeadZoneChecker.Search/EscapeBits`, 45% on Sasquatch_IV) and the macro box search; both are outside these files. Factor needs plan4 (`CutScan`, `Expand4`) work.
+## macro family (macro, novelty, pull, hf)
+
+Equal-work CPU time (child user+sys, `-parity`, AOT, same minute as Go; machine heavily loaded, +-10% noise; deterministic C# callgrind
+instruction counts used to guide the work: 3000-node macro runs on 6 testdata levels 18.1G -> 14.7G Ir before the later steps).
+
+| lane (6 testdata levels, 5000 nodes) | before (cs/go) | after (cs/go) |
+|---|---|---|
+| macro | 0.94-1.13 | 0.75 |
+| pull | 0.93 | 0.90 |
+| novelty | 0.87 (Holland 1.56) | 0.62 |
+| hf | 0.89 | 0.67 |
+| wide levels, macro, 8 levels | 1.03 | 0.92 (SokHard_163#36 0.51, Sven_1623#10 1.16) |
+
+Parity (all exact): macro/pull/novelty 23/23 testdata at 3000 nodes, macro wide 12/12 at 600, hf 24/24 at 3000 (`bench/hf-parity.py`), `dotnet test` green.
+Allocation: 0.1 KB/node garbage-or-growth (Holland alloc_mb 13.1 @8000 nodes vs 13.9 @16000; 1 gen0 GC), per-node Sort delegates removed.
+
+Wins (each verified with `SOKSOLV_CHECK_*` reference hooks where one exists):
+* incremental room connectivity (Go roomConnChild: only corridor components next to b/t relabelled, only affected rooms re-evaluated; interior-move shortcut;
+  single-word pointer kernel for <=64 rooms) - `SOKSOLV_CHECK_ROOMS=1`.
+* pointer Tarjan articulation pass for child region counts (`MArtic`), 2x faster than the array version.
+* plan queries O(1) per candidate: candidate phases (Miss<=1), per-node out-of-plan cache per phase, Festival packed via permanent-missing count.
+* displacement: bitmask augmenting-path matching (was 18% of Sasquatch_VI#34), early-exit canWalk precompute.
+* v1 sink planner (novelty lane) uses the cut scan (`CutScan.cs`, extracted from plan4) instead of a flood per pull state and per advisor candidate - `SOKSOLV_CHECK_CUT=1`.
+* plan4: clear occupancy by memcpy, SCC elim with arrays and `blk`, pointer region labelling; packing-route flood on pointers.
+* dirty-row worklist `FloodRows`, move-access clipped to the region's rows, allocation-free merge sort of move keys / insertion sorts.
+
+Did not work: restricting row sweeps to the region's row span for the box-search flood (no gain: regions already small; pair-search floods dominate FloodRows).
+Remaining: ClusterChecker.Region is the top item on long runs (not in this area); pair-search floods; plan4 expansion (ComputeElim4/Expand4/CutQueryFill) ~20% on 50-box levels;
+full-DFS articulation per box; room-fragment recomputation on Holland-like levels. Targets of <=0.5x Go are met only on some levels (novelty/hf/SokHard), not overall.
