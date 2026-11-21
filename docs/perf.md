@@ -291,10 +291,10 @@ novelty lane, `PackingPlan`), `Macro/CutScan.cs` (low-link scan answering pull-s
 
 | workload | before | after |
 |---|---|---|
-| plan4 setup, Sasquatch II_50#25 (200000 expansions, 50 boxes): C# s / Go s | 76 / 75 (1.0x) | 40 / 76 (0.52x); steady Ir per expansion 1.58M -> 0.80M |
-| macro, 12 wide levels (bench/wide-levels.tsv) | 0.92 | 0.55 |
-| fa2, 12 wide levels | 0.80 | 0.62-0.66 (Sasquatch_VI_50#48: 18.1 s Go, 10.9 s C#; 120 nodes 7.5 s -> 0.84 s) |
-| novelty, 12 wide levels | 0.70 | 0.6-0.65 |
+| plan4 setup, Sasquatch II_50#25 (200000 expansions, 50 boxes): C# s / Go s | 76 / 75 (1.0x) | 36 / 80 (0.44x, two reps); steady Ir per expansion 1.58M -> 0.77M |
+| macro, 12 wide levels (bench/wide-levels.tsv) | 0.92 | 0.55-0.58 |
+| fa2, 12 wide levels | 0.80 | 0.66 (Sasquatch_VI_50#48: 18.1 s Go, 10.9 s C#; 120 nodes 7.5 s -> 0.84 s) |
+| novelty, 12 wide levels | 0.70 | 0.70 (setup is small there; the rest is outside the planners: move access, FloodRows, novelty hash) |
 | macro / novelty / fa2, 22 testdata levels, 5000 nodes | 0.75 / 0.62 / 0.83 | 0.64 / 0.63 / 0.62 |
 
 Parity: `bench/lane-parity`-style full-statistics comparison (solved/nodes/pushes/stored/generated/duplicates/fingerprint/solution) of the new AOT binary against the pre-change AOT
@@ -320,7 +320,7 @@ Allocation: plan4 growth storage (nodes, boxes, used sets, kids) is native chunk
 6. **`Separated`** (sink gating): the depth-5 BFS per candidate became a lazily built per-cell bitset ball (12% of Sasquatch_IV setup -> 1.6%).
 7. **fa2 hot sides / out-of-plan zones (Go hsZones, hsReachGoal, sourcesOf)** were 80% of fa2 on Sasquatch_VI_50#48 (O(cells^2) floods per blocker and per plan step). `CellPieces`
    (one low-link DFS giving, for every cell, which neighbours stay connected without it) replaces the zone floods and the per-state flood of `SourcesOf`; the 50 per-goal reverse BFS per
-   blocker became one Tarjan condensation of the (cell, side) graph with goal bitmasks flowing once per edge. 46.5G -> 13.1G -> ~6G Ir on that level.
+   blocker became one Tarjan condensation of the (cell, side) graph with goal bitmasks flowing once per edge. 46.5G -> 13.1G -> 7.2G Ir on that level.
 8. v1 planner: the advisor's second pass re-filled a cutscan record per candidate in a new lift context; the piece count of the BFS state is the same number (stored); LINQ gone from `Run`.
 9. Smaller: pinned arrays + one `PullBox` method per box (register pressure: Expand4 as one method spilled ~40% of its instructions), merged candidate/beam pass, `FestPlan.Packed` on flat arrays.
 
