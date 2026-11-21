@@ -26,6 +26,9 @@ public sealed class RevOptions
     public long WalkAfter = 5000; public int WalkCount = 16, WalkLen = 50;
     public volatile bool Stop;
     public CancelFlag? Cancel;
+    /// <summary>Meeting network (null: none). The reverse lane adds to Net.Back, probes Net.Fwd and reads mailbox BackOwner of Net.Back.</summary>
+    public Meet.MeetNet? Net;
+    public int BackOwner;
 }
 
 /// <summary>
@@ -305,6 +308,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             k = Math.Max(0, k - provU);
         }
         cellq?.Push(k, h, id);
+        if (opt.Net != null) MeetAdd(id, boxes, player);
         if (store.NeedsGrow)
         {
             ulong needed = TrackedBytes() + (ulong)store.TableSlots * 16;
@@ -495,6 +499,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             {
                 long now = clock.ElapsedMilliseconds;
                 if ((limitMs > 0 && now > limitMs && opt.NodeBudget == 0) || opt.Stop || (opt.Cancel?.Stopped ?? false)) return new SolveResult { Reason = "timeout", Nodes = expanded };
+                if (opt.Net != null && MeetCheckMail() is { } met) { foreach (int b in cur) SetOcc(b, false); return new SolveResult { Solved = true, Solution = met, Nodes = expanded }; }
                 if (now - lastMem > 50)
                 {
                     lastMem = now;
@@ -545,6 +550,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             if (supZero && !opt.NoMacros) PlacementMacros(id, cur, child);
             Prof.Stop(21, tm);
             foreach (int b in cur) SetOcc(b, false);
+            if (meetPending.Count > 0) MeetPost(cur);
         }
         return new SolveResult { Reason = "exhausted", Nodes = expanded };
     }

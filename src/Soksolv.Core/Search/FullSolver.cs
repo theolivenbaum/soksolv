@@ -31,6 +31,9 @@ public sealed class FullOptions
     public Search.DeadZone.DeadZoneTable? SharedDeadZone;
     public volatile bool Stop;
     public CancelFlag? Cancel;
+    /// <summary>Bidirectional meeting network (null: no meetings). Forward lanes add to Net.Fwd, probe Net.Back, read mailbox MeetOwner of Net.Fwd.</summary>
+    public Meet.MeetNet? Net;
+    public int MeetOwner;
     /// <summary>Macro lane: highest ported feature stage (1..5) and the stage-6 default-on feature mask (bit0 move windows, ...).</summary>
     public int MacroStage = 5, MacroFeatures = 255; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     /// <summary>Go StallFinish (timed runs only): when the best node stops improving, try a short private backward search toward it.
