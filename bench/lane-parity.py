@@ -15,12 +15,15 @@ else: specs = [(l.split("\t")[0], int(l.split("\t")[1])) for l in open(src) if l
 env = dict(os.environ, PATH=os.environ["PATH"] + ":/root/.dotnet", DOTNET_ROOT="/root/.dotnet")
 def run(c):
     r = subprocess.run(c, shell=True, capture_output=True, text=True, env=env, timeout=300)
-    try: j = json.loads(r.stdout); return (j["solved"], j["nodes_expanded"], j["pushes"])
+    try:
+        j = json.loads(r.stdout)
+        if os.environ.get("PARITY_FULL"): return (j["solved"], j["nodes_expanded"], j["pushes"], j.get("stored", j.get("stats", {}).get("stored")), j.get("generated", j.get("stats", {}).get("generated")), j.get("duplicates", j.get("stats", {}).get("duplicates")))
+        return (j["solved"], j["nodes_expanded"], j["pushes"])
     except Exception: return ("ERR", r.stderr[-120:].replace("\n", " "), 0)
 bad = 0; n = 0
 for f, i in specs:
-    g = run(f"nice -n 10 {go} -strategy {strat} -procs 1 -nodes {nodes} -t 120 {flags} '{f}' {i}")
-    c = run(f"nice -n 10 {cs} -strategy {strat} -parity -nodes {nodes} -t 120 {flags} '{f}' {i}")
+    g = run(f"nice -n 10 {go} -strategy {strat} -procs 1 -nodes {nodes} -t 120 {os.environ.get("GO_EXTRA","")} {flags} '{f}' {i}")
+    c = run(f"nice -n 10 {cs} -strategy {strat} -parity -nodes {nodes} -t 120 {os.environ.get("CS_EXTRA","")} {flags} '{f}' {i}")
     n += 1
     if g != c:
         bad += 1; print(f"DIFF {os.path.basename(f)}#{i}: go {g} cs {c}", flush=True)

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Soksolv.Model;
+using Soksolv.Search.Hub;
 using Soksolv.Search.Macro;
 
 namespace Soksolv.Search;
@@ -35,10 +36,10 @@ public sealed unsafe partial class FullSolver
     {
         public int I, B, T, R, Packed, Plen, Side, Room, Oop, Progress, Hot, Mobility; public bool Explorer;
         public ulong ScoreKey;
-        public bool Undo, Internal, DeadChild, GroupDupExit, DistinctExit; public ulong ExitKey; public int AccStart, AccLen, Tier;
+        public bool Undo, Internal, DeadChild, GroupDupExit, DistinctExit, Stored; public ulong ExitKey; public int AccStart, AccLen, Tier;
         public readonly bool RevBad => Undo || Internal || DeadChild;
     }
-    struct MKey { public int Bad, W, Tier, Oop, Packed, R, Room, Hot, Mobility, Plen, Idx; }
+    struct MKey { public int Bad, W, Tier, Oop, Packed, R, Room, Hot, Mobility, Plen, Y, Idx; }
     Search.DeadZone.DeadZoneChecker? dz;
     MCand[] mCands = new MCand[64]; int mCandN;
     int[] mWeights = new int[64]; MKey[] mKeys = new MKey[64];
@@ -225,7 +226,7 @@ public sealed unsafe partial class FullSolver
             bool lowerWeight = w < nodes.W(id);
             if (MCreatesCycle(id, parent)) return -1;
             nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; a.PushTo = (ushort)to;
-            uint newBucket = (uint)(hfRank && opt.HfFestSched ? HfSchedReparent(id, parent) : Project(a.Actual, parent));
+            uint newBucket = (uint)(pfOn ? PfReparent(id, parent) : hfRank && opt.HfFestSched ? HfSchedReparent(id, parent) : Project(a.Actual, parent));
             bool movedCell = newBucket != a.Bucket;
             if (lowerWeight || movedCell)
             {
@@ -250,9 +251,9 @@ public sealed unsafe partial class FullSolver
         if (opt.Net != null) { if (pull) PullMeetAdd(id, boxes, player); else MeetAdd(id, boxes, player); }
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = Regions();
-        var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
+        var cell = pfOn ? default : hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
                           : new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
-        int bucket = hfRank && opt.HfFestSched ? HfSchedAdd(boxes, cell, parent, reg) : Project(cell, parent);
+        int bucket = pfOn ? PfAdd(boxes, parent, reg) : hfRank && opt.HfFestSched ? HfSchedAdd(boxes, cell, parent, reg) : Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
         if (nodes.NeedsGrow) nodes.Grow();
         return id;
@@ -341,6 +342,7 @@ public sealed unsafe partial class FullSolver
     bool MSelect(out FessEntry result)
     {
         mTurn++;
+        if (pfOn && mTurn % PfTypes == 1 && mqueues.Count > 0 && MSelectType(out result)) return true; // exp-279: type-based exploration
         if (mTurn % 2 == 0 && mBest >= 0)
         {
             int cell = (int)maux[mBest].Bucket;
@@ -371,7 +373,8 @@ public sealed unsafe partial class FullSolver
     void MNoteBest(int id)
     {
         if (id < 0 || maux[id].Dead != 0) return;
-        if (mBest < 0 || maux[mBest].Dead != 0 || (hfRank && opt.HfFestSched ? HfBetter(hfBest[id], hfBest[mBest]) : ProgressBetter(maux[id].Actual, maux[mBest].Actual))) { if (pull && !FeasibleNode(id)) return; mBest = id; mLastImproveMs = clock.ElapsedMilliseconds; }
+        foreach (var st in strataT) StrataOffer(st, id);
+        if (mBest < 0 || maux[mBest].Dead != 0 || (pfOn ? PfFest.Tuple.Better(pfBest[id], pfBest[mBest]) : hfRank && opt.HfFestSched ? HfBetter(hfBest[id], hfBest[mBest]) : ProgressBetter(maux[id].Actual, maux[mBest].Actual))) { if (pull && !FeasibleNode(id)) return; mBest = id; mLastImproveMs = clock.ElapsedMilliseconds; }
     }
 
     // ---- StallFinish (Go fess_search.go finishFromBest) ------------------------------------------------------------------------------------

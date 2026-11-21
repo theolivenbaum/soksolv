@@ -1,0 +1,1020 @@
+HUB strata=base k=0 sig=0 id=4 depth=4 on_goal=0 reg=1 rooms=0 hot=0 dist=132
+#########
+###@   ##
+### $$ ##
+#####  ##
+## $   ##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v0 k=0 sig=fa181403a7663586 id=554 depth=6 on_goal=3 reg=1 rooms=0 hot=0 dist=92
+#########
+###@   ##
+### $  ##
+#####  ##
+##     ##
+# $$$# ##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=1 sig=ecc0542e15f4fa6d id=107 depth=5 on_goal=2 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $$ ##
+#####  ##
+##     ##
+# $$ # ##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=2 sig=e95996aeb1a6b5f0 id=16 depth=5 on_goal=1 reg=1 rooms=0 hot=0 dist=132
+#########
+###@   ##
+### $$ ##
+#####  ##
+##     ##
+#  $ # ##
+# $     #
+##  #   #
+#########
+HUB strata=v0 k=3 sig=f61611d92f01acf7 id=4 depth=4 on_goal=0 reg=1 rooms=0 hot=0 dist=132
+#########
+###@   ##
+### $$ ##
+#####  ##
+## $   ##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v0 k=4 sig=f178cb03a286e056 id=137 depth=4 on_goal=3 reg=1 rooms=1 hot=0 dist=32
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+# $$$# ##
+#   $   #
+##  #   #
+#########
+HUB strata=v0 k=5 sig=915bad0bf8a866c8 id=26 depth=1 on_goal=3 reg=1 rooms=1 hot=1 dist=40
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+#$ $$#$##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=6 sig=f167cc03a2786ed6 id=181 depth=5 on_goal=3 reg=1 rooms=1 hot=0 dist=32
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+# $$$# ##
+#    $  #
+##  #   #
+#########
+HUB strata=v0 k=7 sig=ed6930d92a16cb23 id=49 depth=5 on_goal=0 reg=1 rooms=0 hot=0 dist=132
+#########
+###@   ##
+### $$ ##
+#####  ##
+##   $ ##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v0 k=8 sig=337213d0c5291291 id=185 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=132
+#########
+###@   ##
+### $  ##
+#####$ ##
+## $   ##
+#    #$##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=9 sig=fe0c7e2e1fbf3171 id=38 depth=2 on_goal=2 reg=1 rooms=1 hot=0 dist=32
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+#$  $# ##
+#  $$   #
+##  #   #
+#########
+HUB strata=v0 k=10 sig=f60be0d92ef9052f id=189 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=132
+#########
+###@   ##
+### $  ##
+#####$ ##
+## $   ##
+#    # ##
+#     $ #
+##  #   #
+#########
+HUB strata=v0 k=11 sig=f20677aeb69197c4 id=219 depth=7 on_goal=1 reg=1 rooms=0 hot=0 dist=132
+#########
+###@   ##
+### $  ##
+#####$ ##
+##   $ ##
+#   $# ##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=12 sig=66b1bcb6f43f5afe id=617 depth=8 on_goal=1 reg=1 rooms=0 hot=0 dist=96
+#########
+###@   ##
+###  $ ##
+#####$ ##
+##     ##
+#   $#$##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=13 sig=336eaed0c526311b id=637 depth=4 on_goal=0 reg=1 rooms=0 hot=0 dist=96
+#########
+###    ##
+### $$ ##
+#####  ##
+##     ##
+#    #$##
+#    $@ #
+##  #   #
+#########
+HUB strata=v0 k=14 sig=e963c7aeb1af5db8 id=344 depth=3 on_goal=1 reg=1 rooms=0 hot=0 dist=92
+#########
+###@   ##
+### $  ##
+#####$ ##
+##     ##
+#$   # ##
+#    $  #
+##  #   #
+#########
+HUB strata=v0 k=15 sig=f56d352e1adfdc41 id=639 depth=3 on_goal=2 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+### $  ##
+#####  ##
+##     ##
+# $ $# ##
+#  $    #
+##  #   #
+#########
+HUB strata=v0 k=16 sig=e0acb5aeacbbd41c id=711 depth=6 on_goal=1 reg=1 rooms=0 hot=0 dist=124
+#########
+###    ##
+### $  ##
+#####  ##
+##@$   ##
+#  $ # ##
+# $     #
+##  #   #
+#########
+HUB strata=v0 k=17 sig=66c21925ce7739dd id=79 depth=2 on_goal=2 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+### $  ##
+#####  ##
+##     ##
+#$  $#$##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=18 sig=6f6202b6f92d1e48 id=80 depth=3 on_goal=1 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+### $  ##
+#####  ##
+##     ##
+#   $#$##
+#     $ #
+##  #   #
+#########
+HUB strata=v0 k=19 sig=f569d02e1adcfacb id=414 depth=6 on_goal=2 reg=1 rooms=0 hot=0 dist=92
+#########
+###@   ##
+### $  ##
+#####  ##
+##     ##
+#  $$# ##
+#    $  #
+##  #   #
+#########
+HUB strata=v0 k=20 sig=e0b01aaeacbeb592 id=724 depth=5 on_goal=1 reg=1 rooms=0 hot=0 dist=92
+#########
+###@   ##
+### $  ##
+#####  ##
+## $   ##
+#  $ # ##
+#     $ #
+##  #   #
+#########
+HUB strata=v0 k=21 sig=6f57d1b6f9247680 id=290 depth=3 on_goal=1 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+### $  ##
+#####  ##
+## $   ##
+#$   #$##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=22 sig=fe1d7d2e1fcda2f1 id=324 depth=4 on_goal=2 reg=1 rooms=1 hot=0 dist=32
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+# $ $# ##
+#  $ $  #
+##  #   #
+#########
+HUB strata=v0 k=23 sig=5e299c25c99daaff id=619 depth=3 on_goal=2 reg=1 rooms=1 hot=1 dist=44
+#########
+###    ##
+###    ##
+#####  ##
+##     ##
+#$  $#$##
+#  $@   #
+##  #   #
+#########
+HUB strata=v0 k=24 sig=5e263725c99ac989 id=620 depth=4 on_goal=2 reg=1 rooms=1 hot=0 dist=56
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+#$  $#$##
+#     $ #
+##  #   #
+#########
+HUB strata=v0 k=25 sig=780ee3b6fe18001c id=518 depth=9 on_goal=1 reg=1 rooms=1 hot=0 dist=84
+#########
+###@   ##
+###    ##
+#####  ##
+## $   ##
+#$   #$##
+#     $ #
+##  #   #
+#########
+HUB strata=v0 k=26 sig=4d71ead0d3e3f1bb id=248 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $  ##
+#####  ##
+## $   ##
+#    #$##
+# $     #
+##  #   #
+#########
+HUB strata=v0 k=27 sig=4d67b9d0d3db49f3 id=249 depth=7 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $  ##
+#####  ##
+## $   ##
+#    #$##
+#     $ #
+##  #   #
+#########
+HUB strata=v0 k=28 sig=dc19a1d92049b2a9 id=255 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $  ##
+#####  ##
+## $   ##
+#    # ##
+# $   $ #
+##  #   #
+#########
+HUB strata=v0 k=29 sig=d8179daea7e526b4 id=256 depth=6 on_goal=1 reg=1 rooms=1 hot=0 dist=68
+#########
+###@   ##
+###    ##
+#####  ##
+## $   ##
+#$   # ##
+#  $  $ #
+##  #   #
+#########
+HUB strata=v0 k=30 sig=dc1d06d9204c941f id=320 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $  ##
+#####  ##
+## $   ##
+#    # ##
+# $ $   #
+##  #   #
+#########
+HUB strata=v0 k=31 sig=d7ffd4aea7d0f248 id=500 depth=6 on_goal=1 reg=1 rooms=1 hot=0 dist=60
+#########
+###@   ##
+###    ##
+#####  ##
+## $   ##
+#$   # ##
+#  $$   #
+##  #   #
+#########
+HUB strata=v0 k=32 sig=780b7eb6fe151ea6 id=517 depth=8 on_goal=1 reg=1 rooms=1 hot=0 dist=72
+#########
+###@   ##
+###    ##
+#####  ##
+## $   ##
+#$   #$##
+#  $    #
+##  #   #
+#########
+HUB strata=v0 k=33 sig=ed65cbd92a13e9ad id=585 depth=5 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $$ ##
+#####  ##
+##   $ ##
+#    # ##
+#     $ #
+##  #   #
+#########
+HUB strata=v0 k=34 sig=3c1828d0ca0e2e13 id=579 depth=5 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $$ ##
+#####  ##
+##   $ ##
+#    #$##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=35 sig=c21663d9118beea3 id=587 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $$ ##
+#####  ##
+##   $$##
+#    # ##
+#       #
+##  #   #
+#########
+HUB strata=v0 k=36 sig=44bad8d0cef0681f id=602 depth=6 on_goal=0 reg=1 rooms=1 hot=0 dist=52
+#########
+###    ##
+###    ##
+#####  ##
+##     ##
+#    #$##
+# $$  $ #
+##@ #   #
+#########
+HUB strata=v1 k=0 sig=0 id=1 depth=1 on_goal=3 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+### $  ##
+#####  ##
+##     ##
+#$ $$# ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=1 sig=1 id=3 depth=3 on_goal=1 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $$ ##
+#####  ##
+## $   ##
+#$   # ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=2 sig=2 id=4 depth=4 on_goal=0 reg=1 rooms=0 hot=0 dist=132
+#########
+###@   ##
+### $$ ##
+#####  ##
+## $   ##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=3 sig=1c id=31 depth=5 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $  ##
+##### $##
+## $   ##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=4 sig=23 id=38 depth=2 on_goal=2 reg=1 rooms=1 hot=0 dist=32
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+#$  $# ##
+#  $$   #
+##  #   #
+#########
+HUB strata=v1 k=5 sig=4c id=78 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=100
+#########
+###@   ##
+### $ $##
+#####  ##
+##     ##
+#   $# ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=6 sig=4f id=82 depth=5 on_goal=2 reg=1 rooms=0 hot=0 dist=92
+#########
+###@   ##
+### $  ##
+##### $##
+##     ##
+#  $$# ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=7 sig=50 id=83 depth=6 on_goal=2 reg=1 rooms=0 hot=0 dist=96
+#########
+###@   ##
+### $  ##
+#####$ ##
+##     ##
+#  $$# ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=8 sig=54 id=86 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+### $  ##
+#####  ##
+##     ##
+#   $#$##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=9 sig=3c id=90 depth=2 on_goal=2 reg=1 rooms=2 hot=2 dist=20
+#########
+###    ##
+###    ##
+#####  ##
+##     ##
+#$  $# ##
+# $$    #
+##@ #   #
+#########
+HUB strata=v1 k=10 sig=3 id=122 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=132
+#########
+###@   ##
+###  $ ##
+#####$ ##
+## $   ##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=11 sig=64 id=102 depth=4 on_goal=2 reg=1 rooms=0 hot=1 dist=88
+#########
+###@   ##
+### $  ##
+#####  ##
+## $   ##
+#$ $ # ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=12 sig=d id=115 depth=2 on_goal=2 reg=1 rooms=0 hot=0 dist=88
+#########
+###@   ##
+###  $ ##
+#####$ ##
+##     ##
+#$  $# ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=13 sig=28 id=117 depth=2 on_goal=2 reg=1 rooms=2 hot=1 dist=56
+#########
+###    ##
+###    ##
+#####  ##
+##@$   ##
+#$  $# ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=14 sig=11 id=118 depth=3 on_goal=1 reg=1 rooms=0 hot=0 dist=96
+#########
+###@   ##
+###  $ ##
+#####$ ##
+##     ##
+#   $# ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=15 sig=75 id=121 depth=4 on_goal=2 reg=1 rooms=2 hot=1 dist=56
+#########
+###    ##
+###    ##
+#####  ##
+## $   ##
+#$ $ # ##
+#@$     #
+##  #   #
+#########
+HUB strata=v1 k=16 sig=26 id=126 depth=4 on_goal=2 reg=1 rooms=0 hot=1 dist=52
+#########
+###@   ##
+###  $ ##
+#####  ##
+##     ##
+#$ $ # ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=17 sig=15 id=139 depth=2 on_goal=2 reg=1 rooms=1 hot=1 dist=48
+#########
+###    ##
+###    ##
+#####  ##
+##@  $ ##
+#$  $# ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=18 sig=12 id=136 depth=2 on_goal=2 reg=1 rooms=1 hot=1 dist=52
+#########
+###    ##
+###    ##
+#####  ##
+##@ $  ##
+#$  $# ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=19 sig=17 id=141 depth=4 on_goal=1 reg=1 rooms=0 hot=0 dist=96
+#########
+###@   ##
+### $  ##
+##### $##
+##     ##
+#  $ # ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=20 sig=61 id=143 depth=4 on_goal=1 reg=1 rooms=0 hot=0 dist=92
+#########
+###@   ##
+###  $ ##
+#####  ##
+## $   ##
+#$   # ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=21 sig=8b id=193 depth=5 on_goal=2 reg=1 rooms=0 hot=1 dist=80
+#########
+###@   ##
+###  $ ##
+#####$ ##
+##     ##
+#$ $ # ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=22 sig=22 id=152 depth=2 on_goal=2 reg=1 rooms=1 hot=1 dist=32
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+#$  $# ##
+#  $ $  #
+##  #   #
+#########
+HUB strata=v1 k=23 sig=98 id=170 depth=5 on_goal=2 reg=1 rooms=0 hot=1 dist=80
+#########
+###@   ##
+###   $##
+#####  ##
+## $   ##
+#$ $ # ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=24 sig=9a id=171 depth=6 on_goal=1 reg=1 rooms=0 hot=0 dist=84
+#########
+###@   ##
+###   $##
+#####  ##
+## $   ##
+#$   # ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=25 sig=18 id=174 depth=2 on_goal=2 reg=1 rooms=1 hot=1 dist=44
+#########
+###@   ##
+###    ##
+#####  ##
+##    $##
+#$  $# ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=26 sig=ae id=179 depth=4 on_goal=2 reg=1 rooms=0 hot=1 dist=44
+#########
+###@   ##
+###    ##
+##### $##
+##     ##
+#$ $ # ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=27 sig=1a id=182 depth=2 on_goal=2 reg=1 rooms=1 hot=1 dist=40
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+#$  $#$##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=28 sig=b6 id=187 depth=5 on_goal=1 reg=1 rooms=1 hot=0 dist=52
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+#$   #$##
+#  $  $ #
+##  #   #
+#########
+HUB strata=v1 k=29 sig=b8 id=266 depth=7 on_goal=1 reg=1 rooms=0 hot=0 dist=84
+#########
+###@   ##
+###  $ ##
+#####$ ##
+##     ##
+#$   # ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=30 sig=20 id=194 depth=2 on_goal=2 reg=1 rooms=1 hot=1 dist=36
+#########
+###@   ##
+###    ##
+#####  ##
+##     ##
+#$  $# ##
+#  $  $ #
+##  #   #
+#########
+HUB strata=v1 k=31 sig=8e id=209 depth=4 on_goal=2 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+### $  ##
+#####  ##
+##  $  ##
+#$ $ # ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=32 sig=1d id=212 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $  ##
+#####  ##
+## $ $ ##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=33 sig=88 id=416 depth=4 on_goal=2 reg=1 rooms=1 hot=1 dist=52
+#########
+###    ##
+###    ##
+#####  ##
+##@$   ##
+# $ $# ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=34 sig=ba id=313 depth=4 on_goal=0 reg=1 rooms=0 hot=0 dist=124
+#########
+###@   ##
+### $  ##
+#####$ ##
+##     ##
+#    # ##
+#  $  $ #
+##  #   #
+#########
+HUB strata=v1 k=35 sig=bb id=244 depth=4 on_goal=0 reg=1 rooms=0 hot=0 dist=96
+#########
+###@   ##
+### $$ ##
+#####  ##
+##     ##
+#    # ##
+#  $  $ #
+##  #   #
+#########
+HUB strata=v1 k=36 sig=bc id=247 depth=4 on_goal=0 reg=1 rooms=0 hot=0 dist=96
+#########
+###@   ##
+### $$ ##
+#####  ##
+##     ##
+#    #$##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=37 sig=10d id=282 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+###  $ ##
+#####  ##
+##  $  ##
+#   $# ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=38 sig=13c id=327 depth=11 on_goal=0 reg=1 rooms=1 hot=0 dist=116
+#########
+###@   ##
+###  $ ##
+#####  ##
+## $  $##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=39 sig=48 id=282 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+###  $ ##
+#####  ##
+##  $  ##
+#   $# ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=40 sig=4a id=358 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+###  $ ##
+#####  ##
+##   $ ##
+#   $# ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=41 sig=16b id=368 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=48
+#########
+###@   ##
+###   $##
+#####  ##
+##     ##
+#   $#$##
+#     $ #
+##  #   #
+#########
+HUB strata=v1 k=42 sig=5 id=376 depth=2 on_goal=2 reg=1 rooms=0 hot=1 dist=56
+#########
+###@   ##
+###  $ ##
+#####  ##
+##   $ ##
+#$  $# ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=43 sig=a id=352 depth=2 on_goal=2 reg=1 rooms=0 hot=1 dist=52
+#########
+###@   ##
+###   $##
+#####  ##
+##  $  ##
+#$  $# ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=44 sig=57 id=418 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+###  $ ##
+#####  ##
+##     ##
+#   $# ##
+# $  $  #
+##  #   #
+#########
+HUB strata=v1 k=45 sig=59 id=430 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+###  $ ##
+#####  ##
+##     ##
+#   $# ##
+# $ $   #
+##  #   #
+#########
+HUB strata=v1 k=46 sig=e id=364 depth=2 on_goal=2 reg=1 rooms=0 hot=1 dist=48
+#########
+###@   ##
+###    ##
+##### $##
+##     ##
+#$  $#$##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=47 sig=16c id=368 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=48
+#########
+###@   ##
+###   $##
+#####  ##
+##     ##
+#   $#$##
+#     $ #
+##  #   #
+#########
+HUB strata=v1 k=48 sig=1bc id=446 depth=4 on_goal=1 reg=1 rooms=0 hot=1 dist=48
+#########
+###@   ##
+###    ##
+##### $##
+##     ##
+#   $#$##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=49 sig=b1 id=510 depth=7 on_goal=1 reg=1 rooms=1 hot=0 dist=76
+#########
+###@   ##
+###  $ ##
+#####  ##
+##    $##
+#$   # ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=50 sig=1fb id=512 depth=8 on_goal=1 reg=1 rooms=1 hot=0 dist=80
+#########
+###@   ##
+###  $ ##
+#####  ##
+##    $##
+#  $ # ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=51 sig=33 id=514 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=96
+#########
+###@   ##
+###  $ ##
+#####$ ##
+##     ##
+#    #$##
+#     $ #
+##  #   #
+#########
+HUB strata=v1 k=52 sig=203 id=525 depth=12 on_goal=0 reg=1 rooms=1 hot=0 dist=116
+#########
+###@   ##
+###   $##
+#####  ##
+## $ $ ##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=53 sig=20f id=530 depth=4 on_goal=0 reg=1 rooms=0 hot=1 dist=56
+#########
+###@   ##
+###  $ ##
+#####  ##
+## $  $##
+#    # ##
+#  $    #
+##  #   #
+#########
+HUB strata=v1 k=54 sig=213 id=533 depth=4 on_goal=0 reg=1 rooms=0 hot=1 dist=52
+#########
+###@   ##
+###   $##
+#####  ##
+## $  $##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=55 sig=216 id=537 depth=6 on_goal=0 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+###  $ ##
+#####$ ##
+## $   ##
+#    # ##
+#     $ #
+##  #   #
+#########
+HUB strata=v1 k=56 sig=21d id=547 depth=9 on_goal=1 reg=1 rooms=1 hot=0 dist=88
+#########
+###@   ##
+###  $ ##
+#####  ##
+##     ##
+#  $ #$##
+#     $ #
+##  #   #
+#########
+HUB strata=v1 k=57 sig=21e id=551 depth=11 on_goal=1 reg=1 rooms=1 hot=0 dist=112
+#########
+###@   ##
+###  $ ##
+#####  ##
+## $  $##
+#  $ # ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=58 sig=21f id=553 depth=12 on_goal=1 reg=1 rooms=1 hot=0 dist=116
+#########
+###@   ##
+### $  ##
+#####  ##
+## $  $##
+#  $ # ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=59 sig=c2 id=687 depth=5 on_goal=2 reg=1 rooms=1 hot=1 dist=88
+#########
+###@   ##
+###   $##
+#####  ##
+##  $  ##
+# $ $# ##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=60 sig=83 id=594 depth=6 on_goal=2 reg=1 rooms=1 hot=0 dist=32
+#########
+###    ##
+###    ##
+#####  ##
+##     ##
+#  $$# ##
+# $@ $  #
+##  #   #
+#########
+HUB strata=v1 k=61 sig=51 id=617 depth=8 on_goal=1 reg=1 rooms=0 hot=0 dist=96
+#########
+###@   ##
+###  $ ##
+#####$ ##
+##     ##
+#   $#$##
+#       #
+##  #   #
+#########
+HUB strata=v1 k=62 sig=3d id=663 depth=6 on_goal=0 reg=1 rooms=0 hot=0 dist=96
+#########
+###@   ##
+### $ $##
+#####$ ##
+##     ##
+#    # ##
+# $     #
+##  #   #
+#########
+HUB strata=v1 k=63 sig=2ca id=717 depth=6 on_goal=0 reg=1 rooms=0 hot=1 dist=60
+#########
+###@   ##
+### $  ##
+#####  ##
+##  $ $##
+#    # ##
+# $     #
+##  #   #
+#########

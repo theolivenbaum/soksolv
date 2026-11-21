@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Soksolv.Model;
+using Soksolv.Search;
 using Soksolv.Search.Hub;
 
 namespace Soksolv.Tests;
@@ -124,5 +125,76 @@ public class PfFestTests
         Assert.True(Soksolv.Search.Hub.PfFest.Tuple.Better(d, a));   // larger matching distance is better
         var m = a.Mobility;
         Assert.Equal(a, Soksolv.Search.Hub.PfFest.Tuple.FromMove(a.Reg, a.Rooms, a.Hot, m) with { });
+    }
+
+    static FullOptions PfOpt(long nodes) => new() { NodeBudget = nodes, PfOn = true, SharedClusters = new ClusterTable(16), SharedPenalties = new ClusterTable(16) };
+
+    // Golden values from the patched Go reference (bench/pf-ref/build.sh): `SOKSOLV_PFON=1 soksolv -strategy pull -procs 1 -nodes 3000`
+    // (solved, pushes, nodes_expanded, stored, generated, duplicates): Festival-ordered pull search (pfOn + festXStyle D).
+    [Theory]
+    [InlineData("Aymeric_Du_Peloux_282_22", false, 0, 3000, 776, 4779, 2225)]
+    [InlineData("Microban_155_31", true, 6, 64, 28, 268, 37)]
+    [InlineData("Microban_155_65", false, 0, 3000, 810, 20795, 2191)]
+    [InlineData("Holland_81_27", false, 0, 3000, 2271, 43109, 732)]
+    [InlineData("SokEvo_107_55", false, 0, 3000, 1825, 22914, 1176)]
+    [InlineData("Sasquatch_IV_50_42", false, 0, 3000, 1984, 77072, 1019)]
+    [InlineData("Sven_1623_100", false, 0, 3000, 777, 8333, 2225)]
+    [InlineData("Holland_81_43", false, 0, 3000, 792, 15576, 2209)]
+    public void PullFest_MatchesGoCounts(string level, bool solved, int pushes, int expanded, int stored, int generated, int duplicates)
+    {
+        var rows = TestData.Rows(level);
+        var r = FullSolver.SolvePull(rows, PfOpt(3000), 0);
+        Assert.Equal(solved, r.Solved);
+        Assert.Equal(expanded, r.Nodes);
+        Assert.Equal(stored, r.Stats.Stored);
+        Assert.Equal(generated, r.Stats.Generated);
+        Assert.Equal(duplicates, r.Stats.Duplicates);
+        if (solved)
+        {
+            Assert.Equal(pushes, r.Solution.Count(char.IsUpper));
+            Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+        }
+    }
+
+    // Go `-strategy hub-strata -hub-strata-dump F -procs 1 -nodes 3000`: byte-identical dump (ids, signatures, tuples, boards).
+    [Theory]
+    [InlineData("Holland_81_43")]
+    [InlineData("Microban_155_65")]
+    public void HubStrata_DumpMatchesGo(string level)
+    {
+        var rows = TestData.Rows(level);
+        string tmp = Path.GetTempFileName();
+        try
+        {
+            var r = FullSolver.SolveHubStrata(rows, PfOpt(3000), 0, tmp);
+            Assert.Equal("hub-strata done", r.Reason);
+            Assert.Equal(File.ReadAllText(Golden($"strata_{level}_3000.txt")), File.ReadAllText(tmp));
+        }
+        finally { File.Delete(tmp); }
+    }
+
+    // Golden values from the patched Go reference (bench/hub-ref/build.sh):
+    // `SOKSOLV_NODESLICES=512 soksolv -strategy hub-pull -procs 1 -nodes 30000 -no-meet -retarget-reuse=false -lane-revive=false` (solved, pushes, HUBRACE counters).
+    [Theory]
+    [InlineData("Aymeric_Du_Peloux_282_22", true, 48, "pull=512 base=212 trials=0 fwd=0 strata=13 added=13 reached=0 ext=0 retries=0 shared=0 baseRuns=1")]
+    [InlineData("Microban_155_31", true, 6, "pull=62 base=0 trials=0 fwd=0 strata=3 added=3 reached=0 ext=0 retries=0 shared=0 baseRuns=0")]
+    [InlineData("Microban_155_65", true, 41, "pull=512 base=4 trials=0 fwd=0 strata=23 added=23 reached=0 ext=0 retries=0 shared=0 baseRuns=1")]
+    [InlineData("Holland_81_27", false, 0, "pull=1328 base=20480 trials=2 fwd=8192 strata=64 added=91 reached=0 ext=0 retries=0 shared=1 baseRuns=1")]
+    [InlineData("SokEvo_107_55", true, 36, "pull=1024 base=7120 trials=1 fwd=4096 strata=19 added=19 reached=0 ext=0 retries=0 shared=0 baseRuns=1")]
+    [InlineData("Sven_1623_100", true, 41, "pull=512 base=1266 trials=0 fwd=0 strata=17 added=17 reached=0 ext=0 retries=0 shared=0 baseRuns=1")]
+    [InlineData("Holland_81_43", false, 0, "pull=1328 base=20480 trials=2 fwd=8192 strata=40 added=40 reached=0 ext=0 retries=0 shared=0 baseRuns=1")]
+    [InlineData("Sasquatch_IV_50_42", false, 0, "pull=1328 base=20480 trials=2 fwd=8192 strata=64 added=180 reached=0 ext=0 retries=0 shared=1 baseRuns=2")]
+    public void HubPull_NodeSlicesMatchGo(string level, bool solved, int pushes, string fingerprint)
+    {
+        var rows = TestData.Rows(level);
+        var o = new FullOptions { NodeBudget = 30000, HubNodeSlices = 512, SharedClusters = new ClusterTable(16), SharedPenalties = new ClusterTable(16) };
+        var r = FullSolver.SolveHubPull(rows, o, 0);
+        Assert.Equal(solved, r.Solved);
+        Assert.Equal(fingerprint, r.Fingerprint);
+        if (solved)
+        {
+            Assert.Equal(pushes, r.Solution.Count(char.IsUpper));
+            Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+        }
     }
 }

@@ -203,8 +203,10 @@ Code: `Search/Factor/FactorLane.cs` (lane, scheduler), `Search/Factor/FullSolver
   thread with the lane's `Baton` (yield added at the 1024-expansion mark, `Fa2Runner.RunTo`).
 * **Parity** (`bench/lane-parity.py factor "" 20000`, unpatched Go, `-parity` cluster mode): **12/12 gated levels identical** (solved, nodes,
   pushes), incl. Sasquatch_50 #29 (596 nodes) and unsolved 20000-node pools; goldens in `tests/Soksolv.Tests/FactorTests.cs`.
-* **Speed** (AOT, equal work, `-nodes 20000`, gated levels): 1.12–1.17x Go's time (Sasquatch_50 #29: 3.9 s vs 3.4 s; #46: 16.4 s vs 14.0 s) —
-  the time is the sub-engines (macro/fa2 box search on wide boards), whose speed work is tracked in `docs/macro.md`.
+* **Speed** (AOT, equal work, `-nodes 20000`, 8 gated levels): **1.26x Go's total time** (C# 114.9 s vs Go 91.1 s); per level 0.74x–1.34x
+  (Microban_155 #80 0.74x, Sasquatch_50 #29 1.13x, Sasquatch_50 #46 1.17x, Sasquatch_IV_50 #47 1.34x: 73.1 s vs 54.6 s). The time is the
+  sub-engines (macro/fa2 box search on wide boards), whose speed work is tracked in `docs/macro.md`. Go's peak memory on these levels is
+  37-950 MB; the C# column printed 0 MB at measurement time (PeakBytes was not filled; fixed afterwards, not re-measured).
 * Portfolio: lane `factor` (not solo) joins gated boards (`PortfolioOptions.Factor`). Not ported: `-factor-alt` (off by default).
 
 ## dive lane (`-strategy dive`) — Go dive.go (exp-691/693)
@@ -326,3 +328,41 @@ Compare with `bench/lane-parity.py pull "" N` after pointing GO_SOKSOLV at `soks
 | pullfest.go `pfFill`/`pfMatch`/`pfInit` | tuple completion (hot, bic, spread, rooms=`festRooms` when `PFFestRooms`) | **ported**: `Search/Hub/PfFest.cs` (+ port `festRooms`) |
 Ported leaf pieces are exact (PfFestTests). After the hooks: `hubstrata` (deterministic, ~255 lines), then add a node-slice switch to a patched
 Go (`SOKSOLV_NODESLICES`: replace the wall-clock slices of `raceAlternate`/`festbAlternate`/`hubLane` by expansion counts) for the timed lanes.
+
+
+## Hub family — status after the 15th fork: pfOn, strata and `hub-pull` ported (`-strategy hub-pull`)
+
+**Step 1 — pfOn (Festival-order pull), exact.** `Search/Hub/FullSolver.PfOn.cs` (+ hooks in `Macro/FullSolver.Macro*.cs`): node tuples
+`pfOwn/pfBest` and bucket = `(best.reg, best.rooms)` (MAdd/dup reparent), `MNoteBest` by `pfBetter`, parent/child scoring
+(`MatchParent/MatchChild` against `pfDist` via `tgtDist`, `PfFill` = `festRooms` (Festival's score_rooms, flood version) + spread key + hotspots),
+the single advisor (best child better than the parent, ties in board order `b`,`t`, stored children skipped), sort key `(b,t)` instead of `plen`,
+`pfInefficient` dead reason, `pfReachInit` (HubReach narrows the start-square matching), `liveZoneRoots` (`pullZoneDead`, 1000 positions),
+type exploration every 8th selection (`FessHeap.Remove` = Go `heap.Remove`, xorshift `Rnd`, seed `RngSeed`; hub lanes use `RevSeed(k)`).
+Switch: `FullOptions.PfOn` / CLI `-pf-on` (with `-strategy pull`). Reference: `bench/pf-ref/build.sh` (`SOKSOLV_PFON=1`); compare with
+`PARITY_FULL=1 GO_SOKSOLV=.../soksolv-pf SOKSOLV_PFON=1 CS_EXTRA=-pf-on bench/lane-parity.py pull "" N [list]` (solved, expanded, pushes, stored, generated,
+duplicates):
+
+| N | testdata (22 files) | LTS sample |
+|---|---|---|
+| 1 | 22/22 | 296/296 (whole sample list) |
+| 10 / 100 / 1000 | 22/22 | 42/42 (every 7th level of the sample) |
+| 20000 | 22/22 | 42/42 |
+
+(`GrigrSpecial_40 #40` spends > 60 s in setup under pfOn in Go as well — `pushDistances` on its large board; excluded from the sample runs.)
+
+**Step 2 — hub strata, exact.** `FullSolver.Strata.cs`: `Strata` tables (v0 room/goal signature, v1 half-depth ancestor), `StrataOffer` from `MNoteBest`,
+`BoxSig`. `-strategy hub-strata -hub-strata-dump F` (+ `-nodes N`) writes the same dump as Go: byte-identical on all 22 testdata files at N=5000
+(18 unsolved dumps + 4 levels solved by both), goldens in `tests/Soksolv.Tests/golden/strata_*` (`HubTests`: `HubStrata_DumpMatchesGo`).
+
+**Step 3a — `hub-pull` = `raceAlternate`, exact in node-slice mode.** `FullSolver.HubRace.cs`: `SolveHubPull` (revive ring on `memory` / `festb ended`),
+`HubPullConfig` (pull slices, base forward tree aimed at `BestTarget`, strata picking never-tried first then progress per expansion, `RaceTrial` with
+budget doubling, process-wide tried-strata table), `NewTowardReal`/`TowardRun`. Timing: **wall clock by default** (festbUnit 250 ms, forward slice = 2 pull
+slices, as Go); `-hub-node-slices K` (`FullOptions.HubNodeSlices`) replaces every wall-clock decision by expansion counts (pull slice = K pull expansions, forward
+"time" = forward expansions; `-nodes N` caps the lane's total expansions). Reference: `bench/hub-ref/build.sh` (patched `raceAlternate`, env `SOKSOLV_NODESLICES`,
+prints `HUBRACE ...`); run Go with `-no-meet -retarget-reuse=false -lane-revive=false` (retarget reuse is not ported: a changed pull best starts a NEW base tree).
+`bench/hub-parity.py SLICE NODES [list]` compares solved, pushes and the counters (pull/base/forward expansions, trials, strata, reached, extensions, retries,
+shared-table skips, base runs).
+
+Not ported in this step (all Go-side behaviours the C# hub-pull lacks): `retargetTo` reuse of the base forward tree, meetings between hub-pull and the other lanes
+(the forward toward search has no `meet` hooks; `Back`/`Fwd` owners 4/5 do not exist), `relayBack` (off by default in Go anyway), the memory elastic budget
+(`budgetP` shares: forward trees only count against `BudgetBytes` via `PeerBytes`), Portfolio wiring.

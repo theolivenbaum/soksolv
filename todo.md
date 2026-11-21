@@ -92,7 +92,7 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] fa2 anytime lane (second engine on the macro lane's plan4 list) for the portfolio
 - [ ] unported fa2 experiment flags: v2ng/old plan variants in portfolio, hall-sup, plan-file/replay/stream engines
 
-- [x] factor lane (resumable macro/novelty/fa2/reverse sub-engines): exact parity 12/12 gated levels; gate 224/13,315 levels; portfolio lane. Speed 1.12-1.17x Go.
+- [x] factor lane (resumable macro/novelty/fa2/reverse sub-engines): exact parity 12/12 gated levels; gate 224/13,315 levels; portfolio lane. Speed 1.26x Go overall on 8 gated levels (0.74-1.34x per level).
 - [x] dive lane (pull-view landmark dive, paired base+A engines, Hungarian matcher, HubReach/zone-dead roots): exact parity 22/22 + 40/40 + 38/40 (2 setup-timeouts in Go); gate 315/13,315 levels; replaces reverse on gated boards. Speed 0.89x Go.
 - [ ] dive: perimeter meetings, revive ring; factor: -factor-alt; both: timed-mode ladder runs on the gated levels
 - [x] Macro wide-level speed: 1.22x -> 1.05x Go CPU on 12 wide levels (hot rows/columns, bit box search + moveAccessBits, plan4 radix sort, goal-area memo); remaining: CutQueryFill/Expand4 constants, displacement, region counts
@@ -105,3 +105,9 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 
 - [x] pullfest leaf functions (pushDistances/pfDist/pfHot/pfBicon/pfSpreadSum/tuple order): Search/Hub/PfFest.cs, exact vs Go goldens (18 levels x 8 samples)
 - [ ] pfOn engine hooks in the macro/pull engine (patched-Go `-strategy pull` + SOKSOLV_PFON reference), then hubstrata, hubrace, hubprobe, festb, hubgen, hub, hfsched, portfolio hub lanes + toward retargeting loop (see docs/lanes.md 'Hub family - status after the 14th fork')
+
+## Hub family (15th fork)
+- [x] pfOn Festival-order pull (`-strategy pull -pf-on`): exact vs patched Go (testdata 22/22 at N=1..20000, LTS 296/296 at N=1, 42/42 at 10..20000)
+- [x] hubstrata (`-strategy hub-strata -hub-strata-dump`): byte-identical dumps
+- [x] `-strategy hub-pull` (raceAlternate; wall clock default, `-hub-node-slices K` deterministic): exact vs node-slice Go reference (bench/hub-ref)
+- [ ] hub-gen / hub (hubgen.go 1037, hub.go 1112, festbAlternate, retargetTo, toward meet hooks, hfsched in Portfolio), Portfolio `hub-pull` lane, retarget reuse
