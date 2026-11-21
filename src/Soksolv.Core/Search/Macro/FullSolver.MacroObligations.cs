@@ -55,29 +55,39 @@ public sealed unsafe partial class FullSolver
         public PackingRoute(FullSolver s)
         {
             this.s = s; int n = s.cells;
-            Fixed = new bool[n]; Touched = new bool[n]; mark = new uint[n]; seen = new uint[4 * n]; prev = new int[4 * n]; walkPrev = new int[n];
+            Fixed = new bool[n]; Touched = new bool[n]; seen = new uint[4 * n]; prev = new int[4 * n];
+            mark = GC.AllocateArray<uint>(n, pinned: true); walkPrev = GC.AllocateArray<int>(n, pinned: true);
+            blkArr = GC.AllocateArray<byte>(n, pinned: true); qArr = GC.AllocateArray<int>(n + 4, pinned: true);
+            markP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref mark[0]); walkPrevP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref walkPrev[0]);
+            blkP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref blkArr[0]); qP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref qArr[0]);
+            for (int c = 0; c < n; c++) blkP[c] = (byte)(s.wall[c] ? 1 : 0);
         }
+        readonly byte[] blkArr; readonly int[] qArr; readonly uint* markP; readonly int* walkPrevP; readonly byte* blkP; readonly int* qP;
+
 
         (int norm, bool ok) Flood(int box, int player)
         {
             if (player < 0 || s.wall[player] || Fixed[player] || player == box) return (0, false);
             uint st = ++stamp;
-            mark[player] = st;
-            q.Clear(); q.Add(player);
+            uint* mk = markP; byte* bk = blkP; int* qq = qP; int* wp = walkPrevP;
+            int w = s.W;
+            mk[player] = st;
+            int tail = 0; qq[tail++] = player;
             int norm = player;
-            for (int head = 0; head < q.Count; head++)
+            int visits = Visits;
+            for (int head = 0; head < tail; head++)
             {
-                int x = q[head];
-                norm = Math.Min(norm, x);
-                Visits++;
-                if (Visits >= PackingRouteVisitCap) return (0, false);
-                if ((Visits & 1023) == 0 && (s.opt.Stop || (s.opt.Cancel?.Stopped ?? false))) return (0, false);
-                foreach (int d in s.dirs)
-                {
-                    int y = x + d;
-                    if (!s.wall[y] && !Fixed[y] && y != box && mark[y] != st) { mark[y] = st; walkPrev[y] = x; q.Add(y); }
-                }
+                int x = qq[head];
+                if (x < norm) norm = x;
+                visits++;
+                if (visits >= PackingRouteVisitCap) { Visits = visits; return (0, false); }
+                if ((visits & 1023) == 0 && (s.opt.Stop || (s.opt.Cancel?.Stopped ?? false))) { Visits = visits; return (0, false); }
+                int y = x - w; if (bk[y] == 0 && y != box && mk[y] != st) { mk[y] = st; wp[y] = x; qq[tail++] = y; }
+                y = x + w; if (bk[y] == 0 && y != box && mk[y] != st) { mk[y] = st; wp[y] = x; qq[tail++] = y; }
+                y = x - 1; if (bk[y] == 0 && y != box && mk[y] != st) { mk[y] = st; wp[y] = x; qq[tail++] = y; }
+                y = x + 1; if (bk[y] == 0 && y != box && mk[y] != st) { mk[y] = st; wp[y] = x; qq[tail++] = y; }
             }
+            Visits = visits;
             return (norm, true);
         }
 
@@ -96,7 +106,8 @@ public sealed unsafe partial class FullSolver
         {
             Array.Clear(Fixed); Array.Clear(Touched);
             Used.Clear();
-            foreach (int b in parentRequired) if (b != m.From) Fixed[b] = true;
+            for (int c = 0; c < blkArr.Length; c++) blkP[c] = (byte)(s.wall[c] ? 1 : 0);
+            foreach (int b in parentRequired) if (b != m.From) { Fixed[b] = true; blkP[b] = 1; }
             if (!Flood(m.From, parentPlayer).ok) return false;
             uint g = ++generation;
             states.Clear();

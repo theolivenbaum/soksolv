@@ -19,7 +19,7 @@ public sealed class DisplacementLandmarks
     readonly ulong[][] pinnedGoalMask;   // [pIdx][sq*4+d]: goals in Goals \ {p} reachable by 1-box pushes from (sq,d) with p a wall
     readonly ushort[][] pinComp;         // [pIdx][cell]: static component of Board \ (Walls U {p})
     uint stamp; readonly uint[] visited; readonly int[] q;
-    readonly int[] matchOf; readonly uint[] gseen; uint gstamp;
+    readonly int[] matchOf;
     readonly ulong[] reachMask;
     readonly List<int> uBoxes = new(), eGoals = new(), unpackedOthers = new();
     readonly bool[] isGoalBox;
@@ -35,7 +35,7 @@ public sealed class DisplacementLandmarks
         for (int g = 0; g < goals.Length; g++) GoalIdx[goals[g]] = g;
         pinnedGoalMask = new ulong[numGoals][]; pinComp = new ushort[numGoals][];
         visited = new uint[cells]; q = new int[cells * 4 + 4];
-        matchOf = new int[numGoals]; gseen = new uint[numGoals];
+        matchOf = new int[numGoals];
         reachMask = new ulong[lv.Boxes.Length];
         isGoalBox = new bool[cells];
 
@@ -98,8 +98,17 @@ public sealed class DisplacementLandmarks
                 comp[d] = cid;
                 ws++;
                 walkVisited[to] = ws; walkVisited[n] = ws;
+                // only the not-yet-labelled sibling neighbours matter: stop as soon as all of them were seen
+                int remaining = 0, t0 = -1, t1 = -1, t2 = -1;
+                for (int d2 = d + 1; d2 < 4; d2++)
+                {
+                    int n2 = to - dirs[d2];
+                    if (IsBlocked(n2) || comp[d2] >= 0) continue;
+                    if (remaining == 0) t0 = n2; else if (remaining == 1) t1 = n2; else t2 = n2;
+                    remaining++;
+                }
                 int head = 0, tail = 0; walkQ[tail++] = n;
-                while (head < tail)
+                while (remaining > 0 && head < tail)
                 {
                     int curr = walkQ[head++];
                     foreach (int dir in dirs)
@@ -107,6 +116,7 @@ public sealed class DisplacementLandmarks
                         int nxt = curr + dir;
                         if (IsBlocked(nxt) || walkVisited[nxt] == ws) continue;
                         walkVisited[nxt] = ws; walkQ[tail++] = nxt;
+                        if (nxt == t0 || nxt == t1 || nxt == t2) remaining--;
                     }
                 }
                 for (int d2 = d + 1; d2 < 4; d2++)
@@ -233,37 +243,41 @@ public sealed class DisplacementLandmarks
         return cmdMask;
     }
 
-    bool TryDirect(int i, ulong emptyGoalsMask)
+    // Bipartite matching boxes -> goals with goal-bit masks: free goals are taken greedily, the seen set is one word.
+    ulong mMatched, mSeen;
+    bool Augment(ulong[] reach, int i, ulong allowed)
     {
-        ulong mask = reachMask[i] & emptyGoalsMask;
-        while (mask > 0)
+        ulong m = reach[i] & allowed;
+        ulong fr = m & ~mMatched;
+        if (fr != 0) { int j = BitOperations.TrailingZeroCount(fr); matchOf[j] = i; mMatched |= 1UL << j; return true; }
+        while ((m &= ~mSeen) != 0)
         {
-            int j = BitOperations.TrailingZeroCount(mask);
-            mask &= mask - 1;
-            if (gseen[j] == gstamp) continue;
-            gseen[j] = gstamp;
-            if (matchOf[j] < 0 || TryDirect(matchOf[j], emptyGoalsMask)) { matchOf[j] = i; return true; }
+            int j = BitOperations.TrailingZeroCount(m);
+            mSeen |= 1UL << j;
+            if (Augment(reach, matchOf[j], allowed)) { matchOf[j] = i; return true; }
         }
         return false;
     }
 
     bool MatchUnpackedDirect(int nUnpacked, ulong emptyGoalsMask)
     {
-        Array.Fill(matchOf, -1);
+        mMatched = 0;
         for (int i = 0; i < nUnpacked; i++)
         {
-            if (++gstamp == 0) { Array.Clear(gseen); gstamp = 1; }
-            if (!TryDirect(i, emptyGoalsMask)) return false;
+            mSeen = 0;
+            if (!Augment(reachMask, i, emptyGoalsMask)) return false;
         }
         return true;
     }
 
     bool MatchUnpackedAugment(ulong targetGoalsMask)
     {
+        mMatched = 0;
+        for (int j = 0; j < numGoals; j++) if (matchOf[j] >= 0) mMatched |= 1UL << j;
         foreach (int i in unpackedOthers)
         {
-            if (++gstamp == 0) { Array.Clear(gseen); gstamp = 1; }
-            if (!TryDirect(i, targetGoalsMask)) return false;
+            mSeen = 0;
+            if (!Augment(reachMask, i, targetGoalsMask)) return false;
         }
         return true;
     }
@@ -332,25 +346,12 @@ public sealed class DisplacementLandmarks
             if (!needs && (unionMask & allEmptyMask) != allEmptyMask) needs = true;
             if (!needs)
             {
-                Array.Fill(matchOf, -1);
-                bool Try(int i)
-                {
-                    ulong mask = canReach[i] & allEmptyMask;
-                    while (mask > 0)
-                    {
-                        int j = BitOperations.TrailingZeroCount(mask);
-                        mask &= mask - 1;
-                        if (gseen[j] == gstamp) continue;
-                        gseen[j] = gstamp;
-                        if (matchOf[j] < 0 || Try(matchOf[j])) { matchOf[j] = i; return true; }
-                    }
-                    return false;
-                }
+                mMatched = 0;
                 bool matched = true;
                 for (int i = 0; i < k; i++)
                 {
-                    if (++gstamp == 0) { Array.Clear(gseen); gstamp = 1; }
-                    if (!Try(i)) { matched = false; break; }
+                    mSeen = 0;
+                    if (!Augment(canReach, i, allEmptyMask)) { matched = false; break; }
                 }
                 if (!matched) needs = true;
             }

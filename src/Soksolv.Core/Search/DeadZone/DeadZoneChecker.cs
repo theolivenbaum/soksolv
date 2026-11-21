@@ -691,7 +691,7 @@ public sealed unsafe class DeadZoneChecker
     bool ZoneDead(ReadOnlySpan<int> boxes, int player)
     {
         int k = zoneN;
-        Array.Sort(zone, 0, zoneN);
+        SortUtil.Insertion(zone.AsSpan(0, zoneN));
         for (int i = 0; i < k; i++) SetOcc(zone[i], true);
         fixedN = 0;
         foreach (int x in boxes)
@@ -778,7 +778,7 @@ public sealed unsafe class DeadZoneChecker
         var (pn0, size0, live0) = DoEscape(nx0, p0, -1);
         foreach (int z in nx0) if (z != 0) SetOcc(z, false);
         if (size0 == floorN - fixedN - live0 || AllGoals(nx0)) { Opened++; return 2; }
-        Array.Sort(nx0);
+        SortUtil.Insertion(nx0);
         foreach (int z in nx0) Push((short)z);
         Push((short)pn0);
 

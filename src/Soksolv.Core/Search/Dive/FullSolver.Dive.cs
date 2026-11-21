@@ -188,29 +188,82 @@ public sealed unsafe partial class FullSolver
     int DiveATerm(ReadOnlySpan<int> boxes)
     {
         if (!diveA) return 0;
-        int w = W, crowd = 0, gap = 0;
-        bool Full(int c) => wall[c] || occ[c];
-        Span<int> ring = [-w - 1, -w, -w + 1, -1, 1, w - 1, w, w + 1];
+        DiveAParts(boxes, out int crowd, out int gap);
+        return (crowd << 12) - Math.Min(gap, 4095);
+    }
+
+    /// <summary>The A term's two sums over boxes in occ: boxes with at least 6 of 8 ring cells full, and boxes with a box two cells away across an empty gap (right/down).</summary>
+    void DiveAParts(ReadOnlySpan<int> boxes, out int crowd, out int gap)
+    {
+        int w = W; byte* bk = blk; int len = occ.Length;
+        crowd = 0; gap = 0;
         foreach (int b in boxes)
         {
-            int nb = 0;
-            foreach (int o in ring) { int c = b + o; if (c >= 0 && c < occ.Length && Full(c)) nb++; }
+            int nb = (bk[b - w - 1] != 0 ? 1 : 0) + (bk[b - w] != 0 ? 1 : 0) + (bk[b - w + 1] != 0 ? 1 : 0) + (bk[b - 1] != 0 ? 1 : 0)
+                   + (bk[b + 1] != 0 ? 1 : 0) + (bk[b + w - 1] != 0 ? 1 : 0) + (bk[b + w] != 0 ? 1 : 0) + (bk[b + w + 1] != 0 ? 1 : 0);
             if (nb >= 6) crowd++;
-            foreach (int d in (ReadOnlySpan<int>)[1, w])
-            {
-                int c = b + 2 * d;
-                if (c < occ.Length && occ[c] && !Full(b + d)) gap++;
-            }
+            int c = b + 2; if (c < len && occ[c] && bk[b + 1] == 0) gap++;
+            c = b + 2 * w; if (c < len && occ[c] && bk[b + w] == 0) gap++;
         }
-        return (crowd << 12) - Math.Min(gap, 4095);
+    }
+
+    // A-term of a child from the parent's sums: only boxes within two cells of the moved box's origin or target change their terms.
+    int diveACrowd, diveAGap; uint[]? diveAMark; uint diveAStamp;
+    static readonly bool diveACheck = Environment.GetEnvironmentVariable("SOKSOLV_DIVECHECK") == "1";
+    void DiveAParent(ReadOnlySpan<int> cur) { if (diveA) DiveAParts(cur, out diveACrowd, out diveAGap); }
+
+    void DiveAContrib(int x, ref int crowd, ref int gap)
+    {
+        int w = W; byte* bk = blk;
+        if ((uint)x >= (uint)occ.Length || !occ[x]) return;
+        int nb = (bk[x - w - 1] != 0 ? 1 : 0) + (bk[x - w] != 0 ? 1 : 0) + (bk[x - w + 1] != 0 ? 1 : 0) + (bk[x - 1] != 0 ? 1 : 0)
+               + (bk[x + 1] != 0 ? 1 : 0) + (bk[x + w - 1] != 0 ? 1 : 0) + (bk[x + w] != 0 ? 1 : 0) + (bk[x + w + 1] != 0 ? 1 : 0);
+        if (nb >= 6) crowd++;
+        int c = x + 2; if (c < occ.Length && occ[c] && bk[x + 1] == 0) gap++;
+        c = x + 2 * w; if (c < occ.Length && occ[c] && bk[x + w] == 0) gap++;
+    }
+
+    /// <summary>The A term of the child that moves box b to t (occ holds the child; the parent's sums come from DiveAParent).</summary>
+    int DiveAChild(int b, int t, ReadOnlySpan<int> child)
+    {
+        if (!diveA) return 0;
+        if (b == t) return (diveACrowd << 12) - Math.Min(diveAGap, 4095);
+        int w = W;
+        diveAMark ??= new uint[occ.Length];
+        uint st = ++diveAStamp;
+        Span<int> set = stackalloc int[24];
+        int ns = 0;
+        for (int k = 0; k < 2; k++)
+        {
+            int c = k == 0 ? b : t;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    int x = c + dy * w + dx;
+                    if ((uint)x < (uint)occ.Length && diveAMark[x] != st) { diveAMark[x] = st; set[ns++] = x; }
+                }
+            int xa = c - 2, xb = c - 2 * w;
+            if ((uint)xa < (uint)occ.Length && diveAMark[xa] != st) { diveAMark[xa] = st; set[ns++] = xa; }
+            if ((uint)xb < (uint)occ.Length && diveAMark[xb] != st) { diveAMark[xb] = st; set[ns++] = xb; }
+        }
+        int cc = 0, cg = 0;
+        for (int i = 0; i < ns; i++) DiveAContrib(set[i], ref cc, ref cg);
+        SetOcc(b, true); SetOcc(t, false);
+        int pc = 0, pg = 0;
+        for (int i = 0; i < ns; i++) DiveAContrib(set[i], ref pc, ref pg);
+        SetOcc(b, false); SetOcc(t, true);
+        int crowd = diveACrowd - pc + cc, gap = diveAGap - pg + cg;
+        int a = (crowd << 12) - Math.Min(gap, 4095);
+        if (diveACheck && a != DiveATerm(child)) throw new InvalidOperationException($"dive A delta {a} != {DiveATerm(child)}");
+        return a;
     }
 
     // ---- matching distances (matchPrime / matchChild) ---------------------------------------------------------------------------------------
     int MatchPrime(ReadOnlySpan<int> boxes, int[] dist, DiveDual dd)
     {
-        int score = AssignTo(boxes, dist);
-        if (score < 0) score = AssignmentInf;
         int m = n + 1;
+        int score = dd.Dual.Length == 4 * m ? AssignWarm(boxes, dist, dd.Dual) : AssignTo(boxes, dist);
+        if (score < 0) score = AssignmentInf;
         if (dd.Dual.Length != 4 * m) dd.Dual = new int[4 * m];
         Array.Copy(dhU, 0, dd.Dual, 0, m);
         Array.Copy(dhV, 0, dd.Dual, m, m);
@@ -275,10 +328,10 @@ public sealed unsafe partial class FullSolver
     }
 
     /// <summary>Child-only features of a stored node (occ holds its boxes): U, prefix and whether the real player is in its region.</summary>
-    (int u, int prefix, bool home) DiveFeat(int id, ReadOnlySpan<int> boxes)
+    (int u, int prefix, bool home) DiveFeat(int id, ReadOnlySpan<int> boxes, bool reuse = false)
     {
         var d = dv!;
-        Reach(nodes.Player(id), mark2);
+        if (!reuse) Reach(nodes.Player(id), mark2);   // reuse: DiveApply just flooded this child's region into mark2 (stamp)
         uint st = stamp;
         int u = 0;
         foreach (int b in boxes)
@@ -365,8 +418,12 @@ public sealed unsafe partial class FullSolver
         mLastAdded = -1;
         int b = cur[c.I];
         cur.CopyTo(child);
-        child[c.I] = c.T;
-        child.Sort();
+        { // cur is sorted: slide the moved box to its place (Span.Sort allocates in the AOT runtime)
+            int k = c.I, nn = child.Length, tv = c.T;
+            while (k + 1 < nn && child[k + 1] < tv) { child[k] = child[k + 1]; k++; }
+            while (k > 0 && child[k - 1] > tv) { child[k] = child[k - 1]; k--; }
+            child[k] = tv;
+        }
         ulong* pk = nodes.Key(id);
         for (int x = 0; x < nodes.Nw; x++) ckey[x] = pk[x];
         Flip(b); Flip(c.T);
@@ -549,13 +606,14 @@ public sealed unsafe partial class FullSolver
             if (diveCands.Count > 0)
             {
                 MatchPrime(cur, pfDist!, d.DD);
+                DiveAParent(cur);
                 bool primedR = false;
                 int pDepth = d.Depth[id];
                 int solved = -1;
                 ulong parentHash = nodes.HashOf(cur, nodes.Player(id));
-                var cands = diveCands.ToArray();
-                foreach (var c in cands)
+                for (int ci = 0; ci < diveCands.Count; ci++)
                 {
+                    var c = diveCands[ci];
                     int b = cur[c.I];
                     cur[c.I] = c.T;
                     int dst = MatchChild(cur, c.I, b, pfDist!, d.DD);
@@ -574,14 +632,14 @@ public sealed unsafe partial class FullSolver
                     int cid = DiveApply(id, c, cur, child, parentHash);
                     if (cid < 0 || cid < d.Depth.Count) continue; // stored before (a reparent keeps its filing)
                     SetOcc(b, false); SetOcc(c.T, true);
-                    var (u, pre, home) = DiveFeat(cid, child);
+                    var (u, pre, home) = DiveFeat(cid, child, reuse: true);
                     SetOcc(c.T, false); SetOcc(b, true); // in this order: a macro may end on its own square
                     d.BestE = Math.Min(d.BestE, e);
                     int a = 0;
                     if (diveA && e > 0)
                     {
                         SetOcc(b, false); SetOcc(c.T, true);
-                        a = DiveATerm(child);
+                        a = DiveAChild(b, c.T, child);
                         SetOcc(c.T, false); SetOcc(b, true);
                     }
                     DivePush(cid, e, u, a, dst, on, revh, pre, pDepth + 1);

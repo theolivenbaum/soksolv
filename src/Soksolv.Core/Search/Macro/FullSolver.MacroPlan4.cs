@@ -76,6 +76,29 @@ public sealed unsafe partial class FullSolver
             return idx.Select(i => a[i]).ToList();
         }
 
+        int[]? permCnt; int permN, permE = -1;
+        void PermPrepare(int cells)
+        {
+            if (permCnt == null || permCnt.Length != cells) permCnt = new int[cells];
+            Array.Clear(permCnt); permN = 0;
+            for (int i = 0; i < InitNum; i++) if (E[i].Until == -1) { permCnt[E[i].To]++; permN++; }
+            permE = E.Count;
+        }
+        /// <summary>Permanent initial entries whose cell is empty in occ.</summary>
+        public int PermMissing(bool[] occ)
+        {
+            if (permE != E.Count || permCnt == null || permCnt.Length != occ.Length) PermPrepare(occ.Length);
+            int m = 0;
+            for (int i = 0; i < InitNum; i++) if (E[i].Until == -1 && !occ[E[i].To]) m++;
+            return m;
+        }
+        /// <summary><see cref="Packed"/> of the child (occ holds it) of a parent with <paramref name="parentMissing"/> empty permanent cells, after the box on b moved to t.</summary>
+        public int PackedChild(bool[] occ, int b, int t, int parentMissing)
+        {
+            int m = parentMissing + permCnt![b] - permCnt[t];
+            return m > 0 ? permN - m : Packed(occ);
+        }
+
         public int Packed(bool[] occ)
         {
             int n = E.Count;
@@ -166,7 +189,7 @@ public sealed unsafe partial class FullSolver
     }
 
     /// <summary>Planner state shared by the anytime stepping in the macro loop.</summary>
-    public static bool CheckCut;   // test hook: compare every cutscan query with the exact flood
+    public static bool CheckCut = Environment.GetEnvironmentVariable("SOKSOLV_CHECK_CUT") == "1";   // test hook: compare every cutscan query with the exact flood
     public static bool MatchCheckHook { get => Planner4.MatchCheck; set => Planner4.MatchCheck = value; }
     // (old marker): compare every cutscan query with the exact flood
     Planner4? p4pend;
@@ -221,6 +244,7 @@ public sealed unsafe partial class FullSolver
             DeadlineMs = deadlineMs; MaxExp = Plan4Exp > 0 ? Plan4Exp : maxNodes;
             Fest = fest; RoomSep = roomSep; KeepParks = keepParks;
             occ = new bool[cells]; blk = new byte[cells]; for (int i = 0; i < cells; i++) blk[i] = (byte)(wall[i] ? 1 : 0);
+            cut = new CutScan(cells, dirs, blk);
             mark = new uint[cells]; queue = new int[cells]; pgen = new uint[cells]; seenK = new uint[4 * cells]; egen = new uint[cells]; ecnt = new byte[cells]; eval = new int[4 * cells];
             demand = new int[n]; mBox = new int[n]; mSeen = new uint[n]; lab = new int[cells]; labGen = new uint[cells]; labQ = new int[cells];
             bseen = new uint[cells]; sepD = new int[cells]; Array.Fill(sepD, -1); sepQ = new int[cells];
@@ -280,221 +304,24 @@ public sealed unsafe partial class FullSolver
         public bool Stopped() => s.opt.Stop || (s.opt.Cancel?.Stopped ?? false) || (s.opt.NodeBudget == 0 && s.clock.ElapsedMilliseconds > DeadlineMs);
 
 
-        // ---- cutscan.go port: one low-link DFS per planner node over G0 (every box placed) answers the queries of every lifted box -------------
-        static bool CheckCut => FullSolver.CheckCut;
-        struct CutNode { public uint Vgen; public int Tin, Tout, Low, Par, Sub, Cid; }
-        CutNode[] cnd = []; uint cgen, cdgen; int clift = -1; uint cbgen; int cnbn, cnbc, cball;
-        readonly int[] cbn = new int[4], cbnc = new int[4], cbcm = new int[4], cuF = new int[4], cloF = new int[4], chiF = new int[4]; readonly bool[] csepF = new bool[4];
-        byte[] cqpc = []; uint[] cqgen = []; int[] cqnp = []; byte[] cqsd = []; int[] cpre = [], csuf = [], corder = [], ccs = [], cce = [], cstack = []; byte[] csdir = [];
-        int corderN, ccsN;
-
-        void CutInit()
-        {
-            if (cnd.Length != 0) return;
-            cnd = new CutNode[cells]; cqpc = new byte[cells]; cqgen = new uint[cells]; cqnp = new int[4 * cells]; cqsd = new byte[4 * cells];
-            cpre = new int[cells]; csuf = new int[cells]; corder = new int[cells]; ccs = new int[cells + 1]; cce = new int[cells + 1]; cstack = new int[cells + 1]; csdir = new byte[cells + 1];
-        }
-        void CutNewNode() { CutInit(); cgen++; cdgen = cgen; clift = -1; corderN = 0; ccsN = 0; }
-        void CutBegin(int b) { cgen++; clift = b; }
-
-        void CutDfs(int root)
-        {
-            uint gen = cdgen; int lift = clift;
-            int comp = ccsN; int start = corderN;
-            ccs[ccsN] = start; // component start (ce filled at the end)
-            ccsN++;
-            cnd[root] = new CutNode { Vgen = gen, Tin = corderN, Low = corderN, Par = -1, Sub = root, Cid = comp };
-            corder[corderN++] = root;
-            cstack[0] = root; csdir[0] = 0; int sp = 1;
-            while (sp > 0)
-            {
-                int top = sp - 1, v = cstack[top];
-                ref var nv = ref cnd[v];
-                bool pushed = false;
-                for (int di = csdir[top]; di < 4; di++)
-                {
-                    int w = v + dirs[di];
-                    if (wall[w] || occ[w] || w == lift) continue;
-                    ref var nw = ref cnd[w];
-                    if (nw.Vgen != gen)
-                    {
-                        int t = corderN;
-                        nw = new CutNode { Vgen = gen, Tin = t, Low = t, Par = v, Sub = w, Cid = comp };
-                        corder[corderN++] = w;
-                        csdir[top] = (byte)(di + 1);
-                        cstack[sp] = w; csdir[sp] = 0; sp++;
-                        pushed = true;
-                        break;
-                    }
-                    else if (w != nv.Par && nw.Tin < nv.Low) nv.Low = nw.Tin;
-                }
-                if (pushed) continue;
-                nv.Tout = corderN;
-                sp = top;
-                int p = nv.Par;
-                if (p >= 0)
-                {
-                    ref var np = ref cnd[p];
-                    np.Low = Math.Min(np.Low, nv.Low);
-                    np.Sub = Math.Min(np.Sub, nv.Sub);
-                }
-            }
-            int end = corderN;
-            cce[comp] = end;
-            int m = 1 << 30;
-            for (int i = start; i < end; i++) { m = Math.Min(m, corder[i]); cpre[i] = m; }
-            m = 1 << 30;
-            for (int i = end - 1; i >= start; i--) { m = Math.Min(m, corder[i]); csuf[i] = m; }
-        }
-
-        void CutEnsure(int v) { if (cnd[v].Vgen != cdgen) CutDfs(v); }
-
-        void CutBoxInfo()
-        {
-            cbgen = cgen; cnbn = 0; cnbc = 0;
-            int b = clift, m = b;
-            foreach (int d in dirs)
-            {
-                int y = b + d;
-                if (wall[y] || occ[y]) continue;
-                CutEnsure(y);
-                int cid = cnd[y].Cid;
-                cbn[cnbn] = y; cbnc[cnbn] = cid; cnbn++;
-                bool dup = false;
-                for (int i = 0; i < cnbc; i++) dup |= cbcm[i] == cid;
-                if (!dup) { cbcm[cnbc++] = cid; m = Math.Min(m, csuf[ccs[cid]]); }
-            }
-            cball = m;
-        }
-
-        int CutCompMin(int v)
-        {
-            if (cbgen != cgen) CutBoxInfo();
-            if (v == clift) return cball;
-            CutEnsure(v);
-            int cid = cnd[v].Cid;
-            for (int i = 0; i < cnbc; i++) if (cbcm[i] == cid) return cball;
-            return csuf[ccs[cid]];
-        }
-
-        (int np, int sides) CutQuery(int to, int player)
-        {
-            if (cqgen[to] != cgen) CutQueryFill(to);
-            for (int di = 0; di < 4; di++) if (to + dirs[di] == player) return (cqnp[to * 4 + di], cqsd[to * 4 + di]);
-            throw new InvalidOperationException("cutScan.query: player is not adjacent to to");
-        }
-        int CutPieces(int v) { if (cqgen[v] != cgen) CutQueryFill(v); return cqpc[v]; }
-
-        void CutQueryFill(int to)
-        {
-            cqgen[to] = cgen;
-            if (cbgen != cgen) CutBoxInfo();
-            int lift = clift, baseI = to * 4;
-            Span<int> lab = stackalloc int[4]; Span<bool> fr = stackalloc bool[4];
-            lab.Clear(); fr.Clear();
-            if (to == lift)
-            {
-                for (int di = 0; di < 4; di++)
-                {
-                    int w = to + dirs[di];
-                    if (wall[w] || occ[w]) continue;
-                    fr[di] = true; lab[di] = cnd[w].Cid; // ensured by boxInfo
-                }
-                int npc = 0;
-                for (int di = 0; di < 4; di++)
-                {
-                    if (!fr[di]) continue;
-                    int sides0 = 0; bool first0 = true;
-                    for (int dj = 0; dj < 4; dj++)
-                        if (fr[dj] && lab[dj] == lab[di]) { sides0 |= 1 << dj; first0 = first0 && dj >= di; }
-                    if (first0) npc++;
-                    cqsd[baseI + di] = (byte)sides0;
-                    cqnp[baseI + di] = csuf[ccs[lab[di]]];
-                }
-                cqpc[to] = (byte)npc;
-                return;
-            }
-            CutEnsure(to);
-            uint gen = cdgen;
-            ref var nt = ref cnd[to];
-            int tinTo = nt.Tin, toutTo = nt.Tout, cx = nt.Cid;
-            bool isRoot = nt.Par < 0;
-            int[] cu = cuF, clo = cloF, chi = chiF; bool[] csep = csepF;
-            int nc = 0;
-            foreach (int d in dirs)
-            {
-                int u = to + d;
-                if (wall[u] || occ[u] || u == lift) continue;
-                ref var nu = ref cnd[u];
-                if (nu.Vgen == gen && nu.Par == to)
-                {
-                    cu[nc] = u; clo[nc] = nu.Tin; chi[nc] = nu.Tout;
-                    csep[nc] = isRoot || nu.Low >= tinTo;
-                    nc++;
-                }
-            }
-            // pieceOf: index of the separated child subtree holding DFS time tw, else -1 (the parent side)
-            int PieceOf(int tw)
-            {
-                if (tw > tinTo && tw < toutTo)
-                    for (int i = 0; i < nc; i++)
-                        if (clo[i] <= tw && tw < chi[i]) { if (csep[i]) return i; break; }
-                return -1;
-            }
-            Span<bool> inM = stackalloc bool[4]; inM.Clear();
-            bool parentInM = false;
-            int mm = lift;
-            for (int i = 0; i < cnbn; i++)
-            {
-                int y = cbn[i];
-                if (y == to) continue;
-                if (cbnc[i] != cx) { mm = Math.Min(mm, csuf[ccs[cbnc[i]]]); continue; }
-                int j = PieceOf(cnd[y].Tin);
-                if (j >= 0) inM[j] = true; else parentInM = true;
-            }
-            const int merged = -2;
-            bool needParent = parentInM;
-            for (int di = 0; di < 4; di++)
-            {
-                int w = to + dirs[di];
-                if (w == lift) { fr[di] = true; lab[di] = merged; continue; }
-                if (wall[w] || occ[w]) continue;
-                fr[di] = true;
-                int j = PieceOf(cnd[w].Tin);
-                if ((j >= 0 && inM[j]) || (j < 0 && parentInM)) lab[di] = merged;
-                else { lab[di] = j; needParent = needParent || j < 0; }
-            }
-            int parentMin = 0;
-            if (needParent)
-            {
-                int m = 1 << 30;
-                if (tinTo > ccs[cx]) m = cpre[tinTo - 1];
-                if (toutTo < cce[cx]) m = Math.Min(m, csuf[toutTo]);
-                for (int i = 0; i < nc; i++) if (cnd[cu[i]].Low < tinTo) m = Math.Min(m, cnd[cu[i]].Sub);
-                parentMin = m;
-            }
-            if (parentInM) mm = Math.Min(mm, parentMin);
-            for (int i = 0; i < nc; i++) if (inM[i]) mm = Math.Min(mm, cnd[cu[i]].Sub);
-            int np2 = 0;
-            for (int di = 0; di < 4; di++)
-            {
-                if (!fr[di]) continue;
-                int sides = 0; bool first = true;
-                for (int dj = 0; dj < 4; dj++)
-                    if (fr[dj] && lab[dj] == lab[di]) { sides |= 1 << dj; first = first && dj >= di; }
-                if (first) np2++;
-                cqsd[baseI + di] = (byte)sides;
-                int l = lab[di];
-                cqnp[baseI + di] = l == merged ? mm : l >= 0 ? cnd[cu[l]].Sub : parentMin;
-            }
-            cqpc[to] = (byte)np2;
-        }
+        readonly CutScan cut;
+        void CutNewNode() => cut.CutNewNode();
+        void CutBegin(int b) => cut.CutBegin(b);
+        int CutCompMin(int v) => cut.CutCompMin(v);
+        (int np, int sides) CutQuery(int to, int player) => cut.CutQuery(to, player);
+        int CutPieces(int v) => cut.CutPieces(v);
 
         // ---- own occupancy / floods ------------------------------------------------------------------------------------------------
         void SetOccCell(int c, bool v) { occ[c] = v; blk[c] = (byte)(v || wall[c] ? 1 : 0); }
+        byte[]? wallBlk;
+        void ClearOcc()
+        {
+            if (wallBlk == null) { wallBlk = new byte[cells]; for (int i = 0; i < cells; i++) wallBlk[i] = (byte)(wall[i] ? 1 : 0); }
+            Array.Clear(occ); Buffer.BlockCopy(wallBlk, 0, blk, 0, cells);
+        }
         void SetOcc(int id)
         {
-            for (int c = 0; c < cells; c++) if (occ[c]) { occ[c] = false; blk[c] = 0; }
+            ClearOcc();
             foreach (int b in Boxes(id)) SetOccCell(b, true);
         }
         ReadOnlySpan<int> Boxes(int id) => new(boxArena, nodes[id].BOff, nodes[id].Nb);
@@ -740,16 +567,20 @@ public sealed unsafe partial class FullSolver
         int LabelRegions()
         {
             uint st = ++labStamp; int cnt = 0;
-            foreach (int c in floorCells)
+            var lg = labGen; var lb = lab; var bk = blk; var lq = labQ; var fc = floorCells; int w = W;
+            for (int fi = 0; fi < fc.Length; fi++)
             {
-                if (blk[c] != 0 || labGen[c] == st) continue;
-                labGen[c] = st; lab[c] = cnt; int tail = 0; labQ[tail++] = c;
+                int c = fc[fi];
+                if (bk[c] != 0 || lg[c] == st) continue;
+                lg[c] = st; lb[c] = cnt; int tail = 0; lq[tail++] = c;
                 for (int i = 0; i < tail; i++)
-                    foreach (int d in dirs)
-                    {
-                        int y = labQ[i] + d;
-                        if (labGen[y] != st && blk[y] == 0) { labGen[y] = st; lab[y] = cnt; labQ[tail++] = y; }
-                    }
+                {
+                    int x = lq[i];
+                    int y = x - w; if (lg[y] != st && bk[y] == 0) { lg[y] = st; lb[y] = cnt; lq[tail++] = y; }
+                    y = x + w; if (lg[y] != st && bk[y] == 0) { lg[y] = st; lb[y] = cnt; lq[tail++] = y; }
+                    y = x - 1; if (lg[y] != st && bk[y] == 0) { lg[y] = st; lb[y] = cnt; lq[tail++] = y; }
+                    y = x + 1; if (lg[y] != st && bk[y] == 0) { lg[y] = st; lb[y] = cnt; lq[tail++] = y; }
+                }
                 cnt++;
             }
             return cnt;
@@ -802,6 +633,7 @@ public sealed unsafe partial class FullSolver
         }
 
         // ---- sink gating: the largest tied group of mutually push-reachable unused unoccupied bases ---------------------------------
+        int[] sccStkA = [];
         void ComputeElim4()
         {
             int nb = baseCell.Length;
@@ -810,58 +642,58 @@ public sealed unsafe partial class FullSolver
             elimFr.Clear();
             foreach (int t in free) if (!occ[baseCell[t]]) elimFr.Add(t);
             int m = elimFr.Count; if (m == 0) return;
-            if (elimBlk.Length < cells) elimBlk = new bool[cells];
-            for (int c = 0; c < cells; c++) elimBlk[c] = wall[c] || occ[c];
             if (sccIdx.Length < cells)
             {
-                sccIdx = new int[cells]; sccLow = new int[cells]; sccCmp = new int[cells]; sccCnt = new int[cells + 1]; sccCall = new int[cells]; sccDir = new byte[cells];
+                sccIdx = new int[cells]; sccLow = new int[cells]; sccCmp = new int[cells]; sccCnt = new int[cells + 1]; sccCall = new int[cells]; sccDir = new byte[cells]; sccStkA = new int[cells + 1];
             }
             bstamp++; uint st = bstamp;
-            var stk = sccStk; stk.Clear();
+            var stk = sccStkA; int stn = 0;
+            var blkL = blk; var idx = sccIdx; var low = sccLow; var cmp = sccCmp; var call = sccCall; var dir = sccDir; var bs = bseen; var dr = dirs;
             int next = 0, ncomp = 0;
-            foreach (int r in elimFr)
+            var fr = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(elimFr);
+            for (int fi = 0; fi < fr.Length; fi++)
             {
-                int root = baseCell[r];
-                if (bseen[root] == st) continue;
-                bseen[root] = st; sccIdx[root] = next; sccLow[root] = next; sccCmp[root] = -1; next++;
-                stk.Add(root);
-                sccCall[0] = root; sccDir[0] = 0; int sp = 1;
+                int root = baseCell[fr[fi]];
+                if (bs[root] == st) continue;
+                bs[root] = st; idx[root] = next; low[root] = next; cmp[root] = -1; next++;
+                stk[stn++] = root;
+                call[0] = root; dir[0] = 0; int sp = 1;
                 while (sp > 0)
                 {
-                    int top = sp - 1, v = sccCall[top];
-                    int di = sccDir[top];
+                    int top = sp - 1, v = call[top];
+                    int di = dir[top];
                     if (di < 4)
                     {
-                        sccDir[top] = (byte)(di + 1);
-                        int to = v + dirs[di], back = v - dirs[di];
-                        if (elimBlk[to] || elimBlk[back]) continue;
-                        if (bseen[to] != st)
+                        dir[top] = (byte)(di + 1);
+                        int to = v + dr[di], back = v - dr[di];
+                        if (blkL[to] != 0 || blkL[back] != 0) continue;
+                        if (bs[to] != st)
                         {
-                            bseen[to] = st; sccIdx[to] = next; sccLow[to] = next; sccCmp[to] = -1; next++;
-                            stk.Add(to);
-                            sccCall[sp] = to; sccDir[sp] = 0; sp++;
+                            bs[to] = st; idx[to] = next; low[to] = next; cmp[to] = -1; next++;
+                            stk[stn++] = to;
+                            call[sp] = to; dir[sp] = 0; sp++;
                         }
-                        else if (sccCmp[to] < 0 && sccIdx[to] < sccLow[v]) sccLow[v] = sccIdx[to];
+                        else if (cmp[to] < 0 && idx[to] < low[v]) low[v] = idx[to];
                         continue;
                     }
                     sp = top;
-                    if (sccLow[v] == sccIdx[v])
+                    if (low[v] == idx[v])
                     {
                         while (true)
                         {
-                            int w2 = stk[^1]; stk.RemoveAt(stk.Count - 1);
-                            sccCmp[w2] = ncomp;
+                            int w2 = stk[--stn];
+                            cmp[w2] = ncomp;
                             if (w2 == v) break;
                         }
                         ncomp++;
                     }
-                    if (sp > 0) { int u = sccCall[sp - 1]; if (sccLow[v] < sccLow[u]) sccLow[u] = sccLow[v]; }
+                    if (sp > 0) { int u = call[sp - 1]; if (low[v] < low[u]) low[u] = low[v]; }
                 }
             }
             Array.Clear(sccCnt, 0, ncomp);
             int best = 0;
-            foreach (int ti in elimFr) { int c = sccCmp[baseCell[ti]]; sccCnt[c]++; best = Math.Max(best, sccCnt[c]); }
-            foreach (int ti in elimFr) if (sccCnt[sccCmp[baseCell[ti]]] == best) elimOK[ti] = true;
+            for (int fi = 0; fi < fr.Length; fi++) { int c = cmp[baseCell[fr[fi]]]; sccCnt[c]++; best = Math.Max(best, sccCnt[c]); }
+            for (int fi = 0; fi < fr.Length; fi++) if (sccCnt[cmp[baseCell[fr[fi]]]] == best) elimOK[fr[fi]] = true;
         }
 
         // ---- expansion --------------------------------------------------------------------------------------------------------------
@@ -949,7 +781,7 @@ public sealed unsafe partial class FullSolver
                 }
                 if (sinkTo.Count > 0)
                 {
-                    sinkTo.Sort();
+                    SortUtil.Insertion(sinkTo);
                     foreach (int to in sinkTo) if (TrySink(id, boxes, b, bi, to, baseAt[to], rb)) break;
                     sinkTo.Clear();
                 }
@@ -1211,7 +1043,7 @@ public sealed unsafe partial class FullSolver
 
         public bool Start4()
         {
-            for (int c = 0; c < cells; c++) if (occ[c]) { occ[c] = false; blk[c] = 0; }
+            ClearOcc();
             foreach (int g in s.goals) SetOccCell(g, true);
             var roots = new List<int>(); var covered = new bool[cells];
             foreach (int c in floorCells)
@@ -1426,7 +1258,7 @@ public sealed unsafe partial class FullSolver
         /// <summary>Go planner2.run: best-first over (key, seq); returns the best witness (complete when every box was consumed).</summary>
         public PackingPlan? RunV2()
         {
-            for (int c = 0; c < cells; c++) if (occ[c]) { occ[c] = false; blk[c] = (byte)(wall[c] ? 1 : 0); }
+            ClearOcc();
             foreach (int g in s.goals) SetOccCell(g, true);
             var roots = new List<int>(); var covered = new bool[cells];
             foreach (int c in floorCells)
