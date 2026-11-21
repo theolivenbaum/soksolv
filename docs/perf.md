@@ -199,7 +199,7 @@ all 23 testdata levels for full, macro, novelty, pull, hf (-no-meet), fa2, dive,
    expanded state (+ a second flood for every move whose 8-ring said "may split"). Now a child's region rows are *derived* from the parent's:
    `R - t + x + pockets(x)` (copy of `reg`, clear t, set x, OR the pocket rows that `FastPlayerB` already floods), written to a preallocated pinned slab only for states that
    are new in the seen-set; only ring-split candidates flood (into a scratch row buffer that is copied into the slab if the state is new). No flood at expansion time any more
-   (floods per Holland_81_57 macro run: 178k -> 105k). Derived rows are verified against a real flood by `-cluster-check` (`ClusterChecker.CheckFast`). The child's key is built
+   (floods per Holland_81_57 macro run: 178k -> 105k). Derived rows are verified against a real flood by `SOKSOLV_CHECK_CLUSTER=1` (`ClusterChecker.CheckRegions`; deliberately not `CheckFast`, which the unit tests toggle while other tests run in parallel). The child's key is built
    directly as the 8 x ushort lane array (`Key` layout is exactly that), `MoveSorted` on the lanes, no per-move spans. Cluster share of `full` was 51-80% of all instructions;
    this step: -14..-17% Ir on Holland macro/full, FastPlayerB micro-cleanup another -4%.
 2. **Corral prover (`DeadZoneChecker`) rewritten on pointers + row words** (boards <= 64x64):

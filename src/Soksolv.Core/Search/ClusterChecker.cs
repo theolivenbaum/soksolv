@@ -89,6 +89,8 @@ public sealed unsafe class ClusterChecker
     int qlen;
     readonly int[] queue2Arr; readonly uint[] mark2Arr;
     public static bool CheckFast = false;
+    /// <summary>Test hook (env SOKSOLV_CHECK_CLUSTER=1): verify every derived child region of the proof search against a real flood.</summary>
+    public static readonly bool CheckRegions = Environment.GetEnvironmentVariable("SOKSOLV_CHECK_CLUSTER") == "1";
 
     // proof-search scratch
     Key[] cq = new Key[2048];
@@ -373,7 +375,7 @@ public sealed unsafe class ClusterChecker
                             for (int r = pkLo; r <= pkHi; r++) dst[r] |= pkB[r];
                             dst[rq[to] >> 6] &= ~(1UL << (rq[to] & 63)); dst[rq[x] >> 6] |= 1UL << (rq[x] & 63);
                         }
-                        if (CheckFast) CheckDerived(x, to, dst);
+                        if (CheckRegions) CheckDerived(x, to, dst);
                     }
                     if (!viaScr && pkHi >= pkLo) { for (int r = pkLo; r <= pkHi; r++) pkB[r] = 0; pkLo = 0; pkHi = -1; }
                 }
