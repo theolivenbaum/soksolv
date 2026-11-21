@@ -92,6 +92,9 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] fa2 anytime lane (second engine on the macro lane's plan4 list) for the portfolio
 - [ ] unported fa2 experiment flags: v2ng/old plan variants in portfolio, hall-sup, plan-file/replay/stream engines
 
+- [x] factor lane (resumable macro/novelty/fa2/reverse sub-engines): exact parity 12/12 gated levels; gate 224/13,315 levels; portfolio lane. Speed 1.26x Go overall on 8 gated levels (0.74-1.34x per level).
+- [x] dive lane (pull-view landmark dive, paired base+A engines, Hungarian matcher, HubReach/zone-dead roots): exact parity 22/22 + 40/40 + 38/40 (2 setup-timeouts in Go); gate 315/13,315 levels; replaces reverse on gated boards. Speed 0.89x Go.
+- [ ] dive: perimeter meetings, revive ring; factor: -factor-alt; both: timed-mode ladder runs on the gated levels
 - [x] Macro wide-level speed: 1.22x -> 1.05x Go CPU on 12 wide levels (hot rows/columns, bit box search + moveAccessBits, plan4 radix sort, goal-area memo); remaining: CutQueryFill/Expand4 constants, displacement, region counts
 
 ## toward / hf (thirteenth fork)

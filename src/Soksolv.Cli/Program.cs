@@ -119,6 +119,7 @@ SolveResult Run(string[] r, double tl)
     if (strategy == "pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolvePull(r, opt, tl); }
     if (strategy == "fa2") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveFa2(r, opt, tl); }
     if (strategy == "novelty") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveNovelty(r, opt, tl); }
+    if (strategy == "dive") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveDive(r, opt, tl); }
     if (strategy == "factor")
     {
         var lvf = Level.Parse(r);

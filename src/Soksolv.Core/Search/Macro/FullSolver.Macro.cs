@@ -470,7 +470,7 @@ public sealed unsafe partial class FullSolver
                         return true;
                     }
                 }
-                else if (!(fa2On ? Fa2Visit(k, nc, cur) : MVisit(k, nc, cur))) return false;
+                else if (!(diveOn ? DiveVisit(k, nc, cur) : fa2On ? Fa2Visit(k, nc, cur) : MVisit(k, nc, cur))) return false;
                 for (int d2i = 0; d2i < 4; d2i++)
                 {
                     int k2 = nc * 4 + d2i;
