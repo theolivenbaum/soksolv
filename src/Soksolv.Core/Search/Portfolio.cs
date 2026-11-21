@@ -11,6 +11,8 @@ public sealed class PortfolioOptions
     public bool Full = true, Reverse = true, Macro = true;
     /// <summary>Novelty lane (forward FESS with the novelty advisor). Pull lane: off by default — without the backward perimeter (not ported) it rarely finishes a level alone.</summary>
     public bool Novelty = true, Pull = false;
+    /// <summary>fa2 lane (plan-guided forward FESS: own v2 plan; Go's anytime lane also runs a second engine on the macro lane's plan4 list — not ported).</summary>
+    public bool Fa2 = true;
     public int MacroStage = 5, MacroFeatures = 255; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     public int RevSupply = 4;
     public Action<string>? Log;
@@ -37,7 +39,7 @@ public static class Portfolio
     {
         var sw = Stopwatch.StartNew();
         var cancel = new CancelFlag();
-        int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0) + (po.Macro ? 1 : 0) + (po.Novelty ? 1 : 0) + (po.Pull ? 1 : 0);
+        int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0) + (po.Macro ? 1 : 0) + (po.Novelty ? 1 : 0) + (po.Pull ? 1 : 0) + (po.Fa2 ? 1 : 0);
         if (lanes == 0) return new SolveResult { Reason = "no lanes" };
         ulong budget = po.MemBytes / 100 * 70 / (ulong)lanes;
         var shared = new ClusterTable(16); var sharedPen = new ClusterTable(16); var sharedDz = new Search.DeadZone.DeadZoneTable(18);
@@ -84,6 +86,12 @@ public static class Portfolio
             {
                 NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedDeadZone = sharedDz,
                 MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
+            }, timeLimitSec));
+        if (po.Fa2)
+            Lane("fa2", () => FullSolver.SolveFa2(rows, new FullOptions
+            {
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedDeadZone = sharedDz,
+                StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
             }, timeLimitSec));
         if (po.Pull)
             Lane("pull", () => FullSolver.SolvePull(rows, new FullOptions
