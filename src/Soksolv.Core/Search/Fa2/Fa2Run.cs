@@ -158,12 +158,12 @@ public sealed unsafe partial class FullSolver
             uint st = stamp;
             if (fa2Trace) Console.Error.WriteLine("  child " + string.Join(" ", child) + $" sideCell={side} np={np}");
             bool dead = false;
-            if (e.Verified) { }   // proved alive at expansion (same position, same player side): the checks are deterministic
+            if (e.Verified && !fa2NoVer) { }   // proved alive at expansion (same position, same player side): the checks are deterministic
             else
             {
                 ulong mk = Fa2MemoKey(eh, et);
-                if (fa2LiveMemo.Has(mk)) fa2MemoHits++;
-                else if (fa2DeadMemo.Has(mk)) { fa2MemoHits++; dead = true; }
+                if (!fa2NoMemo && fa2LiveMemo.Has(mk)) fa2MemoHits++;
+                else if (!fa2NoMemo && fa2DeadMemo.Has(mk)) { fa2MemoHits++; dead = true; }
                 else
                 {
                     if (cl != null && cl.Dead(occ, et, side, mark, st, -1)) dead = true;
