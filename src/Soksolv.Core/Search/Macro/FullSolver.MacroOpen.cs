@@ -40,7 +40,7 @@ public sealed unsafe partial class FullSolver
             int p0 = mRevP;
             if (p0 >= 0 && maux[p0].Bucket == maux[id].Bucket) { mPB0 = nodes.From(id); mPT0 = maux[id].PushTo; mPPlayer = nodes.Player(p0); }
         }
-        int parentPacked = MPacked();
+        int parentPacked = MPackedBoxes(cur);
         int parentConn = maux[id].Reg;
         mCmdMask = 0; mUnpinMask = 0;
         long tdl = Prof.Start();
@@ -545,9 +545,14 @@ public sealed unsafe partial class FullSolver
             Prof.Stop(1, tp);
             if (mPlan != null)
             {
-                var (cphase, cpacked) = mPlan.ChildStatus(cur[i], t);
-                packed = mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.PackedChild(occ, cur[i], t, mPlan.FestMiss) : cpacked; progress = cphase;
-                oop = MOutOfPlanChild(cur, cphase, i, t);
+                if (cm != null && cm->Phase != short.MinValue) { progress = cm->Phase; packed = cm->Packed; oop = cm->Oop; }
+                else
+                {
+                    var (cphase, cpacked) = mPlan.ChildStatus(cur[i], t);
+                    packed = mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.PackedChild(occ, cur[i], t, mPlan.FestMiss) : cpacked; progress = cphase;
+                    oop = MOutOfPlanChild(cur, cphase, i, t);
+                    if (cm != null && cphase > short.MinValue && cphase <= short.MaxValue && packed >= 0 && packed < 0xFFFF && oop >= 0 && oop < 0xFFFF) { cm->Phase = (short)cphase; cm->Packed = (ushort)packed; cm->Oop = (ushort)oop; }
+                }
             }
             else { packed = pull ? (int)((mParentSpread - spreadDist[cur[i]] + spreadDist[t]) / SpreadBucket) : MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
             if (mCmdMask != 0 && dl != null && r <= mParentConn)
@@ -978,7 +983,7 @@ public sealed unsafe partial class FullSolver
     }
 
     // ---- candidate memo: region count, room connectivity and hotspot count of a child are pure functions of its box set (and the static level), keyed by the xor of the Zobrist box keys ----
-    struct CandMemo { public ulong Key; public int Room; public ushort R, Hot; }
+    struct CandMemo { public ulong Key; public int Room; public ushort R, Hot, Packed, Oop; public short Phase; }
     const int CandMemoBits = 16;
     CandMemo* candMemo; ulong mBoxHash;
     bool CandMemoOn => !pfOn && !hfRank && tgtPocket == null && !CandMemoOff;
@@ -987,7 +992,7 @@ public sealed unsafe partial class FullSolver
     {
         if (candMemo == null) candMemo = (CandMemo*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(sizeof(CandMemo) << CandMemoBits));
         CandMemo* e = candMemo + ((int)(key >> 40) & ((1 << CandMemoBits) - 1));
-        if (e->Key != key) { e->Key = key; e->Room = -1; e->R = 0xFFFF; e->Hot = 0xFFFF; }
+        if (e->Key != key) { e->Key = key; e->Room = -1; e->R = 0xFFFF; e->Hot = 0xFFFF; e->Phase = short.MinValue; }
         return e;
     }
 

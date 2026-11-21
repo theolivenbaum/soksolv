@@ -172,6 +172,15 @@ public sealed unsafe partial class FullSolver
     }
 
     /// <summary>Boxes on goals (no sink plan: Go packedWith with plan == nil).</summary>
+    /// <summary>MPacked() of the board holding exactly these boxes (pull: a sum over the boxes instead of a scan of every floor cell).</summary>
+    int MPackedBoxes(ReadOnlySpan<int> boxes)
+    {
+        if (!pull) return MPacked();
+        long sp = 0;
+        foreach (int b in boxes) sp += spreadDist[b];
+        return (int)(sp / SpreadBucket);
+    }
+
     int MPacked()
     {
         if (pull) // Festival's backward HF order: progress is how far the boxes have spread from the goals
@@ -290,7 +299,7 @@ public sealed unsafe partial class FullSolver
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = RegionsRel();
         var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
-                          : new FeatureCell(MPacked(), reg, mAddRoom >= 0 ? MAddRoomChecked(boxes) : MRoomConnectivity(), MOutOfPlan(boxes));
+                          : new FeatureCell(MPackedBoxes(boxes), reg, mAddRoom >= 0 ? MAddRoomChecked(boxes) : MRoomConnectivity(), MOutOfPlan(boxes));
         int bucket = pfOn ? PfAdd(boxes, parent, reg) : hfRank && opt.HfFestSched ? HfSchedAdd(boxes, cell, parent, reg) : Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
         if (nodes.NeedsGrow) nodes.Grow();
@@ -539,7 +548,7 @@ public sealed unsafe partial class FullSolver
                 if (wall[nc] || occ[nc] || dist[nc] < 0) continue;
                 if (pull) { int pd = nc + dirs[di]; if (wall[pd] || occ[pd]) continue; } // the pulling player needs room to step back
                 if (mpost[nc * 4 + di] == bs) continue;
-                SetOcc(nc, true);
+                if (!node) SetOcc(nc, true);   // the row flood of a node search reads only the free rows
                 uint ps = ++mpstamp;
                 int pc = PlayerAfter(nc, dirs[di]);
                 int minC;
@@ -565,7 +574,7 @@ public sealed unsafe partial class FullSolver
                 }
                 pushes++;
                 mCandNP = minC;
-                SetOcc(nc, false);
+                if (!node) SetOcc(nc, false);
                 if (pathMode)
                 {
                     if (nc == pathT && (pathSide < 0 || (k & 3) == pathSide))
