@@ -12,12 +12,12 @@ public sealed partial class FullSolver
         readonly int cells; readonly int d0, d1, d2, d3;
         /// <summary>Blocked map (wall or box): written by the caller, read by the scan.</summary>
         public readonly byte[] Blk; readonly byte* blk;
-        struct CutNode { public uint Vgen; public int Tin, Tout, Low, Par, Sub, Cid, Pad; }
+        internal struct CutNode { public uint Vgen; public int Tin, Tout, Low, Par, Sub, Cid, Pad; }
         internal struct Q { public uint Gen; public fixed int Np[4]; public uint Sd; public int Pc; public uint Emit; }
         CutNode[]? cndA; Q[]? qrA; int[]? cpreA, csufA, corderA, ccsA, cceA, cstackA; byte[]? csdirA;
         CutNode* nd; Q* qr; int* cpre, csuf, corder, ccs, cce, cstack; byte* csdir;
         uint cgen, cdgen; int clift = -1; uint cbgen; int cnbn, cnbc, cball;
-        readonly int[] cbn = new int[4], cbnc = new int[4], cbcm = new int[4];
+        readonly int[] cbn = new int[4], cbnc = new int[4], cbcm = new int[4], cbnTin = new int[4];
         int corderN, ccsN;
 
         public CutScan(int cells, int[] dirs)
@@ -30,6 +30,7 @@ public sealed partial class FullSolver
         void CutInit()
         {
             if (nd != null) return;
+            gp = Pin<G>(cells, out gA); dp = Pin<int>(4, out dpA); dp[0] = d0; dp[1] = d1; dp[2] = d2; dp[3] = d3;
             nd = Pin<CutNode>(cells, out cndA); qr = Pin<Q>(cells, out qrA);
             cpre = Pin<int>(cells, out cpreA); csuf = Pin<int>(cells, out csufA); corder = Pin<int>(cells, out corderA);
             ccs = Pin<int>(cells + 1, out ccsA); cce = Pin<int>(cells + 1, out cceA); cstack = Pin<int>(cells + 1, out cstackA); csdir = Pin<byte>(cells + 1, out csdirA);
@@ -38,6 +39,16 @@ public sealed partial class FullSolver
         public int LiftNeighbourComps { get { if (cbgen != cgen) CutBoxInfo(); return cnbc; } }
         public void CutNewNode() { CutInit(); cgen++; cdgen = cgen; clift = -1; corderN = 0; ccsN = 0; }
         public void CutBegin(int b) { cgen++; clift = b; }
+        /// <summary>Runs the DFS over every free cell of G0 (so every component has an id: <see cref="CompId"/>) and returns the number of components.</summary>
+        public int CutAll(int[] floorCells)
+        {
+            byte* bk = blk; CutNode* nodes = nd; uint gen = cdgen;
+            for (int i = 0; i < floorCells.Length; i++) { int c = floorCells[i]; if (bk[c] == 0 && nodes[c].Vgen != gen) CutDfs(c); }
+            return ccsN;
+        }
+        public int CompId(int cell) => nd[cell].Cid;
+        internal CutNode* Nodes => nd;
+        public byte* BlkP => blk;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         int Dir(int di) => di == 0 ? d0 : di == 1 ? d1 : di == 2 ? d2 : d3;
@@ -108,7 +119,7 @@ public sealed partial class FullSolver
                 if (blk[y] != 0) continue;
                 if (nd[y].Vgen != cdgen) CutDfs(y);
                 int cid = nd[y].Cid;
-                cbn[cnbn] = y; cbnc[cnbn] = cid; cnbn++;
+                cbn[cnbn] = y; cbnc[cnbn] = cid; cbnTin[cnbn] = nd[y].Tin; cnbn++;
                 bool dup = false;
                 for (int i = 0; i < cnbc; i++) dup |= cbcm[i] == cid;
                 if (!dup) { cbcm[cnbc++] = cid; m = Math.Min(m, csuf[ccs[cid]]); }
@@ -146,13 +157,55 @@ public sealed partial class FullSolver
         public Q* CutQ(int to) { Q* q = qr + to; if (q->Gen != cgen) CutQueryFill(to); return q; }
         public int CutPieces(int v) { Q* q = qr + v; if (q->Gen != cgen) CutQueryFill(v); return q->Pc; }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static int Piece(int tw, int tinTo, int toutTo, int nc, int* clo, int* chi, int* csep)
+        /// <summary>Lift-independent part of a query on <c>to</c> (valid for the whole node): the separated child subtrees of <c>to</c> in the DFS tree
+        /// of G0, the piece of every neighbour, and the minimum cell of the parent side. Only the cells adjacent to the lifted box (opened by the
+        /// lift) differ between lifts, so one record serves every box of the node.</summary>
+        internal struct G { public uint Gen; public int Tin, Tout, Cx, Ns, ParentMin; public uint Pj; public fixed int Lo[4]; public fixed int Hi[4]; public fixed int Sub[4]; }
+        G[]? gA; G* gp; int* dp; int[]? dpA;
+        const int Blocked = 0xFE;   // Pj byte: neighbour blocked in G0 (wall, box); 0xFF = parent side; 0..3 = separated child
+
+        G* FillG(int to)
         {
-            if (tw > tinTo && tw < toutTo)
-                for (int i = 0; i < nc; i++)
-                    if (clo[i] <= tw && tw < chi[i]) return csep[i] != 0 ? i : -1;
-            return -1;
+            G* g = gp + to;
+            byte* bk = blk; CutNode* nodes = nd; int lift = clift;
+            CutNode* nt = nodes + to;
+            if (nt->Vgen != cdgen) CutDfs(to);
+            g->Gen = cdgen;
+            int tinTo = nt->Tin, toutTo = nt->Tout, cx = nt->Cid;
+            bool isRoot = nt->Par < 0;
+            g->Tin = tinTo; g->Tout = toutTo; g->Cx = cx;
+            int ns = 0, pm = 1 << 30;
+            for (int di = 0; di < 4; di++)
+            {
+                int u = to + dp[di];
+                if (bk[u] != 0 || u == lift) continue;
+                CutNode* nu = nodes + u;
+                if (nu->Par == to && nu->Vgen == cdgen)
+                {
+                    if (nu->Low < tinTo && nu->Sub < pm) pm = nu->Sub;
+                    if (isRoot || nu->Low >= tinTo) { g->Lo[ns] = nu->Tin; g->Hi[ns] = nu->Tout; g->Sub[ns] = nu->Sub; ns++; }
+                }
+            }
+            g->Ns = ns;
+            if (tinTo > ccs[cx]) { int v = cpre[tinTo - 1]; if (v < pm) pm = v; }
+            if (toutTo < cce[cx]) { int v = csuf[toutTo]; if (v < pm) pm = v; }
+            g->ParentMin = pm;
+            uint pj = 0;
+            for (int di = 0; di < 4; di++)
+            {
+                int w = to + dp[di]; uint v;
+                if (bk[w] != 0 || w == lift) v = (uint)Blocked;
+                else
+                {
+                    int tw = nodes[w].Tin; v = 0xFF;
+                    if (tw > tinTo && tw < toutTo)
+                        for (int i = 0; i < ns; i++)
+                            if (g->Lo[i] <= tw && tw < g->Hi[i]) { v = (uint)i; break; }
+                }
+                pj |= v << (di << 3);
+            }
+            g->Pj = pj;
+            return g;
         }
 
         [SkipLocalsInit]
@@ -162,52 +215,39 @@ public sealed partial class FullSolver
             q->Gen = cgen; q->Emit = 0;
             if (cbgen != cgen) CutBoxInfo();
             int lift = clift;
-            int* lab = stackalloc int[4]; int* cu = stackalloc int[4]; int* clo = stackalloc int[4]; int* chi = stackalloc int[4];
-            int* csep = stackalloc int[4]; int* clow = stackalloc int[4]; int* csub = stackalloc int[4];
+            int* lab = stackalloc int[4];
             int fr = 0;
-            byte* bk = blk; CutNode* nodes = nd;
+            byte* bk = blk; CutNode* nodes = nd; int* dr = dp;
             uint sdAll = 0;
             if (to == lift)
             {
                 for (int di = 0; di < 4; di++)
                 {
-                    int w = to + Dir(di);
+                    int w = to + dr[di];
                     if (bk[w] != 0) continue;
                     fr |= 1 << di; lab[di] = nodes[w].Cid; // ensured by boxInfo
                 }
-                int npc = 0;
+                int npc = 0, asg = 0;
                 for (int di = 0; di < 4; di++)
                 {
-                    if ((fr >> di & 1) == 0) continue;
-                    int sides0 = 0; bool first0 = true;
-                    for (int dj = 0; dj < 4; dj++)
-                        if ((fr >> dj & 1) != 0 && lab[dj] == lab[di]) { sides0 |= 1 << dj; first0 = first0 && dj >= di; }
-                    if (first0) npc++;
-                    sdAll |= (uint)sides0 << (di << 3);
-                    q->Np[di] = csuf[ccs[lab[di]]];
+                    if (((fr & ~asg) >> di & 1) == 0) continue;
+                    int li = lab[di], grp = 1 << di;
+                    for (int dj = di + 1; dj < 4; dj++) if ((fr >> dj & 1) != 0 && lab[dj] == li) grp |= 1 << dj;
+                    asg |= grp; npc++;
+                    int npv = csuf[ccs[li]];
+                    for (int m = grp; m != 0; m &= m - 1)
+                    {
+                        int dj = BitOperations.TrailingZeroCount(m);
+                        sdAll |= (uint)grp << (dj << 3);
+                        q->Np[dj] = npv;
+                    }
                 }
                 q->Sd = sdAll; q->Pc = npc;
                 return;
             }
-            CutNode* nt = nodes + to;
-            if (nt->Vgen != cdgen) CutDfs(to);
-            uint gen = cdgen;
-            int tinTo = nt->Tin, toutTo = nt->Tout, cx = nt->Cid;
-            bool isRoot = nt->Par < 0;
-            int nc = 0;
-            int* wc = stackalloc int[4];
-            for (int di = 0; di < 4; di++)
-            {
-                int u = to + Dir(di); wc[di] = u;
-                if (bk[u] != 0 || u == lift) continue;
-                CutNode* nu = nodes + u;
-                if (nu->Par == to && nu->Vgen == gen)
-                {
-                    cu[nc] = u; clo[nc] = nu->Tin; chi[nc] = nu->Tout; clow[nc] = nu->Low; csub[nc] = nu->Sub;
-                    csep[nc] = isRoot || nu->Low >= tinTo ? 1 : 0;
-                    nc++;
-                }
-            }
+            G* g = gp + to;
+            if (g->Gen != cdgen) g = FillG(to);
+            int cx = g->Cx, tinTo = g->Tin, toutTo = g->Tout, ns = g->Ns;
             int inM = 0; bool parentInM = false;
             int mm = lift;
             for (int i = 0; i < cnbn; i++)
@@ -215,44 +255,41 @@ public sealed partial class FullSolver
                 int y = cbn[i];
                 if (y == to) continue;
                 if (cbnc[i] != cx) { int cm = csuf[ccs[cbnc[i]]]; if (cm < mm) mm = cm; continue; }
-                int j = Piece(nodes[y].Tin, tinTo, toutTo, nc, clo, chi, csep);
+                int tw = cbnTin[i], j = -1;
+                if (tw > tinTo && tw < toutTo)
+                    for (int k = 0; k < ns; k++)
+                        if (g->Lo[k] <= tw && tw < g->Hi[k]) { j = k; break; }
                 if (j >= 0) inM |= 1 << j; else parentInM = true;
             }
-            const int merged = -2;
-            bool needParent = parentInM;
-            for (int di = 0; di < 4; di++)
-            {
-                int w = wc[di];
-                if (w == lift) { fr |= 1 << di; lab[di] = merged; continue; }
-                if (bk[w] != 0) continue;
-                fr |= 1 << di;
-                int j = Piece(nodes[w].Tin, tinTo, toutTo, nc, clo, chi, csep);
-                if (j >= 0 ? (inM >> j & 1) != 0 : parentInM) lab[di] = merged;
-                else { lab[di] = j; needParent |= j < 0; }
-            }
-            int parentMin = 0;
-            if (needParent)
-            {
-                int m = 1 << 30;
-                if (tinTo > ccs[cx]) m = cpre[tinTo - 1];
-                if (toutTo < cce[cx]) { int sv = csuf[toutTo]; if (sv < m) m = sv; }
-                for (int i = 0; i < nc; i++) if (clow[i] < tinTo && csub[i] < m) m = csub[i];
-                parentMin = m;
-            }
-            if (parentInM && parentMin < mm) mm = parentMin;
-            for (int i = 0; i < nc; i++) if ((inM >> i & 1) != 0 && csub[i] < mm) mm = csub[i];
-            int np2 = 0;
-            for (int di = 0; di < 4; di++)
-            {
-                if ((fr >> di & 1) == 0) continue;
-                int sides = 0; bool first = true; int li = lab[di];
-                for (int dj = 0; dj < 4; dj++)
-                    if ((fr >> dj & 1) != 0 && lab[dj] == li) { sides |= 1 << dj; first = first && dj >= di; }
-                if (first) np2++;
-                sdAll |= (uint)sides << (di << 3);
-                q->Np[di] = li == merged ? mm : li >= 0 ? csub[li] : parentMin;
-            }
-            q->Sd = sdAll; q->Pc = np2;
+            uint pj = g->Pj;
+            int l0 = Label(to + d0, lift, (int)(pj & 0xFF), inM, parentInM, -100);
+            int l1 = Label(to + d1, lift, (int)(pj >> 8 & 0xFF), inM, parentInM, -101);
+            int l2 = Label(to + d2, lift, (int)(pj >> 16 & 0xFF), inM, parentInM, -102);
+            int l3 = Label(to + d3, lift, (int)(pj >> 24), inM, parentInM, -103);
+            if (parentInM && g->ParentMin < mm) mm = g->ParentMin;
+            for (int i = 0; i < ns; i++) if ((inM >> i & 1) != 0 && g->Sub[i] < mm) mm = g->Sub[i];
+            int parentMin = g->ParentMin;
+            // labels of non-free directions are distinct negative sentinels below -2, so equal labels = same piece
+            uint m0 = 1u | (l1 == l0 ? 2u : 0) | (l2 == l0 ? 4u : 0) | (l3 == l0 ? 8u : 0);
+            uint m1 = 2u | (l0 == l1 ? 1u : 0) | (l2 == l1 ? 4u : 0) | (l3 == l1 ? 8u : 0);
+            uint m2 = 4u | (l0 == l2 ? 1u : 0) | (l1 == l2 ? 2u : 0) | (l3 == l2 ? 8u : 0);
+            uint m3 = 8u | (l0 == l3 ? 1u : 0) | (l1 == l3 ? 2u : 0) | (l2 == l3 ? 4u : 0);
+            q->Sd = m0 | m1 << 8 | m2 << 16 | m3 << 24;
+            q->Np[0] = NpOf(l0, mm, g, parentMin); q->Np[1] = NpOf(l1, mm, g, parentMin); q->Np[2] = NpOf(l2, mm, g, parentMin); q->Np[3] = NpOf(l3, mm, g, parentMin);
+            // distinct free pieces = free directions that are the first of their piece
+            int pc = (l0 >= -2 ? 1 : 0) + (l1 >= -2 && l1 != l0 ? 1 : 0) + (l2 >= -2 && l2 != l0 && l2 != l1 ? 1 : 0) + (l3 >= -2 && l3 != l0 && l3 != l1 && l3 != l2 ? 1 : 0);
+            q->Pc = pc;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static int Label(int w, int lift, int pv, int inM, bool parentInM, int sentinel)
+        {
+            if (w == lift) return -2;                         // the lifted cell is free: merges the pieces it touches
+            if (pv == Blocked) return sentinel;
+            if (pv == 0xFF) return parentInM ? -2 : -1;
+            return (inM >> pv & 1) != 0 ? -2 : pv;
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static int NpOf(int l, int mm, G* g, int parentMin) => l == -2 ? mm : l >= 0 ? g->Sub[l] : parentMin;
     }
 }

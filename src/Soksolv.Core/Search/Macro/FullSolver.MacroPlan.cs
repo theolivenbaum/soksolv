@@ -186,12 +186,12 @@ public sealed unsafe partial class FullSolver
         int next, best, expanded, moveCount; readonly int maxNodes; readonly long deadlineMs;
         readonly bool[] covered; readonly int[] floor;
         // pull-move scratch: player's parent region, per-box seen pull states, distinct (to, np) ends
-        readonly uint[] pgen; uint pg; readonly uint[] pseen; uint pgenBox;
+        uint pgenBox;
 
         public Planner(FullSolver s, bool[] sink, bool[] start, bool[] pushable, int[] distance, int maxNodes, long deadlineMs)
         {
             this.s = s; this.sink = sink; this.start = start; this.pushable = pushable; this.distance = distance; this.maxNodes = maxNodes; this.deadlineMs = deadlineMs;
-            occ = new bool[s.cells]; mark = new uint[s.cells]; covered = new bool[s.cells]; pgen = new uint[s.cells]; pseen = new uint[4 * s.cells];
+            occ = new bool[s.cells]; mark = new uint[s.cells]; covered = new bool[s.cells];
             floor = s.FloorCells();
         }
 
@@ -230,7 +230,7 @@ public sealed unsafe partial class FullSolver
 
         // cut scan over G0 (every box placed): queries of "player region with box b lifted and a box on `to`" without a flood per pull state
         CutScan? cut; byte[]? cblk;
-        readonly List<PMove> pmMoves = new(), pmRemovals = new(); readonly HashSet<(int, int)> pmEnds = new(); readonly List<int> pmQ = new(), pmRb = new();
+        readonly List<PMove> pmMoves = new(), pmRemovals = new(); readonly List<int> pmRb = new();
         void SetBlk(int c, bool v) { occ[c] = v; cblk![c] = (byte)(v || s.wall[c] ? 1 : 0); }
 
         static void StableSort(List<PMove> l, Comparison<PMove> cmp)
@@ -243,61 +243,79 @@ public sealed unsafe partial class FullSolver
             }
         }
 
+        byte[]? wallBlk; uint[]? pseenA; int[]? pqA; uint* pseenP; int* pqP;
         PMove[] PullMoves(int[] boxes, int player)
         {
             var dirs = s.dirs;
             if (cut == null)
             {
                 cut = new CutScan(s.cells, dirs); cblk = cut.Blk;
+                wallBlk = new byte[s.cells]; for (int c = 0; c < wallBlk.Length; c++) wallBlk[c] = (byte)(s.wall[c] ? 1 : 0);
+                pseenA = GC.AllocateArray<uint>(4 * s.cells, pinned: true); pseenP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref pseenA[0]);
+                pqA = GC.AllocateArray<int>(4 * s.cells + 8, pinned: true); pqP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref pqA[0]);
             }
-            for (int c = 0; c < cblk!.Length; c++) cblk[c] = (byte)(s.wall[c] ? 1 : 0);
+            Buffer.BlockCopy(wallBlk!, 0, cblk!, 0, cblk!.Length);
             foreach (int bx in boxes) cblk[bx] = 1;
-            var (_, parentStamp) = Flood(player);
-            pg++;
-            foreach (int c in queue) if (mark[c] == parentStamp) pgen[c] = pg;
             var moves = pmMoves; moves.Clear(); var removals = pmRemovals; removals.Clear();
-            var ends = pmEnds; var q = pmQ; var rbOf = pmRb; rbOf.Clear();
-            int baseR = Regions();
+            var rbOf = pmRb; rbOf.Clear();
             cut.CutNewNode();
+            int baseR = cut.CutAll(floor);          // regions of the unlifted board (DFS components of G0)
+            int plab = cut.CompId(player);          // the player's region: pulls start on its cells
+            byte* bk = cut.BlkP; var cnodes = cut.Nodes; uint* pseen = pseenP; int* q = pqP; int d0 = dirs[0], d1 = dirs[1], d2 = dirs[2], d3 = dirs[3];
             foreach (int b in boxes)
             {
                 if (Stopped()) break;
                 if (sink[b])
                 {
-                    SetBlk(b, false); var (np0, _) = Flood(player); SetBlk(b, true);
+                    cut.CutBegin(b);
+                    int np0 = cut.CutCompMin(player);   // player's component with the box removed
                     removals.Add(new PMove { From = b, To = b, Player = np0, Remove = true });
                     continue;
                 }
-                ends.Clear(); pgenBox++;
+                pgenBox++;
                 uint g = pgenBox;
-                q.Clear();
+                int qc = 0;
                 for (int di = 0; di < 4; di++)
-                    if (pgen[b + dirs[di]] == pg) { int k = b * 4 + di; q.Add(k); pseen[k] = g; }
+                {
+                    int y = b + (di == 0 ? d0 : di == 1 ? d1 : di == 2 ? d2 : d3);
+                    if (bk[y] == 0 && cnodes[y].Cid == plab) { int k = b * 4 + di; q[qc++] = k; pseen[k] = g; }
+                }
                 cut.CutBegin(b);
                 SetBlk(b, false);
                 int rb = -1;
-                for (int qi = 0; qi < q.Count; qi++)
+                for (int qi = 0; qi < qc; qi++)
                 {
                     if ((qi & 31) == 0 && Stopped()) break;
                     int k = q[qi];
-                    int c = k / 4, d = dirs[k % 4];
-                    int to = c + d, pl = c + 2 * d;
-                    if (s.wall[to] || occ[to] || s.wall[pl] || occ[pl]) continue;
-                    // player's region with the box on `to`: flood from pl with `to` blocked (cut scan answer)
-                    int np = cut.CutQueryDir(to, k & 3, out int sides);
-                    for (int di = 0; di < 4; di++)
+                    int c = k >> 2, di = k & 3;
+                    int d = di == 0 ? d0 : di == 1 ? d1 : di == 2 ? d2 : d3;
+                    int to = c + d;
+                    if (bk[to] != 0 || bk[to + d] != 0) continue;
+                    // player's region with the box on `to`: cut scan answer
+                    var qq = cut.CutQ(to);
+                    int sides = (int)(qq->Sd >> (di << 3) & 15), np = qq->Np[di];
+                    for (int m = sides; m != 0; m &= m - 1)
                     {
-                        int k2 = to * 4 + di;
-                        if ((sides & (1 << di)) != 0 && pseen[k2] != g) { pseen[k2] = g; q.Add(k2); }
+                        int k2 = to * 4 + BitOperations.TrailingZeroCount(m);
+                        if (pseen[k2] != g) { pseen[k2] = g; q[qc++] = k2; }
                     }
                     bool remove = sink[to];
-                    if (remove) np = cut.CutCompMin(to);
-                    if (!ends.Add((to, np))) continue;
-                    var m = new PMove { From = b, To = to, Player = np, Remove = remove, Weight = 1, Score = distance[to] - distance[b] };
-                    if (remove) { m.Weight = 0; m.Score = -distance[b]; removals.Add(m); }
+                    if (remove)
+                    {
+                        np = cut.CutCompMin(to);
+                        if ((qq->Emit & 16) != 0) continue;   // (to, np) is the same for every direction
+                        qq->Emit |= 16;
+                    }
                     else
                     {
-                        moves.Add(m);
+                        if ((qq->Emit >> di & 1) != 0) continue;   // same (to, component) already emitted for this box
+                        qq->Emit |= (uint)sides;
+                    }
+                    var m2 = new PMove { From = b, To = to, Player = np, Remove = remove, Weight = 1, Score = distance[to] - distance[b] };
+                    if (remove) { m2.Weight = 0; m2.Score = -distance[b]; removals.Add(m2); }
+                    else
+                    {
+                        moves.Add(m2);
                         if (rb < 0) rb = baseR + 1 - cut.LiftNeighbourComps;
                         rbOf.Add(rb);
                     }

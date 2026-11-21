@@ -251,7 +251,7 @@ public sealed unsafe partial class FullSolver
         uint seq;
         // scan scratch
         readonly uint[] mark; uint stamp; readonly int[] queue; int qlen;
-        readonly uint[] pgen; uint pg; readonly uint[] seenK; uint boxGen; readonly uint* pPgen, pSeenK; readonly int* pBaseAt, pQ; readonly ulong* pAlive; readonly bool* pElim; readonly byte* pBlk;
+        readonly uint[] pgen; uint pg; readonly uint[] seenK; uint boxGen; readonly uint* pPgen, pSeenK; readonly int* pBaseAt, pQ; readonly ulong* pAlive; readonly bool* pElim; readonly byte* pBlk; readonly int* pDir, pDist, pLab; readonly uint* pLabGen; readonly byte* pGoal; readonly byte[] goalB; readonly int[] dirsP;
         P2Cand[] candA = new P2Cand[256]; int candN; P2Kid[] remK = new P2Kid[256], beamK = new P2Kid[256], sortK = new P2Kid[256]; readonly uint[] egen; readonly byte[] ecnt; readonly int[] eval;
         List<P2Cand> cands = new(); P2Child[] rem = new P2Child[256]; int remN; P2Child[] beam = new P2Child[256]; int beamN;
         readonly int[] demand; readonly ulong[] alive; int[] region0 = new int[64]; int region0N; int[] freeA; int freeN;
@@ -277,14 +277,14 @@ public sealed unsafe partial class FullSolver
             Fest = fest; RoomSep = roomSep; KeepParks = keepParks;
             cut = new CutScan(cells, dirs); occ = new bool[cells]; blk = cut.Blk; for (int i = 0; i < cells; i++) blk[i] = (byte)(wall[i] ? 1 : 0);
             mark = new uint[cells]; queue = new int[cells]; pgen = PinArr<uint>(cells); seenK = PinArr<uint>(4 * cells); egen = new uint[cells]; ecnt = new byte[cells]; eval = new int[4 * cells];
-            demand = new int[n]; mBox = new int[n]; curBox = new int[n + 1]; freeA = new int[n + 1]; lab = new int[cells]; labGen = new uint[cells]; labQ = new int[cells];
-            bseen = new uint[cells]; sepD = new int[cells]; Array.Fill(sepD, -1); sepQ = new int[cells];
+            demand = new int[n]; mBox = new int[n]; curBox = new int[n + 1]; freeA = new int[n + 1]; lab = PinArr<int>(cells); labGen = PinArr<uint>(cells); labQ = new int[cells];
+            bseen = PinArr<uint>(cells); sepD = new int[cells]; Array.Fill(sepD, -1); sepQ = new int[cells];
             floorCells = s.FloorCells();
             zb = new ulong[cells]; zp = new ulong[cells]; zu = new ulong[n];
             ulong seed = 0x5eed;
             for (int i = 0; i < cells; i++) { zb[i] = Splitmix(ref seed); zp[i] = Splitmix(ref seed); }
             for (int i = 0; i < n; i++) zu[i] = Splitmix(ref seed);
-            baseAt = PinArr<int>(cells); Array.Fill(baseAt, -1);
+            baseAt = PinArr<int>(cells); Array.Fill(baseAt, -1); distance = PinArr<int>(cells);
             baseCell = (int[])s.lv.Boxes.Clone(); Array.Sort(baseCell);
             for (int i = 0; i < baseCell.Length; i++) baseAt[baseCell[i]] = i;
             int words = (cells + 63) / 64;
@@ -308,9 +308,11 @@ public sealed unsafe partial class FullSolver
                 }
                 reach[t] = r;
             }
+            goalB = PinArr<byte>(cells); for (int i = 0; i < cells; i++) goalB[i] = (byte)(goal[i] ? 1 : 0);
+            dirsP = PinArr<int>(4); for (int i = 0; i < 4; i++) dirsP[i] = dirs[i];
             alive = PinArr<ulong>(reach[0].Length); elimOK = PinArr<bool>(Math.Max(1, baseCell.Length)); pullQ_ = PinArr<int>(4 * cells + 8);
             pPgen = (uint*)Unsafe.AsPointer(ref pgen[0]); pSeenK = (uint*)Unsafe.AsPointer(ref seenK[0]); pBaseAt = (int*)Unsafe.AsPointer(ref baseAt[0]);
-            pQ = (int*)Unsafe.AsPointer(ref pullQ_[0]); pAlive = (ulong*)Unsafe.AsPointer(ref alive[0]); pElim = (bool*)Unsafe.AsPointer(ref elimOK[0]); pBlk = (byte*)Unsafe.AsPointer(ref blk[0]);
+            pQ = (int*)Unsafe.AsPointer(ref pullQ_[0]); pAlive = (ulong*)Unsafe.AsPointer(ref alive[0]); pElim = (bool*)Unsafe.AsPointer(ref elimOK[0]); pBlk = (byte*)Unsafe.AsPointer(ref blk[0]); pGoal = (byte*)Unsafe.AsPointer(ref goalB[0]); pDir = (int*)Unsafe.AsPointer(ref dirsP[0]); pDist = (int*)Unsafe.AsPointer(ref distance[0]); pLab = (int*)Unsafe.AsPointer(ref lab[0]); pLabGen = (uint*)Unsafe.AsPointer(ref labGen[0]);
             nbw = Math.Max(1, (baseCell.Length + 63) >> 6);
             cellBases = new ulong[cells * nbw]; freeM = new ulong[nbw]; availM = new ulong[nbw]; visM = new ulong[nbw]; matchedM = new ulong[nbw];
             for (int t = 0; t < baseCell.Length; t++)
@@ -320,7 +322,6 @@ public sealed unsafe partial class FullSolver
                     for (ulong m = rt[w]; m != 0; m &= m - 1) cellBases[((w << 6) + System.Numerics.BitOperations.TrailingZeroCount(m)) * nbw + (t >> 6)] |= 1UL << (t & 63);
             }
             // distance score: sum of finite walking distances to all goals
-            distance = new int[cells];
             var dg = new int[cells];
             foreach (int g in s.goals)
             {
@@ -451,7 +452,8 @@ public sealed unsafe partial class FullSolver
             return true;
         }
 
-        ulong Key(int rem, int regions, int goals, int dist, int rooms)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static ulong Key(int rem, int regions, int goals, int dist, int rooms)
         {
             long inv = (1L << 24) - 1 - dist; if (inv < 0) inv = 0;
             return (ulong)rem << 52 | (ulong)Math.Min(regions, 1023) << 42 | (ulong)Math.Min(goals, 255) << 34 | (ulong)Math.Min(rooms, 255) << 26 | (ulong)inv;
@@ -772,6 +774,7 @@ public sealed unsafe partial class FullSolver
 
         // ---- sink gating: the largest tied group of mutually push-reachable unused unoccupied bases ---------------------------------
         int[] sccStkA = [];
+        int[]? sccA0, sccA1, sccA2, sccA3, sccA4, sccA5; byte[]? sccA6; int* sIdx, sLow, sCmp, sCnt, sCall, sStk; byte* sDir;
         void ComputeElim4()
         {
             int nb = baseCell.Length;
@@ -780,16 +783,20 @@ public sealed unsafe partial class FullSolver
             elimN = 0;
             for (int i = 0; i < freeN; i++) { int t = freeA[i]; if (!occ[baseCell[t]]) elimFr[elimN++] = t; }
             int m = elimN; if (m == 0) return;
-            if (sccIdx.Length < cells)
+            if (sIdx == null)
             {
-                sccIdx = new int[cells]; sccLow = new int[cells]; sccCmp = new int[cells]; sccCnt = new int[cells + 1]; sccCall = new int[cells]; sccDir = new byte[cells]; sccStkA = new int[cells + 1];
+                sIdx = (int*)PinP(cells, out sccA0); sLow = (int*)PinP(cells, out sccA1); sCmp = (int*)PinP(cells, out sccA2); sCnt = (int*)PinP(cells + 1, out sccA3);
+                sCall = (int*)PinP(cells, out sccA4); sStk = (int*)PinP(cells + 1, out sccA5);
+                sccA6 = PinArr<byte>(cells); sDir = (byte*)Unsafe.AsPointer(ref sccA6[0]);
+                bseenP = (uint*)Unsafe.AsPointer(ref bseen[0]);
             }
             bstamp++; uint st = bstamp;
-            var stk = sccStkA; int stn = 0;
-            var blkL = blk; var idx = sccIdx; var low = sccLow; var cmp = sccCmp; var call = sccCall; var dir = sccDir; var bs = bseen; var dr = dirs;
+            var stk = sStk; int stn = 0;
+            byte* blkL = pBlk; int* idx = sIdx; int* low = sLow; int* cmp = sCmp; int* call = sCall; byte* dir = sDir; uint* bs = bseenP; int* dr = pDir;
+            int d0 = dr[0], d1 = dr[1], d2 = dr[2], d3 = dr[3];
             int next = 0, ncomp = 0;
-            var fr = new Span<int>(elimFr, 0, elimN);
-            for (int fi = 0; fi < fr.Length; fi++)
+            var fr = elimFr;
+            for (int fi = 0; fi < elimN; fi++)
             {
                 int root = baseCell[fr[fi]];
                 if (bs[root] == st) continue;
@@ -803,8 +810,9 @@ public sealed unsafe partial class FullSolver
                     if (di < 4)
                     {
                         dir[top] = (byte)(di + 1);
-                        int to = v + dr[di], back = v - dr[di];
-                        if (blkL[to] != 0 || blkL[back] != 0) continue;
+                        int dd = di == 0 ? d0 : di == 1 ? d1 : di == 2 ? d2 : d3;
+                        int to = v + dd;
+                        if (blkL[to] != 0 || blkL[v - dd] != 0) continue;
                         if (bs[to] != st)
                         {
                             bs[to] = st; idx[to] = next; low[to] = next; cmp[to] = -1; next++;
@@ -828,11 +836,13 @@ public sealed unsafe partial class FullSolver
                     if (sp > 0) { int u = call[sp - 1]; if (low[v] < low[u]) low[u] = low[v]; }
                 }
             }
-            Array.Clear(sccCnt, 0, ncomp);
+            new Span<int>(sCnt, ncomp).Clear();
             int best = 0;
-            for (int fi = 0; fi < fr.Length; fi++) { int c = cmp[baseCell[fr[fi]]]; sccCnt[c]++; best = Math.Max(best, sccCnt[c]); }
-            for (int fi = 0; fi < fr.Length; fi++) if (sccCnt[cmp[baseCell[fr[fi]]]] == best) elimOK[fr[fi]] = true;
+            for (int fi = 0; fi < elimN; fi++) { int c = cmp[baseCell[fr[fi]]]; int v = ++sCnt[c]; if (v > best) best = v; }
+            for (int fi = 0; fi < elimN; fi++) if (sCnt[cmp[baseCell[fr[fi]]]] == best) pElim[fr[fi]] = true;
         }
+        static void* PinP(int n, out int[] arr) { arr = GC.AllocateArray<int>(n, pinned: true); return Unsafe.AsPointer(ref arr[0]); }
+        uint* bseenP;
 
         // ---- expansion --------------------------------------------------------------------------------------------------------------
         int[] boxesBuf = new int[64]; readonly int[] pullQ_; int[] pullQ => pullQ_;
@@ -847,10 +857,9 @@ public sealed unsafe partial class FullSolver
             Boxes(id).CopyTo(boxesBuf); var boxes = new ReadOnlySpan<int>(boxesBuf, 0, nbx);
             SetOcc(id);
             var used = Used(id);
-            var (_, parentStamp) = Flood(nd0.Player);
-            pg++;
             CutNewNode();
-            { uint* pgp = pPgen; uint pgv = pg; var qu = queue; for (int i = 0; i < qlen; i++) pgp[qu[i]] = pgv; }
+            int baseR = cut.CutAll(floorCells);   // regions of the unlifted board (DFS components of G0)
+            int plab = cut.CompId(nd0.Player);   // the player's region: pulls start on its cells
             BuildFree(used);
             bool sinks = freeN > 0;
             if (sinks)
@@ -858,87 +867,39 @@ public sealed unsafe partial class FullSolver
                 ComputeElim4();
                 bool any = false;
                 for (int i = 0; i < freeN; i++)
-                { int t = freeA[i]; if (pElim[t]) { any = true; if (pPgen[baseCell[t]] != pg) sinks = false; } }
+                { int t = freeA[i]; if (pElim[t]) { any = true; if (cut.CompId(baseCell[t]) != plab) sinks = false; } }
                 if (!any) sinks = false;
             }
             int aw = reach[0].Length;
             new Span<ulong>(pAlive, aw).Clear();
             for (int i = 0; i < freeN; i++) { var rt = reach[freeA[i]]; for (int w = 0; w < aw; w++) pAlive[w] |= rt[w]; }
-            candN = 0; remN = 0; region0N = 0;
-            int baseR = LabelRegions();
+            beamN = 0; remN = 0; region0N = 0;
+            int nbN = nd0.Nb, goalsP = nd0.Goals, distP = nd0.Dist;
             if (Prof.On) T4[0] += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
             long t1 = Prof.Start();
             if (region0.Length < nbx) region0 = new int[nbx * 2];
             int dd0 = dirs[0], dd1 = dirs[1], dd2 = dirs[2], dd3 = dirs[3];
-            byte* bk = pBlk; uint* seenKp = pSeenK; uint* pgp2 = pPgen; int* q = pQ; int* bAt = pBaseAt; ulong* alv = pAlive;
             for (int bi = 0; bi < nbx; bi++)
             {
                 int b = boxes[bi];
                 int rb = baseR + 1;
                 { // distinct free components next to the box (lab is valid where labGen == labStamp: free cells of the unlifted board)
                     int l0 = -1, l1 = -1, l2 = -1, k = 0;
+                    var cn = cut.Nodes; var bkp = pBlk;
                     for (int di = 0; di < 4; di++)
                     {
                         int y = b + (di == 0 ? dd0 : di == 1 ? dd1 : di == 2 ? dd2 : dd3);
-                        if (labGen[y] == labStamp && lab[y] >= 0)
+                        if (bkp[y] == 0)
                         {
-                            int l = lab[y];
+                            int l = cn[y].Cid;
                             if (k == 0 || (l != l0 && (k < 2 || l != l1) && (k < 3 || l != l2))) { if (k == 0) l0 = l; else if (k == 1) l1 = l; else if (k == 2) l2 = l; k++; }
                         }
                     }
                     if (k > 0) rb = baseR - k + 1;
                 }
                 if ((bi & 7) == 7 && Stopped()) break;
-                boxGen++; uint g = boxGen;
-                int qc = 0;
-                for (int di = 0; di < 4; di++)
-                {
-                    int d = di == 0 ? dd0 : di == 1 ? dd1 : di == 2 ? dd2 : dd3;
-                    if (pgp2[b + d] == pg) { int kk = b * 4 + di; q[qc++] = kk; seenKp[kk] = g; }
-                }
-                CutBegin(b);
-                SetOccCell(b, false);
-                bool sunk = false;
-                for (int qi = 0; qi < qc; qi++)
-                {
-                    int kq = q[qi]; int c = kq >> 2, di = kq & 3;
-                    int d = di == 0 ? dd0 : di == 1 ? dd1 : di == 2 ? dd2 : dd3;
-                    int to = c + d, player = to + d;
-                    if (bk[to] != 0 || bk[player] != 0) continue;
-                    var qq = cut.CutQ(to);
-                    int sides = (int)(qq->Sd >> (di << 3) & 15), np = qq->Np[di];
-                    if (CheckCut)
-                    {
-                        var f = QueryFlood(to, player);
-                        if (f != (np, sides)) throw new InvalidOperationException($"cutscan query ({to},{player}): scan {(np, sides)} != flood {f}");
-                    }
-                    for (int m = sides; m != 0; m &= m - 1)
-                    {
-                        int k2 = to * 4 + BitOperations.TrailingZeroCount(m);
-                        if (seenKp[k2] != g) { seenKp[k2] = g; q[qc++] = k2; }
-                    }
-                    int t = bAt[to];
-                    if (sinks && !sunk && t >= 0 && (used[t >> 6] >> (t & 63) & 1) == 0 && pElim[t])
-                    {
-                        if (Fest) sinkTo.Add(to);
-                        else sunk = TrySink(id, boxes, b, bi, to, t, rb) || sunk;
-                    }
-                    if ((alv[to >> 6] >> (to & 63) & 1) == 0) continue;
-                    if ((qq->Emit >> di & 1) != 0) continue;   // this (to, component) end was already emitted for the box
-                    qq->Emit |= (uint)sides;
-                    int pc = qq->Pc;
-                    if (CheckCut) { int f = PiecesFlood(to); if (f != pc) throw new InvalidOperationException($"cutscan pieces ({to}): scan {pc} != flood {f}"); }
-                    if (candN == candA.Length) Array.Resize(ref candA, candN * 2);
-                    candA[candN++] = new P2Cand { Box = bi, To = to, Player = np, Pieces = pc };
-                }
-                if (sinkTo.Count > 0)
-                {
-                    SortUtil.Insertion(sinkTo);
-                    foreach (int to in sinkTo) if (TrySink(id, boxes, b, bi, to, baseAt[to], rb)) break;
-                    sinkTo.Clear();
-                }
+                PullBox(id, boxes, b, bi, rb, sinks, nbN, goalsP, distP, used, plab);
                 region0[region0N++] = rb;
-                SetOccCell(b, true);
             }
             if (Prof.On) T4[1] += System.Diagnostics.Stopwatch.GetTimestamp() - t1;
             long t2 = Prof.Start();
@@ -961,6 +922,140 @@ public sealed unsafe partial class FullSolver
             nd.CLen = beamN; nd.CSorted = advSorted;
             if (LazyOff) EnsureSorted(id, beamN);
             if (Prof.On) T4[2] += System.Diagnostics.Stopwatch.GetTimestamp() - t2;
+        }
+
+        /// <summary>All pull moves of box b (the box is lifted; cutscan answers every pulled state): park children into beamK, sink children into remK.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        void PullBox(int id, ReadOnlySpan<int> boxes, int b, int bi, int rb, bool sinks, int nbN, int goalsP, int distP, ReadOnlySpan<ulong> used, int plab)
+        {
+            var cutL = cut; byte* bk = pBlk; var cnodes = cutL.Nodes; uint* seenKp = pSeenK; int* q = pQ; int* bAt = pBaseAt; ulong* alv = pAlive; int* dr = pDir;
+            byte* gl = pGoal; int* dst = pDist; bool chk = CheckCut, fest = Fest;
+            int gB = gl[b], dB = dst[b];
+            ulong keyHi = (ulong)nbN << 52; int regBase = rb - 1, goalsB = goalsP - gB, distB = distP - dB;
+            var bm = beamK; int bn = beamN;
+            boxGen++; uint g = boxGen;
+            int qc = 0;
+            for (int di = 0; di < 4; di++)
+                { int y = b + dr[di]; if (bk[y] == 0 && cnodes[y].Cid == plab) { int kk = b * 4 + di; q[qc++] = kk; seenKp[kk] = g; } }
+            CutBegin(b);
+            SetOccCell(b, false);
+            bool sunk = false;
+            for (int qi = 0; qi < qc; qi++)
+            {
+                int kq = q[qi]; int c = kq >> 2, di = kq & 3;
+                int d = dr[di];
+                int to = c + d;
+                if (bk[to] != 0 || bk[to + d] != 0) continue;
+                var qq = cutL.CutQ(to);
+                int sides = (int)(qq->Sd >> (di << 3) & 15), np = qq->Np[di];
+                if (chk)
+                {
+                    var f = QueryFlood(to, to + d);
+                    if (f != (np, sides)) throw new InvalidOperationException($"cutscan query ({to},{to + d}): scan {(np, sides)} != flood {f}");
+                }
+                for (int m = sides; m != 0; m &= m - 1)
+                {
+                    int k2 = to * 4 + BitOperations.TrailingZeroCount(m);
+                    if (seenKp[k2] != g) { seenKp[k2] = g; q[qc++] = k2; }
+                }
+                int t = bAt[to];
+                if (t >= 0 && sinks && !sunk && (used[t >> 6] >> (t & 63) & 1) == 0 && pElim[t])
+                {
+                    if (fest) sinkTo.Add(to);
+                    else sunk = TrySink(id, boxes, b, bi, to, t, rb) || sunk;
+                }
+                if ((alv[to >> 6] >> (to & 63) & 1) == 0) continue;
+                if ((qq->Emit >> di & 1) != 0) continue;   // this (to, component) end was already emitted for the box
+                qq->Emit |= (uint)sides;
+                int pc = qq->Pc;
+                if (chk) { int f = PiecesFlood(to); if (f != pc) throw new InvalidOperationException($"cutscan pieces ({to}): scan {pc} != flood {f}"); }
+                // park child (Key = regions after the pull, goals, summed goal distance); kept only if no sink child exists
+                if (bn == bm.Length) { beamN = bn; Array.Resize(ref beamK, bn * 2); bm = beamK; }
+                int regions = regBase + pc; if (regions > 1023) regions = 1023;
+                int goals = goalsB + gl[to]; if (goals > 255) goals = 255;
+                long inv = (1L << 24) - 1 - (distB + dst[to]); if (inv < 0) inv = 0;
+                bm[bn++] = new P2Kid { Key = keyHi | (ulong)regions << 42 | (ulong)goals << 34 | (ulong)inv, From = (short)b, To = (short)to, Player = (short)np, Base = -1 };
+            }
+            beamN = bn;
+            if (sinkTo.Count > 0)
+            {
+                SortUtil.Insertion(sinkTo);
+                foreach (int to in sinkTo) if (TrySink(id, boxes, b, bi, to, baseAt[to], rb)) break;
+                sinkTo.Clear();
+            }
+            SetOccCell(b, true);
+        }
+
+        /// <summary>Planner v2 pulls of box b: free bases reached become one removal child (best by demand, matching-checked), other ends park candidates.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        void PullBoxV2(int id, ReadOnlySpan<int> boxes, int b, int bi, int rb, int plab)
+        {
+            byte* bk = pBlk; var cutL = cut; var cnodes = cutL.Nodes; uint* seenKp = pSeenK; int* q = pQ; int* bAt = pBaseAt; ulong* alv = pAlive; int* dr = pDir;
+            var rbs = reachB!; int rn = 0; bool chk = CheckCut;
+            { int t0 = baseAt[b]; if (t0 >= 0 && (freeM[t0 >> 6] >> (t0 & 63) & 1) != 0) rbs[rn++] = t0; }
+            boxGen++; uint g = boxGen;
+            int qc = 0;
+            for (int di = 0; di < 4; di++)
+            { int y = b + dr[di]; if (bk[y] == 0 && cnodes[y].Cid == plab) { int kk = b * 4 + di; q[qc++] = kk; seenKp[kk] = g; } }
+            CutBegin(b);
+            SetOccCell(b, false);
+            for (int qi = 0; qi < qc; qi++)
+            {
+                int kq = q[qi]; int c = kq >> 2, di = kq & 3;
+                int d = dr[di];
+                int to = c + d;
+                if (bk[to] != 0 || bk[to + d] != 0) continue;
+                var qq = cutL.CutQ(to);
+                int sides = (int)(qq->Sd >> (di << 3) & 15), np = qq->Np[di];
+                if (chk)
+                {
+                    var f = QueryFlood(to, to + d);
+                    if (f != (np, sides)) throw new InvalidOperationException($"cutscan query ({to},{to + d}): scan {(np, sides)} != flood {f}");
+                }
+                for (int m = sides; m != 0; m &= m - 1)
+                {
+                    int k2 = to * 4 + BitOperations.TrailingZeroCount(m);
+                    if (seenKp[k2] != g) { seenKp[k2] = g; q[qc++] = k2; }
+                }
+                int t = bAt[to];
+                if (t >= 0 && (freeM[t >> 6] >> (t & 63) & 1) != 0) { rbs[rn++] = t; continue; }
+                if ((alv[to >> 6] >> (to & 63) & 1) == 0) continue;
+                if ((qq->Emit >> di & 1) != 0) continue;
+                qq->Emit |= (uint)sides;
+                int pc = qq->Pc;
+                if (chk) { int f = PiecesFlood(to); if (f != pc) throw new InvalidOperationException($"cutscan pieces ({to}): scan {pc} != flood {f}"); }
+                if (candN == candA.Length) Array.Resize(ref candA, candN * 2);
+                candA[candN++] = new P2Cand { Box = bi, To = to, Player = np, Pieces = pc };
+            }
+            if (rn > 0)
+            {
+                for (int i = 1; i < rn; i++)    // order: demand, then base index (total order: no stability needed)
+                {
+                    int x = rbs[i], dx = demand[x], j = i;
+                    while (j > 0 && (demand[rbs[j - 1]] > dx || (demand[rbs[j - 1]] == dx && rbs[j - 1] > x))) { rbs[j] = rbs[j - 1]; j--; }
+                    rbs[j] = x;
+                }
+                int chosen = -1;
+                for (int ti = 0; ti < rn; ti++)
+                {
+                    if (ti >= 64) break;
+                    if (!matchOn || MatchSkip(boxes, bi, rbs[ti])) { chosen = rbs[ti]; break; }
+                }
+                if (chosen >= 0)
+                {
+                    ref var nd = ref nodes[id];
+                    int np = CompMinWithLift(nd.Player);   // the box is gone: the player's region is its component in the board without it
+                    int regions = rb;                      // box b is off the board
+                    int goals = nd.Goals; if (goal[b]) goals--;
+                    int dist = nd.Dist - distance[b];
+                    var ch = new P2Child { From = b, To = baseCell[chosen], Player = np, Base = chosen };
+                    ch.Hash = nd.Hash ^ zb[b] ^ zp[nd.Player] ^ zp[np] ^ zu[chosen];
+                    ch.Key = Key(nd.Nb - 1, regions, goals, dist, 0);
+                    if (remN == rem.Length) Array.Resize(ref rem, remN * 2);
+                    rem[remN++] = ch;
+                }
+            }
+            SetOccCell(b, true);
         }
 
         bool TrySink(int id, ReadOnlySpan<int> boxes, int b, int bi, int to, int t, int rb)
@@ -1014,18 +1109,6 @@ public sealed unsafe partial class FullSolver
         int ParkKids4(int id, ReadOnlySpan<int> boxes, bool advMode)
         {
             ref var nd = ref nodes[id];
-            beamN = 0;
-            if (beamK.Length < candN) beamK = new P2Kid[Math.Max(candN, beamK.Length * 2)];
-            var ca = candA; var bm = beamK; int nbx = nd.Nb, goalsP = nd.Goals, distP = nd.Dist;
-            for (int ci = 0; ci < candN; ci++)
-            {
-                ref readonly var c = ref ca[ci];
-                int b = boxes[c.Box];
-                int regions = region0[c.Box] - 1 + c.Pieces;
-                int goals = goalsP; if (goal[b]) goals--; if (goal[c.To]) goals++;
-                int dist = distP - distance[b] + distance[c.To];
-                bm[beamN++] = new P2Kid { Key = Key(nbx, regions, goals, dist, 0), From = (short)b, To = (short)c.To, Player = (short)c.Player, Base = -1 };
-            }
             int keep = Plan4Beam > 0 ? Plan4Beam : int.MaxValue;
             if (advMode)
             {
@@ -1471,6 +1554,7 @@ public sealed unsafe partial class FullSolver
         }
 
         /// <summary>Go planner2.expand: removals when any box can reach an unused base (only those), else the best V2Beam plain pulls.</summary>
+        int[]? reachB;
         void ExpandV2(int id)
         {
             expGen++;
@@ -1479,77 +1563,44 @@ public sealed unsafe partial class FullSolver
             Boxes(id).CopyTo(boxesBuf); var boxes = new ReadOnlySpan<int>(boxesBuf, 0, nbx);
             SetOcc(id);
             var used = Used(id);
-            var (_, parentStamp) = Flood(nd0.Player);
-            pg++;
             CutNewNode();
-            for (int i = 0; i < qlen; i++) pgen[queue[i]] = pg;
+            int baseR = cut.CutAll(floorCells);   // regions of the unlifted board (DFS components of G0)
+            int plab = cut.CompId(nd0.Player);
             BuildFree(used);
-            cands.Clear(); remN = 0; region0N = 0;
+            candN = 0; remN = 0; region0N = 0;
             Array.Clear(demand);
-            for (int fi = 0; fi < freeN; fi++) { int t = freeA[fi]; for (int i = 0; i < nbx; i++) if (CanReach(t, boxes[i])) demand[t]++; }
+            for (int i = 0; i < nbx; i++)
+            {
+                int bo = boxes[i] * nbw;
+                for (int w = 0; w < nbw; w++)
+                    for (ulong m = cellBases[bo + w] & freeM[w]; m != 0; m &= m - 1) demand[(w << 6) + BitOperations.TrailingZeroCount(m)]++;
+            }
             int aw = reach[0].Length;
-            Array.Clear(alive);
-            for (int fi = 0; fi < freeN; fi++) { var rt = reach[freeA[fi]]; for (int w = 0; w < aw; w++) alive[w] |= rt[w]; }
-            var usedArr = used.ToArray();
-            bool IsFree(int t) => t >= 0 && (usedArr[t >> 6] >> (t & 63) & 1) == 0;
-            var reachBases = new List<int>();
+            new Span<ulong>(pAlive, aw).Clear();
+            for (int fi = 0; fi < freeN; fi++) { var rt = reach[freeA[fi]]; for (int w = 0; w < aw; w++) pAlive[w] |= rt[w]; }
+            reachB ??= new int[4 * cells + 8];
+            if (region0.Length < nbx) region0 = new int[nbx * 2];
             for (int bi = 0; bi < nbx; bi++)
             {
                 int b = boxes[bi];
-                if ((bi & 7) == 7 && Stopped()) break;
-                reachBases.Clear();
-                { int t0 = baseAt[b]; if (IsFree(t0)) reachBases.Add(t0); }
-                boxGen++; uint g = boxGen;
-                int qc = 0; var q = pullQ;
-                for (int di = 0; di < 4; di++)
-                {
-                    int d = dirs[di];
-                    if (pgen[b + d] == pg) { int kk = b * 4 + di; q[qc++] = kk; seenK[kk] = g; }
-                }
-                CutBegin(b);
-                SetOccCell(b, false);
-                for (int qi = 0; qi < qc; qi++)
-                {
-                    int kq = q[qi]; int c = kq / 4, d = dirs[kq % 4];
-                    int to = c + d, player = c + 2 * d;
-                    if (wall[to] || occ[to] || wall[player] || occ[player]) continue;
-                    var (np, sides) = Query(to, player, kq & 3);
+                int rb = baseR + 1;
+                { // box b lifted: its distinct neighbour components merge with b's own cell into one region
+                    int l0 = -1, l1 = -1, l2 = -1, k = 0;
+                    var cn = cut.Nodes; var bkp = pBlk;
                     for (int di = 0; di < 4; di++)
                     {
-                        int k2 = to * 4 + di;
-                        if ((sides & (1 << di)) != 0 && seenK[k2] != g) { seenK[k2] = g; q[qc++] = k2; }
+                        int y = b + dirs[di];
+                        if (bkp[y] == 0)
+                        {
+                            int l = cn[y].Cid;
+                            if (k == 0 || (l != l0 && (k < 2 || l != l1) && (k < 3 || l != l2))) { if (k == 0) l0 = l; else if (k == 1) l1 = l; else if (k == 2) l2 = l; k++; }
+                        }
                     }
-                    int t = baseAt[to];
-                    if (IsFree(t)) { reachBases.Add(t); continue; }
-                    if ((alive[to >> 6] >> (to & 63) & 1) == 0) continue;
-                    if (!NewEnd(to, np, g)) continue;
-                    cands.Add(new P2Cand { Box = bi, To = to, Player = np, Pieces = Pieces(to) });
+                    if (k > 0) rb = baseR - k + 1;
                 }
-                if (reachBases.Count > 0)
-                {
-                    reachBases.Sort((a, c2) => demand[a] != demand[c2] ? demand[a] - demand[c2] : a - c2);
-                    int chosen = -1;
-                    for (int ti = 0; ti < reachBases.Count; ti++)
-                    {
-                        if (ti >= 64) break;
-                        if (!matchOn || MatchSkip(boxes, bi, reachBases[ti])) { chosen = reachBases[ti]; break; }
-                    }
-                    if (chosen >= 0)
-                    {
-                        ref var nd = ref nodes[id];
-                        int np = Flood(nd.Player).norm;      // the box is gone: the player's region is its component in the board without it
-                        int regions = Regions();             // box b is off the board
-                        int goals = nd.Goals; if (goal[b]) goals--;
-                        int dist = nd.Dist - distance[b];
-                        var ch = new P2Child { From = b, To = baseCell[chosen], Player = np, Base = chosen };
-                        ch.Hash = nd.Hash ^ zb[b] ^ zp[nd.Player] ^ zp[np] ^ zu[chosen];
-                        ch.Key = Key(nd.Nb - 1, regions, goals, dist, 0);
-                        if (remN == rem.Length) Array.Resize(ref rem, remN * 2);
-                        rem[remN++] = ch;
-                    }
-                }
-                if (region0N == region0.Length) Array.Resize(ref region0, region0N * 2); region0[region0N++] = Regions();
-                SetOccCell(b, true);
+                if ((bi & 7) == 7 && Stopped()) break;
+                PullBoxV2(id, boxes, b, bi, rb, plab);
+                region0[region0N++] = rb;
             }
             ref var nd1 = ref nodes[id];
             if (remN > 0)
@@ -1562,8 +1613,9 @@ public sealed unsafe partial class FullSolver
             beamN = 0;
             int K = V2Beam;
             if (beam.Length < K + 1) beam = new P2Child[K + 1];
-            foreach (var c in cands)
+            for (int ci = 0; ci < candN; ci++)
             {
+                var c = candA[ci];
                 int b = boxes[c.Box];
                 int regions = region0[c.Box] - 1 + c.Pieces;
                 int goals = nd1.Goals; if (goal[b]) goals--; if (goal[c.To]) goals++;
