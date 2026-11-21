@@ -571,8 +571,11 @@ public sealed unsafe partial class FullSolver
     SolveResult MacroSearch(double timeLimitSec, System.Diagnostics.Stopwatch sw)
     {
         mNodeLimit = nodeLimitOverride > 0 ? nodeLimitOverride : opt.NodeBudget;
-        mDeadlineMs = opt.NodeBudget > 0 ? 0 : timeLimitSec * 1000;
+        mDeadlineMs = opt.NodeBudget > 0 || timeLimitSec <= 0 ? 0 : (mStarted ? clock.ElapsedMilliseconds : 0) + timeLimitSec * 1000;
         long expanded = 0;
+        if (mStarted) mCancelled = false; // exp-278: a later round of the same search (Resumable)
+        else
+        {
         if (MExpired()) return new SolveResult { Reason = "timeout" };
         PairOffsets();
         var start = (int[])lv.Boxes.Clone();
@@ -598,6 +601,8 @@ public sealed unsafe partial class FullSolver
         mBest = 0;
         mSearchStartMs = mLastImproveMs = clock.ElapsedMilliseconds;
         foreach (int b in start) SetOcc(b, false);
+        mStarted = true;
+        }
         var cur = mCur; var child = mChild;
         meetMacro = true;
         while (true)

@@ -23,7 +23,7 @@ public sealed unsafe partial class FullSolver
     readonly List<FessHeap> mqueues = new();
     readonly Dictionary<FeatureCell, int> mcellIDs = new();
     int mNext, mTurn, mBest = -1, mLastAdded = -1, mReopen = -1;
-    bool mCancelled;
+    bool mCancelled, mSetupDone, mStarted;
     long mExpandedN, mNodeLimit;
     uint[] m3 = [], mpost = [], mseen = [], mtseen = []; int[] mbprev = [], mbq = [];
     uint mpstamp, mbstamp, mtst; int mCandNP;
@@ -67,6 +67,9 @@ public sealed unsafe partial class FullSolver
     SolveResult RunMacro(double timeLimitSec)
     {
         var sw = Stopwatch.StartNew();
+        if (!mSetupDone)
+        {
+        mSetupDone = true;
         if (opt.SideDead && !pull) sd = new SideDead(wall, goal, W);
         if (opt.ClusterDead && !pull)
         {
@@ -89,12 +92,14 @@ public sealed unsafe partial class FullSolver
         if (MacroStage >= 3 && !pull) // pull mode has no packing plan (as in Festival)
         {
             long planDeadline = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(250, timeLimitSec * 1000 / 10);
+            if (opt.PlanCapMs > 0) planDeadline = Math.Min(planDeadline, (long)Math.Max(opt.PlanCapMs, 1)); // factor sub-solve: the planner gets a small slice (exp-645b)
             if (prePlan != null) { mPlan = prePlan; stats.Plan4Complete = true; stats.Plan4Swap = prePlanAt; }   // a finished plan4 plan carried into a restarted solver
             else if (Feat(5))
             {
                 // Go: planBudget = 20% of the remaining time (Plan4Frac); -nodes: unbounded (planner caps only); plan4 gets 4/5 of it
                 long nowMs = clock.ElapsedMilliseconds;
                 long budgetMs = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue / 4 : (long)(timeLimitSec * 1000 * 0.2);
+                if (opt.PlanCapMs > 0) budgetMs = Math.Min(budgetMs, (long)Math.Max(opt.PlanCapMs, 1));
                 long p4Deadline = budgetMs >= long.MaxValue / 4 ? long.MaxValue : nowMs + budgetMs * 4 / 5;
                 var p4 = PlanAnytime(p4Deadline, 4096);
                 if (p4 != null && p4.Complete) { p4.FestPacked = true; mPlan = p4; stats.Plan4Complete = true; }
@@ -113,6 +118,7 @@ public sealed unsafe partial class FullSolver
         mpost = new uint[4 * cells]; mseen = new uint[4 * cells]; mtseen = new uint[4 * cells];
         mbprev = new int[4 * cells]; mbq = new int[4 * cells + 4];
         mCur = new int[n]; mChild = new int[n];
+        }
         var res = MacroSearch(timeLimitSec, sw);
         res.TimeMs = sw.Elapsed.TotalMilliseconds;
         res.Stats = stats; stats.Stored = nodes.Count;
@@ -304,7 +310,7 @@ public sealed unsafe partial class FullSolver
     {
         if (mCancelled) return true;
         if (mNodeLimit > 0 && (mExpandedN >= mNodeLimit || opt.Stop || (opt.Cancel?.Stopped ?? false))) { mCancelled = true; return true; }
-        if (mNodeLimit > 0) return false;
+        if (opt.NodeBudget > 0) return false; // deterministic runs ignore wall time
         if (mDeadlineMs > 0 && (opt.Stop || (opt.Cancel?.Stopped ?? false) || clock.ElapsedMilliseconds > mDeadlineMs)) { mCancelled = true; return true; }
         return false;
     }

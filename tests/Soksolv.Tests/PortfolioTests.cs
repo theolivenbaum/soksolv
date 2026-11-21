@@ -14,7 +14,7 @@ public class PortfolioTests
         var rows = TestData.Rows(level);
         var r = Portfolio.Solve(rows, new PortfolioOptions { MemBytes = 2048UL << 20 }, 60);
         Assert.True(r.Solved, r.Reason);
-        Assert.Contains(r.Strategy, new[] { "full", "reverse", "macro" });
+        Assert.Contains(r.Strategy, new[] { "full", "reverse", "macro", "novelty", "fa2", "pull", "factor", "dive", "toward", "hub-gen", "hub-pull" });
         Assert.Null(Verifier.CheckSolution(rows, r.Solution));
     }
 

@@ -53,7 +53,7 @@ public sealed unsafe partial class FullSolver
         for (int c = 0; c < cells; c++) deadSq[c] = dist[c] < 0;
         if (opt.ClusterDead) cl = new ClusterChecker(new ClusterBoard(wall, goal, deadSq, W, salt: true)) { Shared = opt.SharedClusters, SharedPen = null };
         dz = new Search.DeadZone.DeadZoneChecker(new Search.DeadZone.DeadZoneBoard(wall, goal, deadSq, W), 200) { Shared = opt.SharedDeadZone };
-        mNodeLimit = opt.NodeBudget;
+        mNodeLimit = nodeLimitOverride > 0 ? nodeLimitOverride : opt.NodeBudget;
         hotGoalFree = opt.Fa2.GoalHot; hotSides = opt.Fa2.HotSides;
         double limitMs = timeLimitSec > 0 && opt.NodeBudget == 0 ? timeLimitSec * 1000 : 0;
         bool Expired() => (mNodeLimit > 0 && fa2ExpandedN >= mNodeLimit) || opt.Stop || (opt.Cancel?.Stopped ?? false) || (limitMs > 0 && sw.ElapsedMilliseconds > limitMs);
@@ -170,6 +170,7 @@ public sealed unsafe partial class FullSolver
             if (stamp != st) { Reach(side, mark); st = stamp; }
             fa2ExpandedN++;
             fa2Turn++;
+            if (bat != null && (fa2ExpandedN & 1023) == 0 && !bat.Yield(batMe)) return Done(new SolveResult { Reason = "timeout" }); // baton slice (factor lane pauses the engine here)
             ulong cbh = an2.BoxH ^ fa2Zb[eb] ^ fa2Zb[et];
             fa2Seen.Insert(eh);
             ulong* pk3 = nodes.Key(id);

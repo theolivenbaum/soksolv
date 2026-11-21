@@ -51,6 +51,8 @@ public sealed class FullOptions
     public Fa2Options Fa2 = new();
     public FullOptions Clone() => (FullOptions)MemberwiseClone();
     public double StallScale = 1.0;
+    /// <summary>> 0: the packing planner may use at most this many ms (factor sub-solves, exp-645b).</summary>
+    public double PlanCapMs;
 }
 
 /// <summary>
