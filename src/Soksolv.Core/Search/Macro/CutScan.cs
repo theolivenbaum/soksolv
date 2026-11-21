@@ -160,7 +160,7 @@ public sealed partial class FullSolver
         /// <summary>Lift-independent part of a query on <c>to</c> (valid for the whole node): the separated child subtrees of <c>to</c> in the DFS tree
         /// of G0, the piece of every neighbour, and the minimum cell of the parent side. Only the cells adjacent to the lifted box (opened by the
         /// lift) differ between lifts, so one record serves every box of the node.</summary>
-        internal struct G { public uint Gen; public int Tin, Tout, Cx, Ns, ParentMin; public uint Pj; public fixed int Lo[4]; public fixed int Hi[4]; public fixed int Sub[4]; }
+        internal struct G { public uint Gen; public int Tin, Tout, Cx, Ns, ParentMin; public uint Pj; public fixed int Lo[4]; public fixed int Hi[4]; public fixed int Sub[4]; public fixed int PNp[4]; public uint PSd; public int PPc; }
         G[]? gA; G* gp; int* dp; int[]? dpA;
         const int Blocked = 0xFE;   // Pj byte: neighbour blocked in G0 (wall, box); 0xFF = parent side; 0..3 = separated child
 
@@ -205,7 +205,22 @@ public sealed partial class FullSolver
                 pj |= v << (di << 3);
             }
             g->Pj = pj;
+            // plain answer (no lift effect): labels = pieces; used as is, or patched, by lifts that only touch one piece
+            int l0 = Plain(pj, 0), l1 = Plain(pj, 1), l2 = Plain(pj, 2), l3 = Plain(pj, 3);
+            g->PSd = (1u | (l1 == l0 ? 2u : 0) | (l2 == l0 ? 4u : 0) | (l3 == l0 ? 8u : 0))
+                   | (2u | (l0 == l1 ? 1u : 0) | (l2 == l1 ? 4u : 0) | (l3 == l1 ? 8u : 0)) << 8
+                   | (4u | (l0 == l2 ? 1u : 0) | (l1 == l2 ? 2u : 0) | (l3 == l2 ? 8u : 0)) << 16
+                   | (8u | (l0 == l3 ? 1u : 0) | (l1 == l3 ? 2u : 0) | (l2 == l3 ? 4u : 0)) << 24;
+            g->PNp[0] = l0 >= 0 ? g->Sub[l0] : pm; g->PNp[1] = l1 >= 0 ? g->Sub[l1] : pm; g->PNp[2] = l2 >= 0 ? g->Sub[l2] : pm; g->PNp[3] = l3 >= 0 ? g->Sub[l3] : pm;
+            g->PPc = (l0 >= -1 ? 1 : 0) + (l1 >= -1 && l1 != l0 ? 1 : 0) + (l2 >= -1 && l2 != l0 && l2 != l1 ? 1 : 0) + (l3 >= -1 && l3 != l0 && l3 != l1 && l3 != l2 ? 1 : 0);
             return g;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static int Plain(uint pj, int di)
+        {
+            int pv = (int)(pj >> (di << 3) & 0xFF);
+            return pv == Blocked ? -100 - di : pv == 0xFF ? -1 : pv;
         }
 
         [SkipLocalsInit]
@@ -248,6 +263,34 @@ public sealed partial class FullSolver
             G* g = gp + to;
             if (g->Gen != cdgen) g = FillG(to);
             int cx = g->Cx, tinTo = g->Tin, toutTo = g->Tout, ns = g->Ns;
+            if (to + d0 != lift && to + d1 != lift && to + d2 != lift && to + d3 != lift)
+            {
+                // fast path: the lift touches at most one piece of `to` (in its component): the answer is the plain one, with that piece's minimum lowered
+                int code = -1, mmo = lift; bool fast = true;
+                for (int i = 0; i < cnbn; i++)
+                {
+                    int y = cbn[i];
+                    if (y == to) { fast = false; break; }
+                    if (cbnc[i] != cx) { int cm = csuf[ccs[cbnc[i]]]; if (cm < mmo) mmo = cm; continue; }
+                    int tw = cbnTin[i], c2 = 0xFF;
+                    if (tw > tinTo && tw < toutTo)
+                        for (int k = 0; k < ns; k++)
+                            if (g->Lo[k] <= tw && tw < g->Hi[k]) { c2 = k; break; }
+                    if (code < 0) code = c2; else if (code != c2) { fast = false; break; }
+                }
+                if (fast)
+                {
+                    q->Sd = g->PSd; q->Pc = g->PPc;
+                    uint pj1 = g->Pj;
+                    for (int di = 0; di < 4; di++)
+                    {
+                        int np1 = g->PNp[di];
+                        if (code >= 0 && (int)(pj1 >> (di << 3) & 0xFF) == code && mmo < np1) np1 = mmo;
+                        q->Np[di] = np1;
+                    }
+                    return;
+                }
+            }
             int inM = 0; bool parentInM = false;
             int mm = lift;
             for (int i = 0; i < cnbn; i++)
