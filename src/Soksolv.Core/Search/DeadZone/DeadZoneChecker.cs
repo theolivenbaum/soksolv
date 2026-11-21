@@ -478,12 +478,8 @@ public sealed unsafe class DeadZoneChecker
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     static ulong FillRow(ulong y, ulong f)
     {
-        while (true)
-        {
-            ulong z = (y | y << 1 | y >> 1) & f;
-            if (z == y) return y;
-            y = z;
-        }
+        RowK.AssertSubset(y, f, "DZ FillRow");
+        return RowK.Fill(y, f);
     }
 
     (int, int) FloodFree(int p, ulong* outB, bool seeded, ulong dirty0 = 0) => H <= 64 ? FloodFreeDirty(p, outB, seeded, false, dirty0) : FloodFreeSweep(p, outB, seeded, false);
@@ -497,6 +493,25 @@ public sealed unsafe class DeadZoneChecker
         int Hh = H;
         ulong dirty = 0;
         fdChg = 0;
+        if (!seeded)
+        {
+            // plain flood from p: flood kernel v2 (RowK.Flood) over the free rows
+            int prow0 = rc[p] >> 6; ulong pbit = 1UL << (rc[p] & 63);
+            new Span<ulong>(outB, Hh).Clear();
+            int lo = prow0, hi = prow0;
+            RowK.Flood(F, outB, prow0, pbit, ref lo, ref hi);
+            int m0 = -1, size0 = 0;
+            for (int r = lo; r <= hi; r++)
+            {
+                ulong w0 = outB[r];
+                if (w0 != 0)
+                {
+                    if (m0 < 0) m0 = r * W + System.Numerics.BitOperations.TrailingZeroCount(w0);
+                    size0 += System.Numerics.BitOperations.PopCount(w0);
+                }
+            }
+            return (m0, size0);
+        }
         if (!seeded || closed)
         {
             int prow = rc[p] >> 6;

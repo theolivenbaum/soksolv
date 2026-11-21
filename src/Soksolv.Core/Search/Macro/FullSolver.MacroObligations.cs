@@ -61,6 +61,73 @@ public sealed unsafe partial class FullSolver
             markP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref mark[0]); walkPrevP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref walkPrev[0]);
             blkP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref blkArr[0]); qP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref qArr[0]);
             for (int c = 0; c < n; c++) blkP[c] = (byte)(s.wall[c] ? 1 : 0);
+            if (s.W <= 64 && s.lv.H + 2 <= 64 && !RowsOff)
+            {
+                rrows = s.lv.H + 2;
+                rfreeA = GC.AllocateArray<ulong>(rrows, pinned: true); rregA = GC.AllocateArray<ulong>(rrows, pinned: true);
+                rfreeP = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rfreeA[0]); rregP = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rregA[0]);
+                rowsOK = true; rlo = rrows; rhi = -1;
+            }
+        }
+        public static bool RowsOff = Environment.GetEnvironmentVariable("SOKSOLV_PACKROWS_OFF") == "1";   // test hook: queue floods everywhere
+        public static bool RowsCheck = Environment.GetEnvironmentVariable("SOKSOLV_CHECK_PACKROWS") == "1";
+        readonly bool rowsOK; readonly int rrows; readonly ulong[]? rfreeA, rregA; readonly ulong* rfreeP, rregP; int rlo, rhi;
+
+        /// <summary>Free rows (floor minus walls minus the fixed boxes) for <see cref="FloodF"/>; called after blkP changed.</summary>
+        void BuildRows()
+        {
+            int w = s.W, h = s.lv.H;
+            for (int r = 0; r < h; r++)
+            {
+                ulong m = 0; int b = r * w;
+                for (int x = 0; x < w; x++) if (blkP[b + x] == 0) m |= 1UL << x;
+                rfreeP[r + 1] = m;
+            }
+            rfreeP[0] = 0; rfreeP[h + 1] = 0;
+        }
+
+        /// <summary>Same result and visit accounting as <see cref="Flood"/>, as a row flood (no BFS tree, so <see cref="Walk"/> keeps the queue version); membership via <see cref="Reach"/>.</summary>
+        (int norm, bool ok) FloodF(int box, int player)
+        {
+            if (!rowsOK) return Flood(box, player);
+            if (player < 0 || s.wall[player] || Fixed[player] || player == box) return (0, false);
+            int w = s.W;
+            int rp = player / w + 1, cp = player - (rp - 1) * w;
+            ulong* fr = rfreeP; ulong* rg = rregP;
+            int rb = 0; ulong saved = 0;
+            if (box >= 0) { rb = box / w + 1; saved = fr[rb]; fr[rb] = saved & ~(1UL << (box - (rb - 1) * w)); }
+            if (rhi >= 0) for (int r = rlo; r <= rhi; r++) rg[r] = 0;
+            int lo = rp, hi = rp;
+            RowK.Flood(fr, rg, rp, 1UL << cp, ref lo, ref hi);
+            if (box >= 0) fr[rb] = saved;
+            rlo = lo; rhi = hi;
+            int size = 0;
+            for (int r = lo; r <= hi; r++) size += System.Numerics.BitOperations.PopCount(rg[r]);
+            int visits = Visits;
+            if (visits + size >= PackingRouteVisitCap) { Visits = PackingRouteVisitCap; return (0, false); }
+            if (((visits + size) >> 10) != (visits >> 10) && (s.opt.Stop || (s.opt.Cancel?.Stopped ?? false))) { Visits = visits + size; return (0, false); }
+            Visits = visits + size;
+            if (RowsCheck) CheckRows(box, player, (lo - 1) * w + System.Numerics.BitOperations.TrailingZeroCount(rg[lo]), size);
+            return ((lo - 1) * w + System.Numerics.BitOperations.TrailingZeroCount(rg[lo]), true);
+        }
+
+        void CheckRows(int box, int player, int norm, int size)
+        {
+            int saveVisits = Visits;
+            Visits = 0;
+            var (n2, ok2) = Flood(box, player);
+            int got = Visits; Visits = saveVisits;
+            if (!ok2 || n2 != norm || got != size) throw new InvalidOperationException($"packing route row flood: queue (norm {n2}, visits {got}) != rows (norm {norm}, visits {size})");
+            int w = s.W;
+            for (int c = 0; c < s.cells; c++) if ((mark[c] == stamp) != Reach(c)) throw new InvalidOperationException($"packing route row flood: membership differs at {c}");
+        }
+
+        /// <summary>Is cell c in the region of the last <see cref="FloodF"/> / <see cref="Flood"/>?</summary>
+        bool Reach(int c)
+        {
+            if (!rowsOK) return mark[c] == stamp;
+            int r = c / s.W + 1;
+            return (rregP[r] >> (c - (r - 1) * s.W) & 1) != 0;
         }
         readonly byte[] blkArr; readonly int[] qArr; readonly uint* markP; readonly int* walkPrevP; readonly byte* blkP; readonly int* qP;
 
@@ -108,11 +175,12 @@ public sealed unsafe partial class FullSolver
             Used.Clear();
             for (int c = 0; c < blkArr.Length; c++) blkP[c] = (byte)(s.wall[c] ? 1 : 0);
             foreach (int b in parentRequired) if (b != m.From) { Fixed[b] = true; blkP[b] = 1; }
-            if (!Flood(m.From, parentPlayer).ok) return false;
+            if (rowsOK) BuildRows();
+            if (!FloodF(m.From, parentPlayer).ok) return false;
             uint g = ++generation;
             states.Clear();
             for (int di = 0; di < 4; di++)
-                if (mark[m.From + s.dirs[di]] == stamp)
+                if (Reach(m.From + s.dirs[di]))
                 {
                     int k = m.From * 4 + di;
                     seen[k] = g; prev[k] = -1; states.Add(k);
@@ -122,7 +190,7 @@ public sealed unsafe partial class FullSolver
             {
                 int box = m.From;
                 if (m.Remove) box = -1;
-                var (norm, ok) = Flood(box, parentPlayer);
+                var (norm, ok) = FloodF(box, parentPlayer);
                 if (!ok) return false;
                 if (norm == childPlayer) last = -1;
             }
@@ -132,22 +200,22 @@ public sealed unsafe partial class FullSolver
                 int b = k / 4, d = s.dirs[k % 4];
                 int to = b + d, player = b + 2 * d;
                 if (s.wall[to] || Fixed[to] || s.wall[player] || Fixed[player]) continue;
-                var (norm, ok) = Flood(to, player);
+                var (norm, ok) = FloodF(to, player);
                 if (!ok) return false;
                 if (to == m.To)
                 {
                     if (m.Remove)
                     {
-                        (norm, ok) = Flood(-1, player);
+                        (norm, ok) = FloodF(-1, player);
                         if (!ok) return false;
                     }
                     if (norm == childPlayer) { last = k; break; }
-                    if (m.Remove && !Flood(to, player).ok) return false;
+                    if (m.Remove && !FloodF(to, player).ok) return false;
                 }
                 for (int di = 0; di < 4; di++)
                 {
                     int kk = to * 4 + di;
-                    if (mark[to + s.dirs[di]] == stamp && seen[kk] != g) { seen[kk] = g; prev[kk] = k; states.Add(kk); }
+                    if (Reach(to + s.dirs[di]) && seen[kk] != g) { seen[kk] = g; prev[kk] = k; states.Add(kk); }
                 }
             }
             if (last == -2) return false;

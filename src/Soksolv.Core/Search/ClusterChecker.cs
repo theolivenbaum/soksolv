@@ -185,35 +185,23 @@ public sealed unsafe class ClusterChecker
         ulong saved = fr[rp];
         fr[rp] = saved | 1UL << cp;
         int lo = rp, hi = rp;
-        FloodDirty(fr, rg, rp, 1UL << cp, ref lo, ref hi);
+        RowK.Flood(fr, rg, rp, 1UL << cp, ref lo, ref hi);
+        if (RowK.Check) CheckRowK(fr, rg, rp, cp);
         fr[rp] = saved;
         lo0 = lo; hi0 = hi;
         for (int r = lo; ; r++) if (rg[r] != 0) return r * b.W + System.Numerics.BitOperations.TrailingZeroCount(rg[r]);
     }
 
-    /// <summary>Row flood from the seed bits in row rp over free rows f into reg (zero on entry); a bitmask of dirty rows replaces whole-board sweeps (needs &lt;= 64 rows).</summary>
+    /// <summary>Row flood from the seed bits in row rp over free rows f into reg (cells of other closed components may be present); flood kernel v2.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static void FloodDirty(ulong* f, ulong* reg, int rp, ulong seed, ref int lo, ref int hi)
+    static void FloodDirty(ulong* f, ulong* reg, int rp, ulong seed, ref int lo, ref int hi) => RowK.Flood(f, reg, rp, seed, ref lo, ref hi);
+
+    void CheckRowK(ulong* fr, ulong* rg, int rp, int cp)
     {
-        ulong y0 = FillRow(seed, f[rp]) | reg[rp];
-        ulong nw0 = y0 & ~reg[rp];
-        reg[rp] = y0;
-        ulong dirty = 0;
-        if ((nw0 & f[rp - 1] & ~reg[rp - 1]) != 0) dirty |= 1UL << (rp - 1);
-        if ((nw0 & f[rp + 1] & ~reg[rp + 1]) != 0) dirty |= 1UL << (rp + 1);
-        while (dirty != 0)
-        {
-            int r = System.Numerics.BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
-            ulong cur = reg[r];
-            ulong y = cur | (reg[r - 1] | reg[r + 1]) & f[r];
-            if (y == cur) continue;
-            y = FillRow(y, f[r]);
-            reg[r] = y;
-            ulong nw = y & ~cur;
-            if (r < lo) lo = r; if (r > hi) hi = r;
-            if ((nw & f[r - 1] & ~reg[r - 1]) != 0) dirty |= 1UL << (r - 1);
-            if ((nw & f[r + 1] & ~reg[r + 1]) != 0) dirty |= 1UL << (r + 1);
-        }
+        ulong* t = stackalloc ulong[64];
+        for (int i = 0; i < rows; i++) t[i] = 0;
+        RowK.FloodOld(fr, t, rows, rp, 1UL << cp);
+        for (int i = 0; i < rows; i++) if (t[i] != rg[i]) throw new InvalidOperationException($"cluster flood v2 mismatch row {i}: old {t[i]:x} new {rg[i]:x}");
     }
 
     int RegionCount()
@@ -438,27 +426,8 @@ public sealed unsafe class ClusterChecker
             if ((reg[r0] & bit0) != 0 || (pk[r0] & bit0) != 0) continue;
             if (!started) { started = true; pkLo = rows; pkHi = -1; fsave = f[tr]; f[tr] = fsave & ~tb; }
             if (r0 < pkLo) pkLo = r0; if (r0 > pkHi) pkHi = r0;
-            // dirty-row flood over cells free and outside the parent region
-            ulong y1 = FillRow(bit0 | pk[r0], f[r0] & ~reg[r0]);
-            ulong nw0 = y1 & ~pk[r0];
-            pk[r0] = y1;
-            ulong dirty = 0;
-            if ((nw0 & f[r0 - 1] & ~reg[r0 - 1] & ~pk[r0 - 1]) != 0) dirty |= 1UL << (r0 - 1);
-            if ((nw0 & f[r0 + 1] & ~reg[r0 + 1] & ~pk[r0 + 1]) != 0) dirty |= 1UL << (r0 + 1);
-            while (dirty != 0)
-            {
-                int r = System.Numerics.BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
-                ulong cu = pk[r];
-                ulong g = f[r] & ~reg[r];
-                ulong y = cu | (pk[r - 1] | pk[r + 1]) & g;
-                if (y == cu) continue;
-                y = FillRow(y, g);
-                pk[r] = y;
-                ulong nw = y & ~cu;
-                if (r < pkLo) pkLo = r; if (r > pkHi) pkHi = r;
-                if ((nw & f[r - 1] & ~reg[r - 1] & ~pk[r - 1]) != 0) dirty |= 1UL << (r - 1);
-                if ((nw & f[r + 1] & ~reg[r + 1] & ~pk[r + 1]) != 0) dirty |= 1UL << (r + 1);
-            }
+            // flood over cells free and outside the parent region (flood kernel v2, masked)
+            RowK.FloodMasked(f, reg, pk, r0, bit0, ref pkLo, ref pkHi);
         }
         if (started)
         {

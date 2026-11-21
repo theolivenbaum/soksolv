@@ -75,16 +75,19 @@ public sealed unsafe partial class FullSolver
         ulong s2 = free[rp];
         free[rp] |= 1UL << cp;
         // the previous region's rows are the only non-zero ones: clear just those (a connected region spans consecutive rows)
+        int lo = rp, hi = rp;
         if (bbH + 2 <= 64)
         {
             if (bbRegHi >= 0) for (int r = bbRegLo; r <= bbRegHi; r++) reg[r] = 0;
-            FloodRowsDirtyC(free, reg, bbH + 2, rp, cp);
+            FloodRowsSpan(free, reg, bbH + 2, rp, cp, ref lo, ref hi);
         }
-        else FloodRows(free, reg, bbH + 2, rp, cp);
+        else
+        {
+            FloodRows(free, reg, bbH + 2, rp, cp);
+            while (reg[lo - 1] != 0) lo--;
+            while (reg[hi + 1] != 0) hi++;
+        }
         free[rp] = s2; free[rn] = s1;
-        int lo = rp, hi = rp;
-        while (reg[lo - 1] != 0) lo--;
-        while (reg[hi + 1] != 0) hi++;
         bbRegLo = lo; bbRegHi = hi;
         int minC = (lo - 1) * w + BitOperations.TrailingZeroCount(reg[lo]);
         if (!mBitsOnly)
@@ -389,7 +392,9 @@ public sealed unsafe partial class FullSolver
         return t;
     }
 
-    int mCompsF, mSplitSeen; bool mArtDone;   // per box search: components of the free floor (searched box lifted), and whether MArtic ran
+    int mCompsF, mSplitSeen, mPiecesUsed; bool mArtDone;
+    const int PiecesLimit = 6;   // separator candidates per box search served by local floods before the Tarjan pass takes over
+    public static bool PiecesOff = Environment.GetEnvironmentVariable("SOKSOLV_PIECES_OFF") == "1";   // test hook   // per box search: components of the free floor (searched box lifted), and whether MArtic ran
     public static bool RegionRingOff = Environment.GetEnvironmentVariable("SOKSOLV_REGRING_OFF") == "1";   // test hook
 
     /// <summary>
@@ -413,8 +418,48 @@ public sealed unsafe partial class FullSolver
                 return r0;
             }
         }
+        // separator candidate. Node mode: the child's count is (components of the floor without t, learned from an earlier candidate) - 1 + pieces(t), and
+        // pieces(t) is a local row flood (a handful of floods per box search) instead of the whole-board Tarjan pass.
+        if (bbNode && !RegionRingOff && !PiecesOff && !mArtDone && mPiecesUsed < PiecesLimit)
+        {
+            if (mCompsF < 0 && mSplitSeen == 0) { mSplitSeen = 1; return Regions(); }   // a lone separator candidate costs just one flood
+            mPiecesUsed++;
+            int pc = MPieces(t);
+            if (mCompsF >= 0) return mCompsF - 1 + pc;
+            int r1 = Regions();
+            mCompsF = r1 + 1 - pc;
+            return r1;
+        }
         if (!mArtDone && mSplitSeen++ < 2) return Regions();   // a lone separator candidate is cheaper by one flood than a whole-board Tarjan pass
         if (!mArtDone) { SetOcc(t, false); MArtic(); SetOcc(t, true); mArtDone = true; mCompsF = artComps; }
         return MChildRegions(t);
+    }
+
+    ulong[]? bbPcA; ulong* bbPcP;
+    /// <summary>Number of connected groups among the free neighbours of t (t occupied in <c>blk</c>), i.e. the pieces its component falls apart into when t is
+    /// blocked. Node mode only: the free rows (searched box lifted) are flooded from the neighbours; the last group needs no flood.</summary>
+    int MPieces(int t)
+    {
+        int w = W;
+        if (bbPcA == null) { bbPcA = GC.AllocateArray<ulong>(bbH + 2, pinned: true); bbPcP = (ulong*)Unsafe.AsPointer(ref bbPcA[0]); }
+        ulong* F = bbNFreeP; ulong* g = bbPcP;
+        int tr = t / w + 1; ulong tb = 1UL << (t - (tr - 1) * w);
+        F[tr] &= ~tb;
+        int* nb = stackalloc int[4]; int cnt = 0;
+        for (int k = 0; k < 4; k++) { int n = t + dirs[k]; if (blk[n] == 0) nb[cnt++] = n; }
+        int groups = 0, lo = bbH + 2, hi = -1;
+        for (int i = 0; i < cnt; i++)
+        {
+            int n = nb[i]; int r = n / w + 1; ulong bit = 1UL << (n - (r - 1) * w);
+            if ((g[r] & bit) != 0) continue;
+            groups++;
+            if (i == cnt - 1) break;
+            int l = r, h = r;
+            RowK.Flood(F, g, r, bit, ref l, ref h);
+            if (l < lo) lo = l; if (h > hi) hi = h;
+        }
+        for (int r = lo; r <= hi; r++) g[r] = 0;
+        F[tr] |= tb;
+        return groups;
     }
 }

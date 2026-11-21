@@ -37,24 +37,7 @@ public sealed unsafe partial class FullSolver
             cnt++;
             int cp = BitOperations.TrailingZeroCount(rem[r0]);
             int lo = r0, hi = r0;
-            ulong y0 = FillRowB(1UL << cp, rem[r0]);
-            reg[r0] = y0;
-            ulong dirty = 0;
-            if ((y0 & rem[r0 - 1]) != 0) dirty |= 1UL << (r0 - 1);
-            if ((y0 & rem[r0 + 1]) != 0) dirty |= 1UL << (r0 + 1);
-            while (dirty != 0)
-            {
-                int r = BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
-                ulong cur = reg[r];
-                ulong y = cur | (reg[r - 1] | reg[r + 1]) & rem[r];
-                if (y == cur) continue;
-                y = FillRowB(y, rem[r]);
-                reg[r] = y;
-                ulong nw = y & ~cur;
-                if (r < lo) lo = r; if (r > hi) hi = r;
-                if ((nw & rem[r - 1] & ~reg[r - 1]) != 0) dirty |= 1UL << (r - 1);
-                if ((nw & rem[r + 1] & ~reg[r + 1]) != 0) dirty |= 1UL << (r + 1);
-            }
+            RowK.Flood(rem, reg, r0, 1UL << cp, ref lo, ref hi);
             for (int r = lo; r <= hi; r++) { rem[r] &= ~reg[r]; reg[r] = 0; }
         }
         return cnt;
@@ -258,42 +241,23 @@ public sealed unsafe partial class FullSolver
     internal static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp, bool clear = true)
     {
         if (clear) for (int i = 0; i < rows; i++) reg[i] = 0;
-        reg[rp] = FillRow(1UL << cp, free[rp]);
-        int last = rows - 2;
-        ulong valid = ((1UL << last) - 1) << 1;   // bits 1..last
-        ulong cur = ((1UL << (rp - 1)) | (1UL << (rp + 1))) & valid;
-        bool up = true;
-        while (cur != 0)
-        {
-            ulong nxt = 0, m = cur;
-            if (up)
-                while (m != 0)
-                {
-                    int r = BitOperations.TrailingZeroCount(m);
-                    m &= m - 1;
-                    ulong cr = reg[r], f = free[r];
-                    ulong y = cr | (reg[r - 1] | reg[r + 1]) & f;
-                    if (y == cr) continue;
-                    y = FillRow(y, f);
-                    if (y == cr) continue;
-                    reg[r] = y;
-                    m |= (1UL << (r + 1)) & valid; nxt |= (1UL << (r - 1)) & valid;
-                }
-            else
-                while (m != 0)
-                {
-                    int r = 63 - BitOperations.LeadingZeroCount(m);
-                    m &= ~(1UL << r);
-                    ulong cr = reg[r], f = free[r];
-                    ulong y = cr | (reg[r - 1] | reg[r + 1]) & f;
-                    if (y == cr) continue;
-                    y = FillRow(y, f);
-                    if (y == cr) continue;
-                    reg[r] = y;
-                    m |= (1UL << (r - 1)) & valid; nxt |= (1UL << (r + 1)) & valid;
-                }
-            cur = nxt; up = !up;
-        }
+        int lo = rp, hi = rp;
+        FloodRowsSpan(free, reg, rows, rp, cp, ref lo, ref hi);
+    }
+
+    /// <summary>Flood kernel v2 (RowK.Flood) from cell (rp, cp) into reg (zero on entry); lo/hi receive the written row span.</summary>
+    internal static void FloodRowsSpan(ulong* free, ulong* reg, int rows, int rp, int cp, ref int lo, ref int hi)
+    {
+        RowK.Flood(free, reg, rp, 1UL << cp, ref lo, ref hi);
+        if (RowK.Check) CheckFlood(free, reg, rows, rp, cp);
+    }
+
+    static void CheckFlood(ulong* free, ulong* reg, int rows, int rp, int cp)
+    {
+        ulong* t = stackalloc ulong[64];
+        for (int i = 0; i < rows; i++) t[i] = 0;
+        RowK.FloodOld(free, t, rows, rp, 1UL << cp);
+        for (int i = 0; i < rows; i++) if (t[i] != reg[i]) throw new InvalidOperationException($"flood kernel v2 mismatch row {i}: old {t[i]:x} new {reg[i]:x} rp {rp} cp {cp}");
     }
 
     static void FloodRows(ulong* free, ulong* reg, int rows, int rp, int cp)

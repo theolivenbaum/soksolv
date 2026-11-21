@@ -109,7 +109,7 @@ public sealed unsafe partial class FullSolver
             int b = cur[i];
             if (corral != 0 && cmark[b] != corral) continue;
             mtst++;
-            mOpenCands = 0; mCompsF = -1; mArtDone = false; mSplitSeen = 0;
+            mOpenCands = 0; mCompsF = -1; mArtDone = false; mSplitSeen = 0; mPiecesUsed = 0;
             mVisitI = i;
             MBoxSearch(b, st, false, 0, 0, cur);
         }
