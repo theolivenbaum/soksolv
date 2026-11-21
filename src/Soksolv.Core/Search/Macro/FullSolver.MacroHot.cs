@@ -5,15 +5,17 @@ public sealed unsafe partial class FullSolver
 {
     // row(y): floor-index bitset of box squares whose reachable-goal set shrinks if y becomes a permanent wall
     // (union over goals g of T_g \ T'_g(y) \ {y}, T_g = push-reachability tree of g, T' with y walled as cell and as support).
-    readonly Dictionary<int, ulong[]> hotRows = new();
+    ulong[]?[]? hotRowArr; // by floor index (Go hotspotTable.rows)
     bool hotSides;      // fa2: the player-side relation (Go -hot-sides)
     bool hotGoalFree;   // fa2: goals are neither blockers nor victims (Festival's relation); set before the first row is built
     uint[]? hotSeen; uint hotStamp; int[]? hotQ;
 
     ulong[] HotRow(int blocker)
     {
-        if (hotRows.TryGetValue(blocker, out var cached)) return cached;
-        if (hotSides) { var rs = HotRowSides(blocker); hotRows[blocker] = rs; return rs; }
+        hotRowArr ??= new ulong[]?[nodes.Fcell.Length];
+        int hidx = nodes.Fidx[blocker];
+        if (hotRowArr[hidx] is { } cached) return cached;
+        if (hotSides) { var rs = HotRowSides(blocker); hotRowArr[hidx] = rs; return rs; }
         var row = new ulong[Math.Max(1, nodes.Nw)];
         hotSeen ??= new uint[cells]; hotQ ??= new int[cells];
         for (int g = 0; g < goals.Length; g++)
@@ -46,42 +48,98 @@ public sealed unsafe partial class FullSolver
             if (goal[blocker]) Array.Clear(row);
             else foreach (int g in goals) { int fi = nodes.Fidx[g]; row[fi >> 6] &= ~(1UL << (fi & 63)); }
         }
-        hotRows[blocker] = row;
+        hotRowArr[hidx] = row;
         return row;
     }
 
     static bool RowHits(ulong[] row, int fidx) => (row[fidx >> 6] >> (fidx & 63) & 1) != 0;
 
-    /// <summary>Per box: number of other boxes its blocking would hurt.</summary>
+    // Per-node scratch (Go hotspotTable.counts/after): one cached row per box, the boxes' floor indices, and lazily
+    // built "column" bitsets (boxes whose row hits floor index x), so that a candidate move needs only word ops.
+    ulong[]?[] hotNodeRows = new ulong[]?[16];
+    int[] hotNodeIdx = new int[16];
+    ulong[]? hotPos, hotMpos, hotLmask, hotCol;
+    uint[]? hotColGen;
+    int hotBw, hotMgen = -1, hotN0, hotNBoxes; uint hotGen;
+
+    /// <summary>Per box: number of other boxes its blocking would hurt. Readies the scratch used by HotAfter (call it for the same boxes, until the next HotCounts).</summary>
     int[] HotCounts(ReadOnlySpan<int> boxes)
     {
-        var counts = new int[boxes.Length];
-        for (int i = 0; i < boxes.Length; i++)
+        int nb = boxes.Length, nf = nodes.Fcell.Length, nw = Math.Max(1, nodes.Nw);
+        var counts = new int[nb];
+        if (hotNodeRows.Length < nb) { hotNodeRows = new ulong[]?[nb * 2]; hotNodeIdx = new int[nb * 2]; }
+        if (hotPos == null) { hotPos = new ulong[nw]; hotMpos = new ulong[nw]; hotColGen = new uint[nf]; }
+        Array.Clear(hotPos);
+        hotNBoxes = nb;
+        for (int i = 0; i < nb; i++)
         {
-            var row = HotRow(boxes[i]);
-            for (int j = 0; j < boxes.Length; j++)
-                if (i != j && RowHits(row, nodes.Fidx[boxes[j]])) counts[i]++;
+            hotNodeRows[i] = HotRow(boxes[i]);
+            int fi = nodes.Fidx[boxes[i]]; hotNodeIdx[i] = fi;
+            hotPos[fi >> 6] |= 1UL << (fi & 63);
         }
+        for (int i = 0; i < nb; i++)
+        {
+            var row = hotNodeRows[i]!;
+            for (int j = 0; j < nb; j++)
+                if (i != j && RowHits(row, hotNodeIdx[j])) counts[i]++;
+        }
+        int bw = Math.Max((nb + 63) / 64, 1);
+        if (bw != hotBw || hotCol == null)
+        {
+            hotBw = bw; hotCol = new ulong[nf * bw]; hotLmask = new ulong[bw];
+            Array.Clear(hotColGen!); hotGen = 0;
+        }
+        hotGen++; hotMgen = -1;
         return counts;
+    }
+
+    /// <summary>Offset into hotCol of floor index x's column (boxes whose row hits x), built on first use this node.</summary>
+    int HotColumn(int x)
+    {
+        int off = x * hotBw;
+        if (hotColGen![x] != hotGen)
+        {
+            hotColGen[x] = hotGen;
+            var col = hotCol!;
+            for (int w = 0; w < hotBw; w++) col[off + w] = 0;
+            for (int i = 0; i < hotNBoxes; i++)
+                if (RowHits(hotNodeRows[i]!, x)) col[off + (i >> 6)] |= 1UL << (i & 63);
+        }
+        return off;
     }
 
     static int HotspotCount(int[] counts) { int n = 0; foreach (int c in counts) if (c > 0) n++; return n; }
 
-    /// <summary>Hotspot boxes after replacing boxes[moved] with target.</summary>
+    /// <summary>
+    /// Hotspot boxes after replacing boxes[moved] with target. For a fixed moved box each other box's count without it is
+    /// fixed, so a candidate only needs the boxes whose count would drop to zero (lmask) that the target hits, and whether
+    /// the target's row hits any remaining box.
+    /// </summary>
     int HotAfter(ReadOnlySpan<int> boxes, int[] counts, int moved, int target)
     {
-        int old = nodes.Fidx[boxes[moved]], now = nodes.Fidx[target];
-        int n = 0;
-        for (int i = 0; i < boxes.Length; i++)
+        int old = hotNodeIdx[moved], now = nodes.Fidx[target];
+        if (hotMgen != moved)
         {
-            if (i == moved) continue;
-            var row = HotRow(boxes[i]);
-            int c = counts[i] - (RowHits(row, old) ? 1 : 0) + (RowHits(row, now) ? 1 : 0);
-            if (c > 0) n++;
+            hotMgen = moved; hotN0 = 0;
+            Array.Clear(hotLmask!);
+            int oc = HotColumn(old);
+            for (int i = 0; i < boxes.Length; i++)
+            {
+                if (i == moved) continue;
+                int c = counts[i];
+                if ((hotCol![oc + (i >> 6)] & (1UL << (i & 63))) != 0) c--;
+                if (c > 0) hotN0++;
+                else if (c == 0) hotLmask![i >> 6] |= 1UL << (i & 63);
+            }
+            Array.Copy(hotPos!, hotMpos!, hotPos!.Length);
+            hotMpos![old >> 6] &= ~(1UL << (old & 63));
         }
-        var tr = HotRow(target);
-        for (int j = 0; j < boxes.Length; j++)
-            if (j != moved && RowHits(tr, nodes.Fidx[boxes[j]])) { n++; break; }
+        int n = hotN0;
+        int nc = HotColumn(now);
+        for (int k = 0; k < hotBw; k++) n += System.Numerics.BitOperations.PopCount(hotLmask![k] & hotCol![nc + k]);
+        var row = HotRow(target);
+        for (int k = 0; k < hotMpos!.Length; k++)
+            if ((hotMpos[k] & row[k]) != 0) { n++; break; }
         return n;
     }
 
