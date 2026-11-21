@@ -213,6 +213,14 @@ public sealed unsafe partial class FullSolver
         return false;
     }
 
+    /// <summary>Room connectivity of the candidate being applied, already computed (incrementally) when the move was generated; -1 = compute.</summary>
+    int mAddRoom = -1;
+    int MAddRoomChecked(ReadOnlySpan<int> boxes)
+    {
+        if (CheckRooms) { int want = MRoomConnectivity(); if (want != mAddRoom) throw new InvalidOperationException($"stored room {mAddRoom} != full {want}"); }
+        return mAddRoom;
+    }
+
     int MAdd(ulong zh, int player, int parent, int from, int to, int dir, int g, int h, int w, int reg, ReadOnlySpan<int> boxes)
     {
         int id = nodes.Find(ckey, player, zh, out int slot, out uint fp);
@@ -282,7 +290,7 @@ public sealed unsafe partial class FullSolver
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = RegionsRel();
         var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
-                          : new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
+                          : new FeatureCell(MPacked(), reg, mAddRoom >= 0 ? MAddRoomChecked(boxes) : MRoomConnectivity(), MOutOfPlan(boxes));
         int bucket = pfOn ? PfAdd(boxes, parent, reg) : hfRank && opt.HfFestSched ? HfSchedAdd(boxes, cell, parent, reg) : Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
         if (nodes.NeedsGrow) nodes.Grow();

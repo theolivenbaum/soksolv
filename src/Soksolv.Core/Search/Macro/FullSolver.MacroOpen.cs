@@ -55,6 +55,7 @@ public sealed unsafe partial class FullSolver
         Prof.Stop(24, tdl);
         mParentConn = parentConn; mParentPackedF = parentPacked;
         long trc = Prof.Start();
+        if (CandMemoOn) { ulong bh = 0; foreach (int bx in cur) bh ^= nodes.ZBox(bx); mBoxHash = bh; }
         int parentRoom = pfOn ? 0 : MRoomConnParent();
         int parentOop = pfOn ? 0 : MOutOfPlan(cur);
         Prof.Stop(27, trc);
@@ -497,7 +498,19 @@ public sealed unsafe partial class FullSolver
             int plen = 1;
             for (int x = mbprev[k]; x >= 0; x = mbprev[x]) plen++;
             tp = Prof.Start();
-            int r = MChildRegionCount(t, ++mOpenCands);
+            CandMemo* cm = null;
+            if (CandMemoOn)
+            {
+                ulong ck = mBoxHash ^ nodes.ZBox(cur[i]) ^ nodes.ZBox(t);
+                cm = CandMemoSlot(ck);
+            }
+            int r;
+            if (cm != null && cm->R != 0xFFFF) { r = cm->R; ++mOpenCands; }
+            else
+            {
+                r = MChildRegionCount(t, ++mOpenCands);
+                if (cm != null && r < 0xFFFF) cm->R = (ushort)r;
+            }
             Prof.Stop(4, tp);
             if (tgtPocket != null && r > 1) r = RegionsRel(); // exp-460: regions relative to the target (occ holds the child)
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
@@ -506,7 +519,11 @@ public sealed unsafe partial class FullSolver
             var (mob, expl, accS, accL) = MacroStage >= 5 && !pfOn ? MMoveAccess(cur, i, t) : (0, false, 0, 0);
             Prof.Stop(3, tp);
             tp = Prof.Start();
-            int room = pfOn || hfRank ? 0 : t == cur[i] ? mParentRoom : MRoomConnChild(cur[i], t), packed, oop, progress = -2;
+            int room, packed, oop, progress = -2;
+            if (pfOn || hfRank) room = 0;
+            else if (t == cur[i]) room = mParentRoom;
+            else if (cm != null && cm->Room >= 0) room = cm->Room;
+            else { room = MRoomConnChild(cur[i], t); if (cm != null) cm->Room = room; }
             Prof.Stop(1, tp);
             if (mPlan != null)
             {
@@ -598,7 +615,7 @@ public sealed unsafe partial class FullSolver
                     if (mRevExits.Contains(cExit)) cGroupDup = true; else cDistinct = true;
                 }
             }
-            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, AlreadyUsed = cAlready, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
+            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, AlreadyUsed = cAlready, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterMemo(cm, cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
         }
         SetOcc(t, false);
         return true;
@@ -802,7 +819,9 @@ public sealed unsafe partial class FullSolver
             long tap = Prof.Start();
             hfAddDist = hfRank ? mmvScore[(int)e.Move].Hot : -1;
             if (pfOn) { var ms = mmvScore[(int)e.Move]; pfNext = PfFest.Tuple.FromMove(ms.Oop, (int)ms.Room, ms.Hot, (int)ms.Mobility); pfHave = true; }
+            mAddRoom = pfOn || hfRank ? -1 : (int)mmvScore[(int)e.Move].Room;
             int cid = MApply(id, mv & ~MMoveUsed, cur, child, h, st, parentHash, out int ch);
+            mAddRoom = -1;
             hfAddDist = -1; pfHave = false;
             Prof.Stop(9, tap);
             if (s1On) S1Step(expanded, id, (int)(e.Move - maux[id].MvStart), cid);
@@ -914,6 +933,29 @@ public sealed unsafe partial class FullSolver
         }
         for (int c = 0; c < cells; c++) if (occ[c]) SetOcc(c, false);
         return sb.ToString();
+    }
+
+    int HotAfterMemo(CandMemo* cm, ReadOnlySpan<int> cur, int i, int t)
+    {
+        if (cm == null) return HotAfterP(cur, i, t);
+        if (cm->Hot != 0xFFFF) return cm->Hot;
+        int h = HotAfterP(cur, i, t);
+        if (h < 0xFFFF) cm->Hot = (ushort)h;
+        return h;
+    }
+
+    // ---- candidate memo: region count, room connectivity and hotspot count of a child are pure functions of its box set (and the static level), keyed by the xor of the Zobrist box keys ----
+    struct CandMemo { public ulong Key; public int Room; public ushort R, Hot; }
+    const int CandMemoBits = 16;
+    CandMemo* candMemo; ulong mBoxHash;
+    bool CandMemoOn => !pfOn && !hfRank && tgtPocket == null && !CandMemoOff;
+    static readonly bool CandMemoOff = Environment.GetEnvironmentVariable("SOKSOLV_CANDMEMO_OFF") == "1";
+    CandMemo* CandMemoSlot(ulong key)
+    {
+        if (candMemo == null) candMemo = (CandMemo*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(sizeof(CandMemo) << CandMemoBits));
+        CandMemo* e = candMemo + ((int)(key >> 40) & ((1 << CandMemoBits) - 1));
+        if (e->Key != key) { e->Key = key; e->Room = -1; e->R = 0xFFFF; e->Hot = 0xFFFF; }
+        return e;
     }
 
     int HotAfterP(ReadOnlySpan<int> cur, int i, int t) { long tp = Prof.Start(); int h = HotAfter(cur, mHotCounts!, i, t); Prof.Stop(2, tp); return h; }
