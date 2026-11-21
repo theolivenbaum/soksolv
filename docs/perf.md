@@ -186,3 +186,40 @@ Wins (each verified with `SOKSOLV_CHECK_*` reference hooks where one exists):
 Did not work: restricting row sweeps to the region's row span for the box-search flood (no gain: regions already small; pair-search floods dominate FloodRows).
 Remaining: ClusterChecker.Region is the top item on long runs (not in this area); pair-search floods; plan4 expansion (ComputeElim4/Expand4/CutQueryFill) ~20% on 50-box levels;
 full-DFS articulation per box; room-fragment recomputation on Holland-like levels. Targets of <=0.5x Go are met only on some levels (novelty/hf/SokHard), not overall.
+
+## macro open() (per-candidate / per-node hot path: pair search, box-search flood, move access, region counts)
+
+Method as above (AOT, CPU time, `-parity`, equal work); deterministic C# callgrind instruction counts (Ir) guided the work. Everything below is
+exact: fingerprints/node counts identical to the pre-change binary and to Go on testdata (macro, novelty, pull, fa2, dive, hf 24/24 @3000) and on the
+12 wide levels (macro 12/12 @600); `dotnet test` green.
+
+Profile facts that decided the order: on testdata levels the macro engine's own code (box search, MVisit, move access, floods) is only ~5% of a macro/novelty
+run - the rest is the sink planner (plan4/cut scan), cluster/dead-zone proofs (other agents' areas). It is dominant only on **pull** (pure open() work) and on
+levels with 100+ boxes and corridor-heavy boards (Sven_1623), where one wide node costs 2-3 M Ir. There the top items were the pair-deadlock searches (21% Ir),
+move access (9%), side-dead (3%) and the displacement precompute (8%).
+
+| change | effect (Ir, deterministic) |
+|---|---|
+| **pair-search successor memo** (`PmFind/PmInsert`, Expand.cs): the expansion of an ordered state (box cells x, y + region start p) is a pure function of the state, so its successor list (in generation order) is cached in a fixed open-addressing table + ushort arena; 600k floods -> 50k on Sven_1623#21. Same visited-set/cap semantics, goal-pair flag cached too | Sven#21: 3.34G -> 2.65G (-21%) |
+| generated pair states keep their region rows (`psreg`), so the expansion of a generated state does not flood again | -3% of the above |
+| non-splitting pair shortcut: when neither box cell can split its component locally (8-ring LUT) and they do not touch, the region is `component(start) \ {x,y}`: min cell and membership in O(1) (`PairFast`); only used when it applies (open rooms; none on Sven#21) | exact vs `PairDeadFromScan` (`SOKSOLV_PAIR_CHECK=1`) |
+| **move access as a delta** (`MMoveAccessDelta`): per-node tables (parent region rows, `accCnt[cell]` = (box,dir) pairs supported by a cell, parent mobility); child mobility = Mp + sum(cnt over D) - sum(cnt over E) + 8 corrections, explorer from D only (D/E = child region xor parent region, usually a handful of cells); row kernel as fallback for > 160 changed cells and for the novelty fact recording | MMoveAccessBits 294M -> 72M on Sven#21 (4x) |
+| box-search flood keeps the region **only as row bits** (no `m3` stamping loop over the region; `InPR(c)` bit test with a multiply-shift row index), clears only the previous region's rows, contiguity gives min/lo/hi without scanning | BbFlood 151M -> 34M |
+| side-dead per box search: boxes on cells whose verdict is independent of the player's side are counted once, only separator cells (and the moved box) are asked per candidate (`MSdBuild`) | MPushDead+SideDead -5% on Sven |
+| displacement precompute `canWalk` via the row-bit flood (`CanWalkRows`) instead of a queue BFS per neighbour (`SOKSOLV_DISP_ROWS_OFF=1` = old; unit test compares the pinned masks) | -4% on short Sven runs |
+| child region count: 8-ring LUT settles a non-separator candidate (0 or 1 piece removed) from the component count learned on an earlier candidate; the whole-board Tarjan pass (`MArtic`) runs only after two separator candidates (a lone one costs one flood) (`SOKSOLV_REGRING_OFF=1` = old; `SOKSOLV_CHECK=1` compares with a flood) | pull -4..-12% Ir |
+
+Equal-work CPU time vs Go (22 testdata levels, 5000 nodes, best of 3, same minute): macro 0.764 -> 0.673, novelty 0.749 -> 0.69, pull 0.88 -> 0.84,
+wide macro (12 levels) 0.91 -> 0.88 (Sven_1623#21 0.98 -> 0.67, #10 0.98 -> 0.54; the total is dominated by Sasquatch_IV#32 (13 s, 12 s of it plan4 setup) and
+Sasquatch_VI#48 (6 s, plan4/cut scan) - not in this area).
+
+Allocation: steady-state garbage 0 (gen0 count unchanged, alloc_mb grows 0.1-1 MB per 1000 nodes by retained `mmv`/novelty words only; the macros / nodeMacros dictionaries
+belong to the `full` lane, not to this engine). The pair memo adds 1-3 MB once (preallocated, sized by the board).
+
+What did not work / not worth it
+* Skipping the box-search flood for non-splitting `nc` (region = base component minus nc, ring LUT on the free rows, base flood once per box search): exact, but <= 0.6% Ir
+  on testdata and Sven (separator-dense boards defeat the LUT). Reverted.
+* Pointer rewrite of `MBoxSearch` (fixed pointers for mpost/mseen/mbq/dist, `blk` instead of wall||occ): no change in Ir (ILC already hoists the bounds checks). Reverted.
+* Pair floods across the pair search cannot all be skipped: the memo only helps for repeated states; the remaining 50k floods are first visits.
+Remaining (not in this area): plan4/cut scan setup dominates the Sasquatch wide levels (12 s of 13 s on Sasquatch_IV#32); cluster/dead-zone proofs dominate the testdata macro/novelty
+profile (~35%); pull is now spread flat over MArtic 9%, MBoxSearch 8%, RoomBroken 7%, floods 7%, MVisit 6%, move access 6%.
