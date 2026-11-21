@@ -194,6 +194,15 @@ the work was steered by deterministic callgrind instruction counts (Ir) of the C
 fingerprint-identical (solved / nodes / pushes / stored / generated / duplicates, and the macro/novelty S1HASH-style `fingerprint`) against the previous C# build on
 all 23 testdata levels for full, macro, novelty, pull, hf (-no-meet), fa2, dive, factor, and on the 12 wide levels for macro/novelty; `dotnet test` green.
 
+### Result (CPU s user+sys, 8 testdata levels: Holland 57/27, Sasquatch VI 24 / IV 42, Aymeric 273, SokHard 36, Dive Sven 197, SokEvo 82; best of 2; cs/go; before = same tree with only the two DZ/cluster files reverted)
+
+| lane (nodes) | before | after |
+|---|---|---|
+| full (8000) | 0.341 | 0.313 |
+| macro (5000) | 0.806 | 0.745 |
+| novelty (5000) | 0.794 | 0.730 |
+| pull / hf / dive | 0.94 / 0.81 / 0.62 | 0.93 / 0.84 / 0.62 (DZ/cluster are ~0% of pull and dive; hf within noise) |
+
 ### What won
 1. **Cluster proof search keeps a region per queued state** (`ClusterChecker.SearchBfsBits`, bit-row boards). The BFS used to flood the player's region of every
    expanded state (+ a second flood for every move whose 8-ring said "may split"). Now a child's region rows are *derived* from the parent's:
