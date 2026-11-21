@@ -48,7 +48,7 @@ public static class Portfolio
         var threads = new List<Thread>();
         // bidirectional meetings between forward lanes (full) and the backward reverse lane (Go: meet.Back/Fwd in `all` mode)
         Meet.MeetNet? net = null;
-        if (po.Meet && po.Reverse && (po.Full || po.Macro || po.Novelty))
+        if (po.Meet && (po.Reverse || po.Pull) && (po.Full || po.Macro || po.Novelty))
         {
             try { net = new Meet.MeetNet(Level.Parse(rows).Cells); } catch (InvalidDataException) { }
         }
@@ -103,7 +103,7 @@ public static class Portfolio
         if (po.Pull)
             Lane("pull", () => FullSolver.SolvePull(rows, new FullOptions
             {
-                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared,
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, Net = net,
             }, timeLimitSec));
         foreach (var t in threads) t.Join();
         if (net != null && Environment.GetEnvironmentVariable("SOKSOLV_MEET_DEBUG") == "1")
