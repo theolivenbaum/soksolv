@@ -1,3 +1,4 @@
+using System.Runtime.Intrinsics;
 using Soksolv.Model;
 using Soksolv.Search.Macro;
 using Soksolv.Search.Meet;
@@ -136,7 +137,7 @@ public sealed unsafe partial class FullSolver
     /// <summary>One augmenting path for row (1-based) of the Hungarian algorithm over the current duals hu/hv/hp (e-maxx formulation, as Go augmentAssignment).</summary>
     void AugmentRow(ReadOnlySpan<int> boxes, int row)
     {
-        if (System.Runtime.Intrinsics.Vector128.IsHardwareAccelerated) { AugmentRowV(boxes, row); return; }
+        if (Vector128.IsHardwareAccelerated) { AugmentRowV(boxes, row); return; }
         int m = n; var u = hu; var v = hv; var p = hp; var way = hway; var minv = hminv; var used = hused;
         p[0] = row; int j0 = 0;
         Array.Fill(minv, int.MaxValue); Array.Clear(used);
@@ -160,66 +161,66 @@ public sealed unsafe partial class FullSolver
         do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
     }
 
-    /// <summary>SSE form of <see cref="AugmentRow"/> (4 columns per step, Vector128 is accelerated in the default Native AOT target; identical arithmetic, first minimal column wins ties).</summary>
+    /// <summary>
+    /// SSE form of <see cref="AugmentRow"/> (4 columns per step; Vector128 is accelerated in the default Native AOT target). Same arithmetic, first minimal
+    /// column wins ties, but the dual updates are lazy: with D the sum of the deltas so far, minv is kept as minv+D, and a column that became used at
+    /// D_j ends up with v -= D - D_j (and its row u += D - D_j), applied once at the end of the path search.
+    /// </summary>
     void AugmentRowV(ReadOnlySpan<int> boxes, int row)
     {
         int m = n, P = hP;
         var u = hu; var p = hp;
         Span<int> usedList = stackalloc int[m + 1];
-        int nUsed = 0;
+        Span<int> usedAt = stackalloc int[m + 1];
+        int nUsed = 0, D = 0;
         p[0] = row; int j0 = 0;
         fixed (int* v = hv, way = hway, minv = hminv, um = hmask, dt = tgtDistT)
         {
             for (int j = 0; j < P; j += 4)
             {
-                System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128.Create(int.MaxValue), minv + j);
-                System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128<int>.Zero, um + j);
+                Vector128.Store(Vector128.Create(int.MaxValue), minv + j);
+                Vector128.Store(Vector128<int>.Zero, um + j);
             }
             for (int j = m + 1; j < P; j++) um[j] = -1;
-            var vmax = System.Runtime.Intrinsics.Vector128.Create(int.MaxValue);
+            var vmax = Vector128.Create(int.MaxValue);
             do
             {
-                um[j0] = -1; usedList[nUsed++] = j0;
+                um[j0] = -1; usedList[nUsed] = j0; usedAt[nUsed++] = D;
                 int i0 = p[j0];
-                int ui = u[i0];
                 int* row0 = dt + boxes[i0 - 1] * P;
-                var vu = System.Runtime.Intrinsics.Vector128.Create(ui);
-                var vj0 = System.Runtime.Intrinsics.Vector128.Create(j0);
+                var vu = Vector128.Create(D - u[i0]);        // cur + D = e - u - v + D
+                var vj0 = Vector128.Create(j0);
                 var dmin = vmax;
                 for (int j = 0; j < P; j += 4)
                 {
-                    var used = System.Runtime.Intrinsics.Vector128.Load(um + j);
-                    var cur = System.Runtime.Intrinsics.Vector128.Load(row0 + j) - vu - System.Runtime.Intrinsics.Vector128.Load(v + j);
-                    var mv = System.Runtime.Intrinsics.Vector128.Load(minv + j);
-                    var upd = System.Runtime.Intrinsics.Vector128.AndNot(System.Runtime.Intrinsics.Vector128.LessThan(cur, mv), used);
-                    mv = System.Runtime.Intrinsics.Vector128.ConditionalSelect(upd, cur, mv);
-                    System.Runtime.Intrinsics.Vector128.Store(mv, minv + j);
-                    System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128.ConditionalSelect(upd, vj0, System.Runtime.Intrinsics.Vector128.Load(way + j)), way + j);
-                    dmin = System.Runtime.Intrinsics.Vector128.Min(dmin, System.Runtime.Intrinsics.Vector128.ConditionalSelect(used, vmax, mv));
+                    var used = Vector128.Load(um + j);
+                    var cur = Vector128.Load(row0 + j) + vu - Vector128.Load(v + j);
+                    var mv = Vector128.Load(minv + j);
+                    var upd = Vector128.AndNot(Vector128.LessThan(cur, mv), used);
+                    mv = Vector128.ConditionalSelect(upd, cur, mv);
+                    Vector128.Store(mv, minv + j);
+                    Vector128.Store(Vector128.ConditionalSelect(upd, vj0, Vector128.Load(way + j)), way + j);
+                    dmin = Vector128.Min(dmin, Vector128.ConditionalSelect(used, vmax, mv));
                 }
-                int delta = int.MaxValue;
-                for (int l = 0; l < 4; l++) { int x = System.Runtime.Intrinsics.Vector128.GetElement(dmin, l); if (x < delta) delta = x; }
+                int mn = int.MaxValue;
+                for (int l = 0; l < 4; l++) { int x = Vector128.GetElement(dmin, l); if (x < mn) mn = x; }
+                D = mn;
                 int j1 = 0;
-                {
-                    var vd = System.Runtime.Intrinsics.Vector128.Create(delta);
-                    for (int j = 0; j < P; j += 4)
-                    {
-                        var used = System.Runtime.Intrinsics.Vector128.Load(um + j);
-                        var eq = System.Runtime.Intrinsics.Vector128.AndNot(System.Runtime.Intrinsics.Vector128.Equals(System.Runtime.Intrinsics.Vector128.Load(minv + j), vd), used);
-                        uint bits = System.Runtime.Intrinsics.Vector128.ExtractMostSignificantBits(eq);
-                        if (bits != 0) { j1 = j + System.Numerics.BitOperations.TrailingZeroCount(bits); break; }
-                    }
-                }
-                var vdel = System.Runtime.Intrinsics.Vector128.Create(delta);
+                var vm = Vector128.Create(mn);
                 for (int j = 0; j < P; j += 4)
                 {
-                    var used = System.Runtime.Intrinsics.Vector128.Load(um + j);
-                    System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128.Load(v + j) - (vdel & used), v + j);
-                    System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128.Load(minv + j) - System.Runtime.Intrinsics.Vector128.AndNot(vdel, used), minv + j);
+                    var used = Vector128.Load(um + j);
+                    var eq = Vector128.AndNot(Vector128.Equals(Vector128.Load(minv + j), vm), used);
+                    uint bits = Vector128.ExtractMostSignificantBits(eq);
+                    if (bits != 0) { j1 = j + System.Numerics.BitOperations.TrailingZeroCount(bits); break; }
                 }
-                for (int k = 0; k < nUsed; k++) u[p[usedList[k]]] += delta;
                 j0 = j1;
             } while (p[j0] != 0);
+            for (int k = 0; k < nUsed; k++)
+            {
+                int j = usedList[k], dj = D - usedAt[k];
+                u[p[j]] += dj; v[j] -= dj;
+            }
             do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
         }
     }
