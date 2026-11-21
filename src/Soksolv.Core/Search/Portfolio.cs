@@ -16,6 +16,8 @@ public sealed class PortfolioOptions
     public bool Fa2 = true;
     /// <summary>factor lane (component planning; joins only boards with >= 2 non-trivial static box components, as Go's factorGate).</summary>
     public bool Factor = true;
+    /// <summary>dive lane (landmark-phased greedy backward search; base + A engines on one baton): joins boards whose solved-board peel depth is >= 10 and replaces the reverse lane there (Go -dive, -dive-replace reverse).</summary>
+    public bool Dive = true;
     public int MacroStage = 5, MacroFeatures = 255; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     public int RevSupply = 4;
     public Action<string>? Log;
@@ -44,8 +46,10 @@ public static class Portfolio
         var cancel = new CancelFlag();
         Level? lvForGates = null;
         try { lvForGates = Level.Parse(rows); } catch (InvalidDataException) { }
+        bool diveOn = po.Dive && lvForGates != null && FullSolver.DiveMaxPeel(lvForGates) >= 10;
+        bool reverseOn = po.Reverse && !diveOn; // the dive takes the reverse lane's core on gated boards
         bool factorOn = po.Factor && lvForGates != null && Factor.FactorLane.Gate(lvForGates);
-        int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0) + (po.Macro ? 1 : 0) + (po.Novelty ? 1 : 0) + (po.Pull ? 1 : 0) + (po.Fa2 ? 1 : 0) + (factorOn ? 1 : 0);
+        int lanes = (po.Full ? 1 : 0) + (reverseOn ? 1 : 0) + (diveOn ? 1 : 0) + (po.Macro ? 1 : 0) + (po.Novelty ? 1 : 0) + (po.Pull ? 1 : 0) + (po.Fa2 ? 1 : 0) + (factorOn ? 1 : 0);
         if (lanes == 0) return new SolveResult { Reason = "no lanes" };
         ulong budget = po.MemBytes / 100 * 70 / (ulong)lanes;
         var shared = new ClusterTable(16); var sharedPen = new ClusterTable(16); var sharedDz = new Search.DeadZone.DeadZoneTable(18);
@@ -53,7 +57,7 @@ public static class Portfolio
         var threads = new List<Thread>();
         // bidirectional meetings between forward lanes (full) and the backward reverse lane (Go: meet.Back/Fwd in `all` mode)
         Meet.MeetNet? net = null;
-        if (po.Meet && (po.Reverse || po.Pull) && (po.Full || po.Macro || po.Novelty))
+        if (po.Meet && (reverseOn || po.Pull) && (po.Full || po.Macro || po.Novelty))
         {
             try { net = new Meet.MeetNet(Level.Parse(rows).Cells); } catch (InvalidDataException) { }
         }
@@ -81,7 +85,12 @@ public static class Portfolio
             {
                 NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedPenalties = sharedPen, SharedDeadZone = sharedDz, Net = net, MeetOwner = 0,
             }, timeLimitSec));
-        if (po.Reverse)
+        if (diveOn)
+            Lane("dive", () => FullSolver.SolveDive(rows, new FullOptions
+            {
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
+            }, timeLimitSec));
+        if (reverseOn)
         {
             var ro = ReverseRunner.Config(2, po.RevSupply);
             ro.NodeBudget = po.NodeBudget; ro.BudgetBytes = budget; ro.MemLimitBytes = po.MemBytes; ro.Cancel = cancel; ro.Net = net; ro.BackOwner = 0;

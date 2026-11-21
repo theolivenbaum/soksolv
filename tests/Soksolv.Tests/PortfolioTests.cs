@@ -36,4 +36,14 @@ public class PortfolioTests
         Assert.Contains("full", r.Reason);
         Assert.Contains("reverse", r.Reason);
     }
+
+    [Fact]
+    public void Portfolio_DiveGatedBoardRunsDiveInsteadOfReverse()
+    {
+        var rows = TestData.Rows("Dive_Sven_1623_197"); // solved-board peel depth >= 10
+        var r = Portfolio.Solve(rows, new PortfolioOptions { MemBytes = 2048UL << 20, NodeBudget = 50 }, 5);
+        Assert.False(r.Solved);
+        Assert.Contains("dive", r.Reason);
+        Assert.DoesNotContain("reverse", r.Reason);
+    }
 }
