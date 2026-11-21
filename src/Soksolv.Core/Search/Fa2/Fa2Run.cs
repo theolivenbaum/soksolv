@@ -103,6 +103,7 @@ public sealed unsafe partial class FullSolver
             r.Nodes = fa2ExpandedN;
             r.Stats = stats; stats.Stored = nodes.Count;
             r.TimeMs = sw.Elapsed.TotalMilliseconds;
+            F2Report(r.TimeMs);
             r.PeakBytes = (long)Fa2Bytes();
             if (opt.Fa2.Debug) Console.Error.WriteLine($"fa2: nodes {fa2ExpandedN} edges {fa2Ed.Count} cells {fa2Cells.Count} dups {fa2Dups} lateDead {fa2LateDead} advDead {fa2LateDead2} refills {fa2Refills} plan {fa2Fp?.E.Count} init {fa2Fp?.InitNum}");
             return r;

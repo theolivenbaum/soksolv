@@ -151,3 +151,38 @@ Scope measured for `toward`/`hf` (default flags; `TowardHF = true` -> `fessTowar
   deterministic `-strategy hf -nodes N`.
 * Hub lanes additionally need `pullfest.go` (`pfOn` Festival-order pull, 400 lines), `hubrace.go`/`hubstrata.go`/`hubgen.go`/`hub.go`
   (~2.8k lines), `fess_toward.go` retarget machinery (`RetargetReuse`, previous trees), see the scope table above. Not started.
+
+## fa2 lane (`-strategy fa2`) — Go fa2.go, fa2rooms.go (semantics), hall.go, oopfest.go, rooms_fx.go, hotsides.go, packing_plan2.go (planner v2)
+
+Plan-guided forward FESS engine: children are scored once into 16-byte edges (windowed to the next 16), duplicates are
+skipped by one hash probe, the first expansion owns a state. Built on the macro move generator (box search, push-dead tests,
+corral restriction, dead-zone/cluster late checks) and the Festival-prefix plan. Code: `src/Soksolv.Core/Search/Fa2/`
+(`Fa2.cs` engine, `Fa2Run.cs` setup/loop, `Fa2Oop.cs` out-of-plan zones, `Fa2Rooms.cs` room-pair score, `Fa2Hall.cs` Hall credit
+gate, `Fa2HotSides.cs` player-side hotspot relation) plus a V2 mode in `Planner4` (`ExpandV2`/`RunV2`, planner2's best-first loop).
+Coverage of what `-strategy fa2` executes (Go, default flags, `bench/lane-scope.sh`): fa2.go 707 lines, fa2rooms 416 (incremental
+form of rooms_fx), hall.go 407, packing_plan2.go 539, oopfest 124, rooms_fx 134, hotsides 99 + the macro machinery already ported.
+
+### Parity (vs unpatched Go, `bench/lane-parity.py`, `-nodes 20000`, `-parity` cluster mode) — identical solved / nodes_expanded / pushes
+
+| configuration (Go flags) | testdata (19) | LTS sample (40) |
+|---|---|---|
+| core: `-fa2-plan old -fa2-rooms=false -fa2-hall=false -hot-sides=false` | 19/19 | 40/40 |
+| + rooms (`-fa2-plan old -fa2-hall=false -hot-sides=false`) | 19/19 | 40/40 |
+| + hot-sides + Hall (`-fa2-plan old`) | 19/19 | 40/40 |
+| **default** (planner v2) | **19/19** | **40/40** |
+
+xunit: `tests/Soksolv.Tests/Fa2Tests.cs` (Go golden counts for default and `old` configs, solve + verify).
+
+### Speed / memory vs Go (AOT build, single lane, 19 testdata levels, `bench/compare.py`, same machine, nodes identical)
+
+* parity cluster mode: time ratio 1.19 (Go 37.8 s, C# 44.9 s); default fast cluster proofs: **1.11** (36.5 s vs 40.4 s);
+  per level 0.58x–1.36x; memory 1.5–3.2x lower than Go (e.g. 29.7 vs 96–101 MB on Sasquatch_IV_50 #42).
+* where the time goes (`SOKSOLV_PROF=1`): box search + push-dead tests ~55%, advisor verification (late cluster/dead-zone checks) ~22%,
+  room-pair score ~17% on wide levels. Go computes the room score incrementally per child (fa2rooms.go, ~600 lines, verified equal to the
+  full recompute in Go itself); the C# port recomputes `festRoomsFull` per candidate — exact but the main remaining gap (todo).
+
+### Not ported / differences
+* The *anytime lane* used inside Go's portfolio (`fa2LaneRun`: own v2 plan from t=0 plus a second engine on the macro lane's plan4 list, baton
+  slices) — the C# portfolio runs the plain fa2 engine (Go's `-strategy fa2` / `-fa2-lane-solo` engine 1).
+* Experiment flags off by default: planner `v2ng`, `-fa2-hall-sup`, `-fa2-mobility=false` (last key = goal distance), plan files, replay/stream modes.
+* Time-dependent behaviour: planner budget = min(1 s, t/10) (as Go); nothing else in the plain engine reads the clock.

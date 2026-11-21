@@ -84,3 +84,10 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] `Best` target publishing from pull (`publishPullBest`) and reverse lanes -> `toward` portfolio lane
 - [ ] pfOn (Festival-order pull), hubrace/hubstrata -> `hub-pull`; hubgen/hub/hfsched -> `hub-gen`/`hub`
 - [ ] candidate-ref meetings (pendCands/refGet) for lazily generated children
+
+## fa2 lane (docs/lanes.md)
+- [x] engine core + OOP zones + advisors + edge windows (exact vs Go), rooms score (full recompute), hot-sides, Hall gate, planner v2: default config 19/19 testdata, 40/40 LTS sample identical at 20k nodes
+- [x] `-strategy fa2`, portfolio lane (`-no-fa2` to drop), Fa2Tests
+- [ ] incremental room-pair score (fa2rooms.go) — ~17% of fa2 time on wide levels
+- [ ] fa2 anytime lane (second engine on the macro lane's plan4 list) for the portfolio
+- [ ] unported fa2 experiment flags: v2ng/old plan variants in portfolio, hall-sup, plan-file/replay/stream engines

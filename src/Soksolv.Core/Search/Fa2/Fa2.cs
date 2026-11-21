@@ -13,6 +13,11 @@ public sealed unsafe partial class FullSolver
 {
     // ---- state ------------------------------------------------------------------------------------------------------------
     bool fa2On;
+    static readonly long[] F2T = new long[12]; static readonly long[] F2N = new long[12];
+    static long F2S() => Prof.On ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+    static void F2E(int k, long t0) { if (Prof.On) { F2T[k] += System.Diagnostics.Stopwatch.GetTimestamp() - t0; F2N[k]++; } }
+    static readonly string[] F2Names = ["pushDead", "regions", "packed", "rooms", "hot", "oop+hall", "explorer", "mobility", "boxSearch(all)", "advisors+sort", "deadLate", "setup(parent)"];
+    public static void F2Report(double ms) { if (!Prof.On) return; for (int i = 0; i < F2Names.Length; i++) if (F2N[i] > 0) Console.Error.WriteLine($"fa2prof {F2Names[i],-16} {F2T[i] * 1000.0 / System.Diagnostics.Stopwatch.Frequency,9:F0} ms {F2T[i] * 100.0 / System.Diagnostics.Stopwatch.Frequency / ms,5:F1}% calls {F2N[i],9}"); }
     static readonly bool fa2Trace = Environment.GetEnvironmentVariable("SOKSOLV_FA2TRACE") == "1";
     FestPlan? fa2Fp;
     readonly ChunkList<Fa2Aux> fa2Aux = new();
@@ -141,6 +146,43 @@ public sealed unsafe partial class FullSolver
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = side; nodes.W(id) = w;
         fa2Aux.Add(new Fa2Aux { Score = key, Best = best, W = w, BoxH = boxH, Adv = adv });
         return id;
+    }
+
+    // walking distance (walls only) between floor cells from a table built once per level (Go advisors.go walk/buildWalk, F <= 1500)
+    short[]? fa2WalkTab; int[]? fa2WalkIdx; int fa2WalkF;
+    int Fa2Walk(int from, int to)
+    {
+        if (fa2WalkTab == null)
+        {
+            fa2WalkIdx = new int[cells];
+            var floor = new List<int>();
+            for (int c = 0; c < cells; c++) { fa2WalkIdx[c] = -1; if (!wall[c]) { fa2WalkIdx[c] = floor.Count; floor.Add(c); } }
+            int F = floor.Count;
+            if (F > 1500) { fa2WalkTab = []; fa2WalkF = 0; }
+            else
+            {
+                fa2WalkF = F; fa2WalkTab = new short[F * F];
+                var q = new int[F];
+                for (int fi = 0; fi < F; fi++)
+                {
+                    int rowO = fi * F;
+                    for (int i = 0; i < F; i++) fa2WalkTab[rowO + i] = -1;
+                    fa2WalkTab[rowO + fi] = 0;
+                    int tail = 0; q[tail++] = floor[fi];
+                    for (int i = 0; i < tail; i++)
+                    {
+                        short dq = fa2WalkTab[rowO + fa2WalkIdx[q[i]]];
+                        foreach (int d in dirs)
+                        {
+                            int x = q[i] + d;
+                            if (!wall[x] && fa2WalkTab[rowO + fa2WalkIdx[x]] < 0) { fa2WalkTab[rowO + fa2WalkIdx[x]] = (short)(dq + 1); q[tail++] = x; }
+                        }
+                    }
+                }
+            }
+        }
+        if (fa2WalkF > 0) return fa2WalkTab[fa2WalkIdx![from] * fa2WalkF + fa2WalkIdx[to]];
+        return MWalk(from, to);
     }
 
     // ---- helpers ----------------------------------------------------------------------------------------------------------------
@@ -283,10 +325,14 @@ public sealed unsafe partial class FullSolver
         SetOcc(t, true);
         try
         {
-            if (MPushDead(cur, i, t, canonical) != 0) return true;
+            long t0 = F2S();
+            bool pdead = MPushDead(cur, i, t, canonical) != 0;
+            F2E(0, t0);
+            if (pdead) return true;
             int np = mCandNP;
             var c = new Fa2Cand { B = b, T = t, I = (ushort)i, Side = (byte)(k & 3) };
             fa2Cands++;
+            t0 = F2S();
             switch (fa2Cands)
             {
                 case 1: c.Conn = Regions(); break;
@@ -295,17 +341,24 @@ public sealed unsafe partial class FullSolver
                     c.Conn = ChildRegions(t); break;
                 default: c.Conn = ChildRegions(t); break;
             }
+            F2E(1, t0); t0 = F2S();
             c.Packed = Fa2PackedNow();
+            F2E(2, t0); t0 = F2S();
             c.Rooms = Fa2RoomsChild(b, t);
+            F2E(3, t0); t0 = F2S();
             c.Hot = HotAfter(cur, fa2Counts, i, t);
+            F2E(4, t0); t0 = F2S();
             cur[i] = t;
             c.Oop = Fa2OopNow(cur, c.Packed);
             Fa2HallChild(cur, ref c, i, b, np);
             cur[i] = b;
+            F2E(5, t0); t0 = F2S();
             if (opt.Fa2.Explorer && c.Packed >= fa2PPacked && Fa2Reversible(t, b)) c.Explorer = Fa2Explores(cur, i, fa2St);
+            F2E(6, t0); t0 = F2S();
             int ch = fa2H - dist[b] + dist[t];
             int last = ch;
             if (opt.Fa2.Mobility) last = Fa2Mobility(cur, i, t, m3, mpstamp);
+            F2E(7, t0);
             c.Key = Fa2Key(c.Packed, c.Conn, c.Rooms, c.Oop, c.Hot, last);
             c.Hash = fa2Bh ^ fa2Zb[b] ^ fa2Zb[t] ^ fa2Zp[np];
             c.Np = np;
@@ -322,6 +375,7 @@ public sealed unsafe partial class FullSolver
     int Fa2Expand(int id, int[] cur, uint st)
     {
         if (!Feasible(cur)) return -1;
+        long tSetup = F2S();
         ref var a0 = ref A(id);
         Fa2Fields(a0.Score, out int pPacked, out int pConn, out int pRooms, out int pOop, out int pHot);
         int h = 0;
@@ -334,6 +388,8 @@ public sealed unsafe partial class FullSolver
         uint corral = 0;
         if (opt.Fa2.Corral) corral = PiCorral(st);
         fa2Cur = cur; fa2St = st; fa2H = h; fa2PPacked = pPacked; fa2Bh = A(id).BoxH;
+        F2E(11, tSetup);
+        long tBox = F2S();
         fa2CandN = 0; fa2Solved = -1;
         for (int i = 0; i < cur.Length; i++)
         {
@@ -343,6 +399,8 @@ public sealed unsafe partial class FullSolver
             fa2Cands = 0; fa2VisitI = i;
             MBoxSearch(b, st, false, 0, 0, cur);
         }
+        F2E(8, tBox);
+        long tAdv = F2S();
         int solved = fa2Solved;
         if (fa2Trace) { Console.Error.WriteLine($"fa2 expand id= {id} cands= {fa2CandN} corral= {corral}"); for (int q = 0; q < fa2CandN; q++) Console.Error.WriteLine($"  cand b= {fa2Cand[q].B} t= {fa2Cand[q].T} packed= {fa2Cand[q].Packed} conn= {fa2Cand[q].Conn} hot= {fa2Cand[q].Hot} oop= {fa2Cand[q].Oop} key= {fa2Cand[q].Key}"); }
         var cand = fa2Cand;
@@ -383,7 +441,7 @@ public sealed unsafe partial class FullSolver
             {
                 ref var c = ref cand[k];
                 if (c.Packed != pPacked || c.Conn > pConn || c.Rooms > pRooms || (c.B == openSq && c.T == openSq)) continue;
-                int d0 = MWalk(c.B, openSq), d1 = MWalk(c.T, openSq);
+                int d0 = Fa2Walk(c.B, openSq), d1 = Fa2Walk(c.T, openSq);
                 if (d0 < 0 || d1 < d0) continue;
                 if (d0 < bestD || (d0 == bestD && d1 > bestFar)) { bestD = d0; bestFar = d1; chosen[AdvOpener] = k; }
             }
@@ -415,6 +473,7 @@ public sealed unsafe partial class FullSolver
             int k = chosen[a];
             if (k >= 0) { cand[k].W = 0; cand[k].Adv |= (byte)(1 << a); }
         }
+        F2E(9, tAdv);
         ref var node = ref A(id);
         if (solved >= 0 && fa2Rebase < 0)
         {
