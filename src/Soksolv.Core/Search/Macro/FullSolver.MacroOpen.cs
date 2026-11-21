@@ -194,8 +194,9 @@ public sealed unsafe partial class FullSolver
         }
         if (packingK < 0 && packPrepared)
         {
-            int pk = -1;
-            bool clearing = PackingObligationAdvice(k => MChoose(ref pk, k));
+            mPackPick = -1;
+            bool clearing = PackingObligationAdvice(mPackPickCb ??= k => MChoose(ref mPackPick, k));   // cached delegate: no closure per open
+            int pk = mPackPick;
             if (pk >= 0) { packingK = pk; stats.PackingPrepPicks++; if (clearing) stats.PackingPrepClears++; }
         }
         if (mWeights.Length < nm) { mWeights = new int[nm * 2]; mKeys = new MKey[nm * 2]; }
@@ -464,6 +465,7 @@ public sealed unsafe partial class FullSolver
         if (!ReferenceEquals(src, mKeys)) Array.Copy(src, mKeys, n);
     }
 
+    int mPackPick; Action<int>? mPackPickCb;
     void MChoose(ref int slot, int k)
     {
         if (Feat(6) && mCands[k].RevBad) return;

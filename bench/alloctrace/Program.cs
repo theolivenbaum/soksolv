@@ -1,5 +1,5 @@
 // Allocation tracer: runs the full lane for N and 2N nodes on a level; prints bytes/node (delta) and GC AllocationTick types.
-// usage: alloctrace <file.xsb> <nodes> [-parity]   (JIT build; needs runtime GC events via EventListener)
+// usage: alloctrace <file.xsb> <nodes> [-parity] [macro|novelty|pull|hubgen|hubpull|hf]   (JIT build; needs runtime GC events via EventListener)
 using System.Diagnostics.Tracing;
 using Soksolv.Model;
 using Soksolv.Search;
@@ -13,7 +13,8 @@ string strat = args.Length > 2 && !args[2].StartsWith("-") ? args[2] : "full";
 SolveResult Run(long n)
 {
     var o = new FullOptions { NodeBudget = n, BudgetBytes = 0 };
-    return strat switch { "macro" => FullSolver.SolveMacroLane(rows, o, 0), "novelty" => FullSolver.SolveNovelty(rows, o, 0), "pull" => FullSolver.SolvePull(rows, o, 0), _ => FullSolver.Solve(rows, o, 0) };
+    if (strat == "hubpull") o.HubNodeSlices = 1000;
+    return strat switch { "hubgen" => FullSolver.SolveHubGenOnly(rows, o), "hubpull" => FullSolver.SolveHubPull(rows, o, 0), "hf" => FullSolver.SolveHf(rows, o, 100), "macro" => FullSolver.SolveMacroLane(rows, o, 0), "novelty" => FullSolver.SolveNovelty(rows, o, 0), "pull" => FullSolver.SolvePull(rows, o, 0), _ => FullSolver.Solve(rows, o, 0) };
 }
 Run(200); // warm
 long Measure(long n) { Run(1); long a = GC.GetAllocatedBytesForCurrentThread(); Run(n); return GC.GetAllocatedBytesForCurrentThread() - a; }

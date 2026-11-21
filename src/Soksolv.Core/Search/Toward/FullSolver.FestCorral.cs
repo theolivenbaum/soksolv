@@ -13,6 +13,7 @@ public sealed unsafe partial class FullSolver
     uint[]? fcCb; uint fcInStamp;
     int[]? fcBoxesArr; int fcNBoxes;
     readonly List<int> fcCl = new(), fcCs = new(), fcCbl = new();
+    readonly List<bool> fcGoalList = new(); readonly List<ulong> fcPairs = new();
     readonly List<int>[] fcBlStore = new List<int>[0];
     List<int>?[] fcBl = [];
     bool[] fcBng = [];
@@ -32,7 +33,7 @@ public sealed unsafe partial class FullSolver
         if (++fcStamp == 0) { Array.Clear(fcGen!); fcStamp = 1; }
         fcN = 0; fcNBoxes = 0;
         fcCl.Clear(); fcCs.Clear(); fcCs.Add(0);
-        var goalList = new List<bool>();
+        var goalList = fcGoalList; goalList.Clear();
         var q = cqueue;
         for (int c = 0; c < cells; c++)
         {
@@ -70,7 +71,7 @@ public sealed unsafe partial class FullSolver
         for (int i = 0; i < fcN; i++)
             if (fcCand[i]) { uint r = FcTry(i, i, st); if (r != 0) return r; }
         // two-room corrals: components touching the same box, tried in (i, j) order
-        var pairs = new List<ulong>();
+        var pairs = fcPairs; pairs.Clear();
         Span<int> nb = stackalloc int[4];
         for (int bi = 0; bi < fcNBoxes; bi++)
         {
