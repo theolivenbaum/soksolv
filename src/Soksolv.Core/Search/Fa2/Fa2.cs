@@ -44,7 +44,7 @@ public sealed unsafe partial class FullSolver
     {
         public ulong Key, Hash; public int T; public ushort I; public byte Side, W, Adv; public int Np, B, Packed, Conn, Rooms, Oop, Hot;
         public bool Explorer, Checked;
-        public readonly Fa2Edge Edge() => new() { Key = Key, B = (ushort)B, T = (ushort)T, Np = (ushort)Np, Side = Side, Wadv = (byte)(W & 1 | Adv << 1) };
+        public readonly Fa2Edge Edge() => new() { Key = Key, B = (ushort)B, T = (ushort)T, Np = (ushort)Np, Side = (byte)(Side | (Checked ? 0x80 : 0)), Wadv = (byte)(W & 1 | Adv << 1) };
     }
     struct Fa2Ord { public ulong Key; public uint Wi; }
 
@@ -244,7 +244,17 @@ public sealed unsafe partial class FullSolver
     }
 
     /// <summary>Apply-time deadlock tests (lazy cluster, corral) on the child of moving cur[i] to t through side; occ holds the parent and is restored.</summary>
-    bool Fa2DeadLate(int[] cur, int i, int t, int side, int[] child)
+    bool Fa2DeadLate(int[] cur, int i, int t, int side, int[] child, ulong stateHash)
+    {
+        ulong mk = Fa2MemoKey(stateHash, t);
+        if (fa2LiveMemo.Has(mk)) { fa2MemoHits++; return false; }
+        if (fa2DeadMemo.Has(mk)) { fa2MemoHits++; return true; }
+        bool dead = Fa2DeadLateCompute(cur, i, t, side, child);
+        (dead ? fa2DeadMemo : fa2LiveMemo).Insert(mk);
+        return dead;
+    }
+
+    bool Fa2DeadLateCompute(int[] cur, int i, int t, int side, int[] child)
     {
         int b = cur[i], n = cur.Length;
         // child = cur with cur[i] replaced by t, kept sorted
@@ -338,6 +348,51 @@ public sealed unsafe partial class FullSolver
         return d;
     }
 
+    // Region counts of the children of one box (b lifted): comps(b lifted) - 1 + pieces(t), where pieces(t) is how many pieces t's
+    // component splits into once t holds the box. The local ring test settles pieces for non-articulation cells (0 or 1); only
+    // when a candidate sits on a cell it cannot settle is the Tarjan pass over the board run (once per box).
+    int fa2ArtState, fa2Comps;
+    // Late-death memo: whether the cluster/dead-zone proofs say a child (boxes + normalised player + last pushed cell) is dead is a
+    // pure function of that triple, and the same child is reached again from other parents and again at pop time.
+    readonly U64Set fa2LiveMemo = new(), fa2DeadMemo = new();
+    long fa2MemoHits;
+    public void F2MemoReport() { }
+    static ulong Fa2MemoKey(ulong stateHash, int t) => (stateHash + (ulong)t) * 0x9E3779B97F4A7C15UL ^ (ulong)t << 17;
+    static readonly bool fa2Check = Environment.GetEnvironmentVariable("SOKSOLV_FA2CHECK") == "1";
+    static readonly sbyte[] fa2PieceTab = BuildPieceTab();
+    static sbyte[] BuildPieceTab()
+    {
+        var tab = new sbyte[256];
+        for (int m = 0; m < 256; m++)
+        {
+            int start = -1;
+            for (int k = 0; k < 8; k++) if ((m >> k & 1) == 0 && start < 0) start = k;
+            int runs = 0; bool anyOrth = false;
+            if (start < 0) { runs = 1; anyOrth = true; }
+            else
+            {
+                bool inRun = false, hasOrth = false;
+                for (int i = 1; i <= 8; i++)
+                {
+                    int k = (start + i) % 8;
+                    if ((m >> k & 1) != 0) { if (!inRun) { inRun = true; hasOrth = false; } if (k % 2 == 1) hasOrth = true; }
+                    else if (inRun) { if (hasOrth) runs++; inRun = false; }
+                }
+                if (inRun && hasOrth) runs++;
+                anyOrth = runs > 0;
+            }
+            tab[m] = (sbyte)(runs == 0 ? 0 : runs == 1 ? 1 : -1);
+        }
+        return tab;
+    }
+    int Fa2Pieces(int t)
+    {
+        byte* bk = blk; int w = W;
+        int m = (bk[t - w - 1] == 0 ? 1 : 0) | (bk[t - w] == 0 ? 2 : 0) | (bk[t - w + 1] == 0 ? 4 : 0) | (bk[t + 1] == 0 ? 8 : 0)
+              | (bk[t + w + 1] == 0 ? 16 : 0) | (bk[t + w] == 0 ? 32 : 0) | (bk[t + w - 1] == 0 ? 64 : 0) | (bk[t - 1] == 0 ? 128 : 0);
+        return fa2PieceTab[m];
+    }
+
     // ---- expansion ------------------------------------------------------------------------------------------------------------------
     // per-expand state shared with the box-search visitor
     int[] fa2Cur = [];
@@ -371,14 +426,22 @@ public sealed unsafe partial class FullSolver
             var c = new Fa2Cand { B = b, T = t, I = (ushort)i, Side = (byte)(k & 3) };
             fa2Cands++;
             t0 = F2S();
-            switch (fa2Cands)
             {
-                case 1: c.Conn = Regions(); break;
-                case 2:
-                    SetOcc(t, false); ComputeArticulation(); SetOcc(t, true);
-                    c.Conn = ChildRegions(t); break;
-                default: c.Conn = ChildRegions(t); break;
+                int pieces = Fa2Pieces(t);
+                if (fa2Cands == 1)
+                {
+                    c.Conn = Regions();
+                    fa2ArtState = 0;
+                    if (pieces >= 0) { fa2Comps = c.Conn + 1 - pieces; fa2ArtState = 1; }
+                }
+                else if (fa2ArtState == 1 && pieces >= 0) c.Conn = fa2Comps - 1 + pieces;
+                else
+                {
+                    if (fa2ArtState != 2) { SetOcc(t, false); ComputeArticulation(); SetOcc(t, true); fa2ArtState = 2; }
+                    c.Conn = ChildRegions(t);
+                }
             }
+            if (fa2Check && fa2Cands > 1) { int full = Regions(); if (full != c.Conn) throw new InvalidOperationException($"fa2 region count {c.Conn} != flood {full} (box {b}->{t}, cand {fa2Cands}, state {fa2ArtState})"); }
             F2E(1, t0); t0 = F2S();
             c.Packed = Fa2PackedNow();
             F2E(2, t0); t0 = F2S();
@@ -494,7 +557,7 @@ public sealed unsafe partial class FullSolver
                 if (k >= 0 && !cand[k].Checked)
                 {
                     cand[k].Checked = true;
-                    if (Fa2DeadLate(cur, cand[k].I, cand[k].T, cand[k].Side, fa2Scratch)) { drop = k; break; }
+                    if (Fa2DeadLate(cur, cand[k].I, cand[k].T, cand[k].Side, fa2Scratch, cand[k].Hash)) { drop = k; break; }
                 }
             }
             if (drop >= 0)

@@ -21,6 +21,8 @@ public struct Fa2Edge
     public ushort Np;        // the child's normalised player cell
     public byte Side;        // direction of the last push
     public byte Wadv;        // bit 0: weight (0 advised, 1 otherwise); bits 1..7: advisors
+    public readonly int Dir => Side & 3;          // push direction index
+    public readonly bool Verified => (Side & 0x80) != 0;  // the late cluster/dead-zone proof already passed for this child at expansion
     public readonly int W => Wadv & 1;
     public readonly byte Adv => (byte)(Wadv >> 1);
 }
