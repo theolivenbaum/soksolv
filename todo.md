@@ -59,3 +59,8 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] 6e packing obligations/causal   - [ ] 6f plan4 (+ anytime ring)   - [ ] 6g alt engine, rev-groups, novelty hooks, pair-side
 - [x] macro lane in Portfolio (stages 1-5 + 6a); [ ] switch to full default config once 6b-6g land
 - [ ] Stage-1 speed tuning (HashOf per expansion, first-candidate Regions flood, apply path BFS cache)
+
+## Hub lanes (hub-gen / hub-pull / hub) — see docs/lanes.md (Hub lane family)
+- [x] HubReach (hubreach.go) ported, exact vs Go goldens (HubTests)
+- [ ] BLOCKER: pull-direction mode of the C# macro engine (+ `-strategy pull` parity), then pullfest/meet/festineff
+- [ ] hub-pull (hubrace/hubstrata), hub-gen/hub (hubgen/hub/toward/hfsched), portfolio lanes

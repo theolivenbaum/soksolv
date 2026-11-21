@@ -67,15 +67,15 @@ public sealed unsafe partial class FullSolver
     SolveResult RunMacro(double timeLimitSec)
     {
         var sw = Stopwatch.StartNew();
-        if (opt.SideDead) sd = new SideDead(wall, goal, W);
-        if (opt.ClusterDead)
+        if (opt.SideDead && !pull) sd = new SideDead(wall, goal, W);
+        if (opt.ClusterDead && !pull)
         {
             var deadSq = new bool[cells];
             for (int c = 0; c < cells; c++) deadSq[c] = dist[c] < 0;
             var bd = new ClusterBoard(wall, goal, deadSq, W, salt: true);
             cl = new ClusterChecker(bd) { Shared = opt.SharedClusters, SharedPen = null };
         }
-        if (Feat(1))
+        if (Feat(1) && !pull)
         {
             var deadSq = new bool[cells];
             for (int c = 0; c < cells; c++) deadSq[c] = dist[c] < 0;
@@ -83,10 +83,10 @@ public sealed unsafe partial class FullSolver
         }
         mSetupDeadlineMs = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(100, timeLimitSec * 1000 / 10);
         mNodeLimit = nodeLimitOverride > 0 ? nodeLimitOverride : opt.NodeBudget;
-        if (MacroStage >= 2) { MComputeRooms(); MComputeBasin(); }
+        if (MacroStage >= 2) { MComputeRooms(); if (!pull) MComputeBasin(); } // goal rooms and out-of-plan are push-mode features
         if (Prof.On) Console.Error.WriteLine($"rooms+basin done t={clock.ElapsedMilliseconds} ms");
         long tPlan0 = clock.ElapsedMilliseconds;
-        if (MacroStage >= 3)
+        if (MacroStage >= 3 && !pull) // pull mode has no packing plan (as in Festival)
         {
             long planDeadline = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(250, timeLimitSec * 1000 / 10);
             if (prePlan != null) { mPlan = prePlan; stats.Plan4Complete = true; stats.Plan4Swap = prePlanAt; }   // a finished plan4 plan carried into a restarted solver
@@ -160,6 +160,12 @@ public sealed unsafe partial class FullSolver
     /// <summary>Boxes on goals (no sink plan: Go packedWith with plan == nil).</summary>
     int MPacked()
     {
+        if (pull) // Festival's backward HF order: progress is how far the boxes have spread from the goals
+        {
+            long sp = 0;
+            foreach (int c in nodes.Fcell) if (occ[c]) sp += spreadDist[c];
+            return (int)(sp / SpreadBucket);
+        }
         if (mPlan != null) return mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.Packed(occ) : mPlan.Status(occ).packed;
         int c = 0;
         foreach (int g in goals) if (occ[g]) c++;
@@ -349,7 +355,7 @@ public sealed unsafe partial class FullSolver
     void MNoteBest(int id)
     {
         if (id < 0 || maux[id].Dead != 0) return;
-        if (mBest < 0 || maux[mBest].Dead != 0 || ProgressBetter(maux[id].Actual, maux[mBest].Actual)) { mBest = id; mLastImproveMs = clock.ElapsedMilliseconds; }
+        if (mBest < 0 || maux[mBest].Dead != 0 || ProgressBetter(maux[id].Actual, maux[mBest].Actual)) { if (pull && !FeasibleNode(id)) return; mBest = id; mLastImproveMs = clock.ElapsedMilliseconds; }
     }
 
     // ---- StallFinish (Go fess_search.go finishFromBest) ------------------------------------------------------------------------------------

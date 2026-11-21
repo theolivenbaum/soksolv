@@ -35,7 +35,7 @@ public sealed unsafe partial class FullSolver
         int parentPacked = MPacked();
         int parentConn = maux[id].Reg;
         mCmdMask = 0; mUnpinMask = 0;
-        if (Feat(2) && goals.Length <= 64) // Go: DisplacementLandmarksOn && len(goals) <= 64
+        if (Feat(2) && !pull && goals.Length <= 64) // Go: DisplacementLandmarksOn && !s.pull && len(goals) <= 64
         {
             if (!dlInit) { dlInit = true; dl = DisplacementLandmarks.Create(lv, dirs, goals); }
             if (dl != null)
@@ -52,9 +52,12 @@ public sealed unsafe partial class FullSolver
         int parentPhase = mPlan != null ? mPlan.Status(occ).phase : -1;
         long tc = Prof.Start();
         uint corral = 0;
-        if (Feat(1)) corral = FirstPushCorral(nodes.Player(id), st); // FrontierCorral (corral_frontier.go)
-        if (corral == 0) corral = PiCorral(st);
-        if (corral != 0) stats.Corrals++;
+        if (!pull) // PI-corral pruning is a push argument
+        {
+            if (Feat(1)) corral = FirstPushCorral(nodes.Player(id), st); // FrontierCorral (corral_frontier.go)
+            if (corral == 0) corral = PiCorral(st);
+            if (corral != 0) stats.Corrals++;
+        }
         packPrepared = false;
         if (Feat(4)) PreparePackingObligations();
         mPlan?.NodeSetup(cur);
@@ -336,6 +339,11 @@ public sealed unsafe partial class FullSolver
     /// <summary>Pruning rules for cur[i] pushed to t (occ holds the child). 0 = alive.</summary>
     int MPushDead(ReadOnlySpan<int> cur, int i, int t, int canonical)
     {
+        if (pull) // the dead-square table (pull distance to a start square) already filtered t; the push deadlock family does not apply
+        {
+            if (PullFreezeDead(t)) { stats.Freeze++; return 2; }
+            return 0;
+        }
         long tq = Prof.Start();
         bool f22 = Frozen2x2(t);
         bool fz = !f22 && FreezeDeadlock(t);
@@ -383,7 +391,7 @@ public sealed unsafe partial class FullSolver
         child[i] = t;
         Array.Sort(child);
         SetOcc(b, false); SetOcc(t, true);
-        int sideC = t - dirs[last.Dir];
+        int sideC = PlayerAfter(t, dirs[last.Dir]);
         int np = Reach(sideC, mark2);
         long tcl = Prof.Start();
         bool clDead = cl != null && cl.Dead(occ, t, sideC, mark2, stamp, -1);
