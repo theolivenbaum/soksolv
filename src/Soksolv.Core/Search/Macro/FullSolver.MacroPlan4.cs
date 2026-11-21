@@ -38,8 +38,22 @@ public sealed unsafe partial class FullSolver
             return E[packed].To;
         }
 
+        // flat copies of the entry list for the per-candidate queries (rebuilt after RecomputeUntil)
+        int ver, cver = -1; int[] tA = [], uA = [], permTo = []; int nPerm;
+        void Sync()
+        {
+            if (cver == ver) return;
+            int n = E.Count;
+            if (tA.Length < n) { tA = new int[n]; uA = new int[n]; }
+            if (permTo.Length < InitNum) permTo = new int[InitNum];
+            nPerm = 0;
+            for (int i = 0; i < n; i++) { tA[i] = E[i].To; uA[i] = E[i].Until; if (i < InitNum && E[i].Until == -1) permTo[nPerm++] = E[i].To; }
+            cver = ver;
+        }
+
         public void RecomputeUntil()
         {
+            ver++;
             for (int i = 0; i < E.Count; i++) { var x = E[i]; x.Until = -1; E[i] = x; }
             for (int i = 0; i < E.Count; i++)
                 for (int j = i + 1; j < E.Count; j++)
@@ -91,8 +105,9 @@ public sealed unsafe partial class FullSolver
         public int PermMissing(bool[] occ)
         {
             if (permE != E.Count || permCnt == null || permCnt.Length != occ.Length) PermPrepare(occ.Length);
+            Sync();
             int m = 0;
-            for (int i = 0; i < InitNum; i++) if (E[i].Until == -1 && !occ[E[i].To]) m++;
+            fixed (bool* o = occ) fixed (int* pt = permTo) for (int k = 0; k < nPerm; k++) if (!o[pt[k]]) m++;
             return m;
         }
         /// <summary><see cref="Packed"/> of the child (occ holds it) of a parent with <paramref name="parentMissing"/> empty permanent cells, after the box on b moved to t.</summary>
@@ -104,23 +119,24 @@ public sealed unsafe partial class FullSolver
 
         public int Packed(bool[] occ)
         {
-            int n = E.Count;
-            for (int i = 0; i < InitNum; i++)
-                if (E[i].Until == -1 && !occ[E[i].To])
-                {
-                    int c = 0;
-                    for (int j = 0; j < InitNum; j++) if (E[j].Until == -1 && occ[E[j].To]) c++;
-                    return c;
-                }
-            int packed = n;
-            for (int i = n - 1; i >= InitNum; i--)
+            Sync();
+            int n = E.Count, init = InitNum;
+            fixed (bool* o = occ) fixed (int* t = tA, u = uA, pt = permTo)
             {
-                if (occ[E[i].To]) continue;
-                if (E[i].Until == -1 || E[i].Until >= packed) packed = i;
+                int c = 0;
+                for (int k = 0; k < nPerm; k++) if (o[pt[k]]) c++;
+                if (c < nPerm) return c;   // a permanent entry is still missing: the packed prefix is the permanent entries in place
+                int packed = n;
+                for (int i = n - 1; i >= init; i--)
+                {
+                    if (o[t[i]]) continue;
+                    int un = u[i];
+                    if (un == -1 || un >= packed) packed = i;
+                }
+                int good = 0;
+                for (int i = 0; i < init; i++) if (o[t[i]] || u[i] < packed) good++;
+                return packed - (init - good);
             }
-            int good = 0;
-            for (int i = 0; i < InitNum; i++) if (occ[E[i].To] || E[i].Until < packed) good++;
-            return packed - (InitNum - good);
         }
 
         /// <summary>buildFestEvents: the plan's witnessed backward moves as Festival's forward event list.</summary>
@@ -727,14 +743,16 @@ public sealed unsafe partial class FullSolver
         }
 
         // ---- separation ------------------------------------------------------------------------------------------------------------
-        bool Separated(int a, int b)
+        ulong[]?[]? sepBall;   // per cell, lazily: bitset of the cells within Plan4Sep-1 walking steps (walls only)
+        ulong[] SepBall(int a)
         {
-            int w = W;
-            int dx = Math.Abs(a % w - b % w), dy = Math.Abs(a / w - b / w);
-            if (dx + dy >= Plan4Sep && a != b) return true;
+            sepBall ??= new ulong[]?[cells];
+            var bs = sepBall[a];
+            if (bs != null) return bs;
+            bs = new ulong[(cells + 63) >> 6];
             for (int i = 0; i < sepQn; i++) sepD[sepQ[i]] = -1;
-            int tail = 0; sepQ[tail++] = a; sepD[a] = 0; bool near = false;
-            for (int i = 0; i < tail && !near; i++)
+            int tail = 0; sepQ[tail++] = a; sepD[a] = 0;
+            for (int i = 0; i < tail; i++)
             {
                 int x = sepQ[i];
                 if (sepD[x] >= Plan4Sep - 1) continue;
@@ -743,10 +761,20 @@ public sealed unsafe partial class FullSolver
                     int y = x + d;
                     if (wall[y] || sepD[y] >= 0) continue;
                     sepD[y] = sepD[x] + 1; sepQ[tail++] = y;
-                    if (y == b) { near = true; break; }
+                    bs[y >> 6] |= 1UL << (y & 63);
                 }
             }
             sepQn = tail;
+            sepBall[a] = bs;
+            return bs;
+        }
+        bool Separated(int a, int b)
+        {
+            int w = W;
+            int dx = Math.Abs(a % w - b % w), dy = Math.Abs(a / w - b / w);
+            if (dx + dy >= Plan4Sep && a != b) return true;
+            var ball = SepBall(a);
+            bool near = (ball[b >> 6] >> (b & 63) & 1) != 0 && a != b;
             if (!near && a != b) return true;
             if (!s.HasRooms) return false;
             if (RoomSep) return FestRoomSep(a, b);
