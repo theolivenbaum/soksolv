@@ -186,3 +186,52 @@ xunit: `tests/Soksolv.Tests/Fa2Tests.cs` (Go golden counts for default and `old`
   slices) — the C# portfolio runs the plain fa2 engine (Go's `-strategy fa2` / `-fa2-lane-solo` engine 1).
 * Experiment flags off by default: planner `v2ng`, `-fa2-hall-sup`, `-fa2-mobility=false` (last key = goal distance), plan files, replay/stream modes.
 * Time-dependent behaviour: planner budget = min(1 s, t/10) (as Go); nothing else in the plain engine reads the clock.
+
+
+# `hf` / toward (thirteenth fork) — `-strategy hf`
+
+Go's `-strategy hf` (exp-188): FESS on the real level ranked against a *target board* — pull for N/3 expansions, take the pull search's best
+state (boxes, player, backward tail), then run the macro engine in **target mode** for the remaining 2N/3 (`fess_toward.go`,
+`fessTowardReal`), completing with `meet.Complete(target boxes, prefix end, tail)` when the target board is reached.
+
+## What was ported (`Search/Toward/`, hooks in `Search/Macro/*`)
+* `FullSolver.Toward.cs`: `SetTarget` (`tgtDist` per target square), `OnTarget`, `HotRel` (hotspots against the target), exact min-cost box->target
+  matching (Hungarian; `MatchParent`/`MatchChild` reuse the parent's duals exactly like Go's `incremental_match.go`), `HfFrozenOff`,
+  Festival's HF scheduling tuples (`hfOwn`/`hfBest`, `HfBetter`, cell = best-ancestor (regions, boxes on target)), `CompleteTarget`, `BestTarget`
+  (pull side) and the standalone driver `FullSolver.SolveHf`.
+* `FullSolver.TowardPrune.cs`: Festival's inefficient positions (`festTunnels`, `festInefficient`) and the `DiagDeadChecker` hook (Go default
+  `-diag-dead=target`: toward searches only).
+* `FullSolver.FestCorral.cs`: Festival's component-growing PI-corral (`corral_fest.go`).
+* Engine hooks: target-count `MPacked`, HF cell in `MAdd`, parent/child score overrides + `HfNoReturn` + one-advisor + unweighted-3/4 in `MOpen`/`MVisit`,
+  best-so-far orders, target completion in the search loop; no plan / no displacement / no plan4 in this mode (Go `noPlan`, `hfRank`).
+* CLI: `-strategy hf` with Go's switches (`-hf-festival=false`, `-hf-no-return`, `-hf-fest-corral`, `-hf-frozen-match`, `-hf-fest-sched`, `-hf-unweighted`,
+  `-hf-match-first`, `-hf-one-advisor`, `-hf-best-fest`, `-hf-fest-ineff`, `-diag-dead=false`), `-no-meet`.
+
+## Parity (deterministic `-nodes N`, `-no-meet`; `bench/hf-parity.py`; Go side = `bench/hf-ref/build.sh` patched copy that prints pull/toward stored counts)
+Compared: solved, toward nodes, pushes, pull stored, toward stored, target_on_start, target_tail.
+
+| configuration (Go flags) | testdata (19) | LTS sample (40) |
+|---|---|---|
+| reduced: `-hf-festival=false -diag-dead=false` (target mode alone) | 19/19 | 40/40 |
+| `-hf-festival=false` (+ diag-dead) | 19/19 | |
+| + `-hf-no-return` / `-hf-frozen-match` / `-hf-match-first` / `-hf-unweighted` / `-hf-one-advisor` / `-hf-best-fest` (each alone) | 19/19 each | |
+| + `-hf-fest-sched` | 19/19 | |
+| + `-hf-fest-corral` | 19/19 | |
+| bundle minus fest-corral (`-hf-fest-corral=false`) | 19/19 | 40/40 |
+| **default (all features), N=3000** | **19/19** | **40/40** |
+| **default, N=15000** | **19/19** | |
+
+(`-hf-fest-ineff` was only exercised inside the full default bundle runs, which include it.) Go's `hf` is *not* deterministic when a meeting
+resolves the level (it races a drain goroutine), hence `-no-meet`; `hf-parity.py` skips levels where two Go runs differ.
+
+## Speed / memory (AOT, equal work: `-nodes 15000`, 19 testdata levels, same machine, best of 2)
+Go 9.4 s, C# 8.4 s => **0.90x** (worst levels 1.3x: Microban_155_31, Sasquatch_VI_50_24). Before the incremental matching repair it was 1.02x. Memory:
+the C# CLI does not yet report `peak_memory_mb` for `hf` (not measured).
+
+## Not ported
+* The portfolio `toward` lane: it is a retargeting loop (`main.go` ~l.930: `RetargetReuse`, `retargetTo`, commitment windows, `towardStop`, `RetainFwdMail`
+  previous trees) fed by the pull lane's *live* best state (`meet.Best`) plus meetings, not a standalone search. `hf` is its deterministic standalone form
+  and is what is ported; the portfolio keeps its existing lanes (no `toward` lane).
+* Meeting (`meet`) hooks inside the toward phase (forward adds / pull drain); `hf` runs `-no-meet` only.
+* `hub-pull`, `hub-gen`, `hub`: not started in this fork (they need pullfest `pfOn` (400 lines), `hubrace`/`hubstrata`/`hubgen`/`hub`/`hfsched` (~2.8k lines)
+  on top of the toward machinery now available; see the scope table above).

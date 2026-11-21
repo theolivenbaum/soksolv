@@ -93,3 +93,9 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] unported fa2 experiment flags: v2ng/old plan variants in portfolio, hall-sup, plan-file/replay/stream engines
 
 - [x] Macro wide-level speed: 1.22x -> 1.05x Go CPU on 12 wide levels (hot rows/columns, bit box search + moveAccessBits, plan4 radix sort, goal-area memo); remaining: CutQueryFill/Expand4 constants, displacement, region counts
+
+## toward / hf (thirteenth fork)
+- [x] target mode in the macro engine, `-strategy hf`: exact vs Go (19/19 testdata, 40/40 LTS at 3k nodes; 19/19 at 15k), 0.90x Go equal-work time
+- [ ] portfolio `toward` lane (retarget loop with the live pull best state + meetings), `-strategy toward|tfwd`
+- [ ] hub-pull / hub-gen / hub (pullfest pfOn, hubrace, hubstrata, hubgen, hub, hfsched)
+- [ ] `hf` peak-memory reporting; meetings inside the toward phase
