@@ -14,6 +14,8 @@ public sealed class PortfolioOptions
     public bool Novelty = true, Pull = false;
     /// <summary>fa2 lane (plan-guided forward FESS: own v2 plan; Go's anytime lane also runs a second engine on the macro lane's plan4 list — not ported).</summary>
     public bool Fa2 = true;
+    /// <summary>factor lane (component planning; joins only boards with >= 2 non-trivial static box components, as Go's factorGate).</summary>
+    public bool Factor = true;
     public int MacroStage = 5, MacroFeatures = 255; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     public int RevSupply = 4;
     public Action<string>? Log;
@@ -40,7 +42,10 @@ public static class Portfolio
     {
         var sw = Stopwatch.StartNew();
         var cancel = new CancelFlag();
-        int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0) + (po.Macro ? 1 : 0) + (po.Novelty ? 1 : 0) + (po.Pull ? 1 : 0) + (po.Fa2 ? 1 : 0);
+        Level? lvForGates = null;
+        try { lvForGates = Level.Parse(rows); } catch (InvalidDataException) { }
+        bool factorOn = po.Factor && lvForGates != null && Factor.FactorLane.Gate(lvForGates);
+        int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0) + (po.Macro ? 1 : 0) + (po.Novelty ? 1 : 0) + (po.Pull ? 1 : 0) + (po.Fa2 ? 1 : 0) + (factorOn ? 1 : 0);
         if (lanes == 0) return new SolveResult { Reason = "no lanes" };
         ulong budget = po.MemBytes / 100 * 70 / (ulong)lanes;
         var shared = new ClusterTable(16); var sharedPen = new ClusterTable(16); var sharedDz = new Search.DeadZone.DeadZoneTable(18);
@@ -100,6 +105,12 @@ public static class Portfolio
                 NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedDeadZone = sharedDz,
                 StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
             }, timeLimitSec));
+        if (factorOn)
+            Lane("factor", () =>
+            {
+                var eng = new FullOptions { BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedDeadZone = sharedDz, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0, NodeBudget = po.NodeBudget, MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures };
+                return Factor.FactorLane.Run(lvForGates!, new Factor.FactorOptions { NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, Engine = eng, TimeLimitSec = timeLimitSec, Solo = false }, timeLimitSec);
+            });
         if (po.Pull)
             Lane("pull", () => FullSolver.SolvePull(rows, new FullOptions
             {

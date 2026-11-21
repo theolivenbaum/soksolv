@@ -98,6 +98,12 @@ SolveResult Run(string[] r, double tl)
     if (strategy == "pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolvePull(r, opt, tl); }
     if (strategy == "fa2") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveFa2(r, opt, tl); }
     if (strategy == "novelty") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveNovelty(r, opt, tl); }
+    if (strategy == "factor")
+    {
+        var lvf = Level.Parse(r);
+        var eng = opt.Clone(); eng.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; eng.NodeBudget = nodes;
+        return Soksolv.Search.Factor.FactorLane.Run(lvf, new Soksolv.Search.Factor.FactorOptions { NodeBudget = nodes, BudgetBytes = opt.BudgetBytes, Engine = eng, TimeLimitSec = tl, Solo = true }, tl);
+    }
     if (strategy == "macro") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveMacroLane(r, opt, tl); } // main.go -stall-scale
     return Portfolio.Solve(r, new PortfolioOptions { Meet = !noMeet, Pull = portPull, Novelty = portNovelty, Fa2 = portFa2, NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
 }
