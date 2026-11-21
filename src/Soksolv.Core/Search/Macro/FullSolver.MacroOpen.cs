@@ -109,7 +109,7 @@ public sealed unsafe partial class FullSolver
             int b = cur[i];
             if (corral != 0 && cmark[b] != corral) continue;
             mtst++;
-            mOpenCands = 0;
+            mOpenCands = 0; mCompsF = -1; mArtDone = false; mSplitSeen = 0;
             mVisitI = i;
             MBoxSearch(b, st, false, 0, 0, cur);
         }
@@ -480,7 +480,7 @@ public sealed unsafe partial class FullSolver
         int canonical = 0;
         long tp;
         for (int side = 0; side < 4; side++)
-            if (m3[t - dirs[side]] == mpstamp) { canonical = side; break; }
+            if (InPR(t - dirs[side])) { canonical = side; break; }
         if (t == cur[i] && hfRank && opt.HfNoReturn) return true; // exp-268: no macro returning its box to its square
         int endpoint = t * 4 + canonical;
         if (mtseen[endpoint] == mtst) return true;
@@ -495,15 +495,7 @@ public sealed unsafe partial class FullSolver
             int plen = 1;
             for (int x = mbprev[k]; x >= 0; x = mbprev[x]) plen++;
             tp = Prof.Start();
-            int r;
-            switch (++mOpenCands)
-            {
-                case 1: r = Regions(); break;
-                case 2:
-                    SetOcc(t, false); MArtic(); SetOcc(t, true);
-                    r = MChildRegions(t); break;
-                default: r = MChildRegions(t); break;
-            }
+            int r = MChildRegionCount(t, ++mOpenCands);
             Prof.Stop(4, tp);
             if (tgtPocket != null && r > 1) r = RegionsRel(); // exp-460: regions relative to the target (occ holds the child)
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
@@ -610,6 +602,21 @@ public sealed unsafe partial class FullSolver
         return true;
     }
 
+    bool mSdBuilt; int mSdStatic, mSdNSplit; bool[] mSdFlag = new bool[64]; int[] mSdSplit = new int[64];
+    void MSdBuild(ReadOnlySpan<int> cur)
+    {
+        if (mSdFlag.Length < cur.Length) { mSdFlag = new bool[cur.Length * 2]; mSdSplit = new int[cur.Length * 2]; }
+        mSdStatic = 0; mSdNSplit = 0;
+        for (int j = 0; j < cur.Length; j++)
+        {
+            int c = cur[j]; mSdFlag[j] = false;
+            if (goal[c]) continue;
+            if (sd!.IsSplitter(c)) mSdSplit[mSdNSplit++] = j;
+            else if (sd.StaticDead(c)) { mSdFlag[j] = true; mSdStatic++; }
+        }
+        mSdBuilt = true;
+    }
+
     /// <summary>Pruning rules for cur[i] pushed to t (occ holds the child). 0 = alive.</summary>
     int MPushDead(ReadOnlySpan<int> cur, int i, int t, int canonical)
     {
@@ -638,18 +645,28 @@ public sealed unsafe partial class FullSolver
             tq = Prof.Start();
             int p = t - dirs[canonical];
             bool dead = false;
-            if (m3[p] == mpstamp)
-                for (int j = 0; j < cur.Length; j++)
+            if (InPR(p))
+            {
+                // per box search: boxes on cells whose side-dead verdict does not depend on the player's side are counted once; only
+                // boxes on separator cells (and the moved box) are asked per candidate
+                if (!mSdBuilt) MSdBuild(cur);
+                if (mSdStatic - (mSdFlag[i] ? 1 : 0) > 0) dead = true;
+                else
                 {
-                    int c = j == i ? t : cur[j];
-                    if (!goal[c] && sd.Dead(c, p)) { dead = true; break; }
+                    for (int s2 = 0; s2 < mSdNSplit; s2++)
+                    {
+                        int j = mSdSplit[s2];
+                        if (j != i && sd.Dead(cur[j], p)) { dead = true; break; }
+                    }
+                    if (!dead && !goal[t] && sd.Dead(t, p)) dead = true;
                 }
+            }
             Prof.Stop(14, tq);
             if (dead) { stats.SideDead++; return 5; }
         }
         if (hfRank && opt.HfFestIneff && FestInefficient(t)) return 8;
         if (hfRank && dd != null && dd.Dead(occ, t, t - dirs[canonical])) return 9;
-        if (Feat(7) && m3[t - dirs[canonical]] == mpstamp && PairSideDeadlock(t, t - dirs[canonical])) { stats.PairDead++; return 7; }
+        if (Feat(7) && InPR(t - dirs[canonical]) && PairSideDeadlock(t, t - dirs[canonical])) { stats.PairDead++; return 7; }
         if (Feat(3) && CorridorFlowDeadlock(t)) { stats.CorridorFlow++; return 6; }
         return 0;
     }

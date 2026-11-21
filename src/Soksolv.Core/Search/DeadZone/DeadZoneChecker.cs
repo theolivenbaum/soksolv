@@ -88,13 +88,14 @@ public sealed unsafe class DeadZoneChecker
     int gw;
     Dictionary<ulong, ulong[]>? reachFix;
     int[] mOf = [];
-    ulong[] mSeen = [];
+    ulong[] mSeen = [], mUsed = [];
     readonly ulong[] zob;
     // word-parallel path (board width <= 64): one ulong per row
     readonly bool bitsOK;
     readonly int H;
-    readonly int[] rowOf; readonly byte[] colOf;
-    readonly ulong[] baseB, freeB, rbits, cbits, ain, bx, rm, deadB, baseStatic;
+    readonly ushort* rc;   // cell -> row << 6 | col (pinned)
+    readonly ulong* baseB, freeB, rbits, cbits, ain, bx, rm, deadB, baseStatic, goalB, fpar, parR;
+    readonly ulong[]? wkArr; readonly ushort[]? rcArr;   // keep the pinned arrays alive
     bool pOK; int pm, psz, spn, ssz;
 
     public DeadZoneChecker(DeadZoneBoard board, int capStates)
@@ -121,14 +122,18 @@ public sealed unsafe class DeadZoneChecker
         if (W <= 64 && BitFlood)
         {
             bitsOK = true; H = n / W;
-            rowOf = new int[n]; colOf = new byte[n];
-            for (int x2 = 0; x2 < n; x2++) { rowOf[x2] = x2 / W; colOf[x2] = (byte)(x2 % W); }
-            baseB = new ulong[H]; freeB = new ulong[H]; rbits = new ulong[H]; cbits = new ulong[H];
-            ain = new ulong[H]; bx = new ulong[H]; rm = new ulong[H]; deadB = new ulong[H]; baseStatic = new ulong[H];
+            int hs = H + 4;
+            wkArr = GC.AllocateArray<ulong>(12 * hs, pinned: true);
+            rcArr = GC.AllocateArray<ushort>(n, pinned: true);
+            ulong* wk = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref wkArr[0]);
+            rc = (ushort*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rcArr[0]);
+            baseB = wk; freeB = wk + hs; rbits = wk + 2 * hs; cbits = wk + 3 * hs; ain = wk + 4 * hs; bx = wk + 5 * hs; rm = wk + 6 * hs; deadB = wk + 7 * hs; baseStatic = wk + 8 * hs; goalB = wk + 9 * hs; fpar = wk + 10 * hs; parR = wk + 11 * hs;
+            for (int x2 = 0; x2 < n; x2++) rc[x2] = (ushort)((x2 / W) << 6 | x2 % W);
             for (int x2 = 0; x2 < n; x2++)
             {
-                if (!b.Wall[x2]) baseStatic[rowOf[x2]] |= 1UL << colOf[x2];
-                if (b.Dead[x2]) deadB[rowOf[x2]] |= 1UL << colOf[x2];
+                if (!b.Wall[x2]) baseStatic[rc[x2] >> 6] |= 1UL << (rc[x2] & 63);
+                if (b.Dead[x2]) deadB[rc[x2] >> 6] |= 1UL << (rc[x2] & 63);
+                if (b.Goal[x2] && x2 < b.Goal.Length) goalB[rc[x2] >> 6] |= 1UL << (rc[x2] & 63);
             }
         }
     }
@@ -137,7 +142,9 @@ public sealed unsafe class DeadZoneChecker
     public static bool BitFlood = true;
 
     uint StampR() { if (++rst == 0) { Array.Clear(rmarkA); rst = 1; } return rst; }
-    bool Occ(int x) => (blk[x] & BOcc) != 0;
+    bool occRows;   // SearchBits: live occupancy is the row words bx, not the blk bytes
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    bool Occ(int x) => occRows ? ((bx[rc[x] >> 6] >> (rc[x] & 63)) & 1) != 0 : (blk[x] & BOcc) != 0;
     bool Wall2(int x) => (blk[x] & BWall2) != 0;
     void SetOcc(int x, bool v) { if (v) blk[x] |= BOcc; else blk[x] &= unchecked((byte)~BOcc); }
     void SetWall2(int x, bool v) { if (v) blk[x] |= BWall2; else blk[x] &= unchecked((byte)~BWall2); }
@@ -388,7 +395,8 @@ public sealed unsafe class DeadZoneChecker
         uint rs = StampR(); var r = Flood(p, rmark, rs); prs = rs; return r;
     }
     (int, int) ChildFlood(int p) { CFloods++; if (++cmst == 0) { Array.Clear(cmarkA); cmst = 1; } return Flood(p, cmark, cmst); }
-    bool InParent(int x) => bitsOK ? ((rbits[rowOf[x]] >> colOf[x]) & 1) != 0 : rmark[x] == prs;
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    bool InParent(int x) => bitsOK ? ((rbits[rc[x] >> 6] >> (rc[x] & 63)) & 1) != 0 : rmark[x] == prs;
     bool InChild(int x) => cmark[x] == cmst;
 
     bool Fencing(int y)
@@ -436,38 +444,38 @@ public sealed unsafe class DeadZoneChecker
     (int pn, int size, int live) DoEscape(int[] nx, int p, int seed)
         => bitsOK && ShrinkAll ? EscapeBits(nx, p, seed) : EscapeScanLive(nx, p);
 
-    // ---- word-parallel path (Go escapeBits / floodFree / seedChild), board width <= 64 ------------------------------------------------
+    // ---- word-parallel path (Go escapeBits / floodFree / seedChild), board width <= 64: pointer kernels over pinned row words -----------
     void SetBase(ReadOnlySpan<int> boxes)
     {
         if (!bitsOK) return;
-        Array.Copy(baseStatic, baseB, H);
-        foreach (int x in boxes) if (Wall2(x)) baseB[rowOf[x]] &= ~(1UL << colOf[x]);
+        Buffer.MemoryCopy(baseStatic, baseB, H * 8L, H * 8L);
+        foreach (int x in boxes) if (Wall2(x)) baseB[rc[x] >> 6] &= ~(1UL << (rc[x] & 63));
     }
 
     void BuildArea()
     {
-        Array.Clear(ain);
+        new Span<ulong>(ain, H).Clear();
         int w = W;
+        ushort* r = rc;
         for (int i = 0; i < cellsN; i++)
         {
             int x = cells[i];
-            for (int dy = -1; dy <= 1; dy++)
-                for (int dx = -1; dx <= 1; dx++)
-                {
-                    int y = x + dy * w + dx;
-                    ain[rowOf[y]] |= 1UL << colOf[y];
-                }
+            int a = x - w, c = x + w;
+            ain[r[a - 1] >> 6] |= 1UL << (r[a - 1] & 63); ain[r[a] >> 6] |= 1UL << (r[a] & 63); ain[r[a + 1] >> 6] |= 1UL << (r[a + 1] & 63);
+            ain[r[x - 1] >> 6] |= 1UL << (r[x - 1] & 63); ain[r[x] >> 6] |= 1UL << (r[x] & 63); ain[r[x + 1] >> 6] |= 1UL << (r[x + 1] & 63);
+            ain[r[c - 1] >> 6] |= 1UL << (r[c - 1] & 63); ain[r[c] >> 6] |= 1UL << (r[c] & 63); ain[r[c + 1] >> 6] |= 1UL << (r[c + 1] & 63);
         }
-        for (int i = 0; i < zoneN; i++) ain[rowOf[zone[i]]] |= 1UL << colOf[zone[i]];
+        for (int i = 0; i < zoneN; i++) ain[rc[zone[i]] >> 6] |= 1UL << (rc[zone[i]] & 63);
     }
 
-    (int, int) FloodBits(int p, int[] boxes, int nb, ulong[] outB)
+    (int, int) FloodBits(int p, int[] boxes, int nb, ulong* outB)
     {
-        Array.Copy(baseB, freeB, H);
-        for (int i = 0; i < nb; i++) { int x = boxes[i]; if (x != 0) freeB[rowOf[x]] &= ~(1UL << colOf[x]); }
+        Buffer.MemoryCopy(baseB, freeB, H * 8L, H * 8L);
+        for (int i = 0; i < nb; i++) { int x = boxes[i]; if (x != 0) freeB[rc[x] >> 6] &= ~(1UL << (rc[x] & 63)); }
         return FloodFree(p, outB, false);
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     static ulong FillRow(ulong y, ulong f)
     {
         while (true)
@@ -478,13 +486,57 @@ public sealed unsafe class DeadZoneChecker
         }
     }
 
-    (int, int) FloodFree(int p, ulong[] outB, bool seeded) => FloodFreeMode(p, outB, seeded, false);
+    (int, int) FloodFree(int p, ulong* outB, bool seeded, ulong dirty0 = 0) => H <= 64 ? FloodFreeDirty(p, outB, seeded, false, dirty0) : FloodFreeSweep(p, outB, seeded, false);
+    (int, int) FloodFreeMode(int p, ulong* outB, bool seeded, bool closed) => H <= 64 ? FloodFreeDirty(p, outB, seeded, closed, 0) : FloodFreeSweep(p, outB, seeded, closed);
 
-    (int, int) FloodFreeMode(int p, ulong[] outB, bool seeded, bool closed)
+    ulong fdChg;   // rows changed by the last open-seeded FloodFreeDirty
+    /// <summary>Row flood with a dirty-row worklist (H &lt;= 64). Unseeded: floods from p. Closed seeded: outB is a region closed except at p. Open seeded: outB is a region and dirty0 holds the rows whose free cells changed.</summary>
+    (int, int) FloodFreeDirty(int p, ulong* outB, bool seeded, bool closed, ulong dirty0)
     {
-        var F = freeB;
-        int Hh = outB.Length;
-        int prow = rowOf[p];
+        ulong* F = freeB;
+        int Hh = H;
+        ulong dirty = 0;
+        fdChg = 0;
+        if (!seeded || closed)
+        {
+            int prow = rc[p] >> 6;
+            if (!seeded) { new Span<ulong>(outB, Hh).Clear(); outB[prow] = 1UL << (rc[p] & 63); }
+            ulong y0 = FillRow(outB[prow], F[prow]);
+            outB[prow] = y0;
+            if ((y0 & F[prow - 1] & ~outB[prow - 1]) != 0) dirty |= 1UL << (prow - 1);
+            if ((y0 & F[prow + 1] & ~outB[prow + 1]) != 0) dirty |= 1UL << (prow + 1);
+        }
+        else dirty = dirty0;
+        while (dirty != 0)
+        {
+            int r = System.Numerics.BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
+            ulong cu = outB[r];
+            ulong f = F[r];
+            ulong y = FillRow(cu | ((outB[r - 1] | outB[r + 1]) & f), f);
+            if (y == cu) continue;
+            outB[r] = y; fdChg |= 1UL << r;
+            ulong nw = y & ~cu;
+            if ((nw & F[r - 1] & ~outB[r - 1]) != 0) dirty |= 1UL << (r - 1);
+            if ((nw & F[r + 1] & ~outB[r + 1]) != 0) dirty |= 1UL << (r + 1);
+        }
+        int m = -1, size = 0;
+        for (int r = 1; r < Hh - 1; r++)
+        {
+            ulong w0 = outB[r];
+            if (w0 != 0)
+            {
+                if (m < 0) m = r * W + System.Numerics.BitOperations.TrailingZeroCount(w0);
+                size += System.Numerics.BitOperations.PopCount(w0);
+            }
+        }
+        return (m, size);
+    }
+
+    (int, int) FloodFreeSweep(int p, ulong* outB, bool seeded, bool closed)
+    {
+        ulong* F = freeB;
+        int Hh = H;
+        int prow = rc[p] >> 6;
         int lo = prow, hi = prow;
         int flo = Hh, fhi = -1;
         if (seeded)
@@ -504,32 +556,35 @@ public sealed unsafe class DeadZoneChecker
         }
         else
         {
-            Array.Clear(outB);
-            outB[prow] = 1UL << colOf[p];
+            new Span<ulong>(outB, Hh).Clear();
+            outB[prow] = 1UL << (rc[p] & 63);
         }
         while (true)
         {
             bool changed = false;
-            for (int r = Math.Max(lo - 1, 1); r <= hi + 1 && r < Hh - 1; r++)
+            int rEnd = Math.Min(hi + 1, Hh - 2);
+            for (int r = Math.Max(lo - 1, 1); r <= rEnd; r++)
             {
-                ulong y = outB[r] | ((outB[r - 1] | outB[r + 1]) & F[r]);
-                if (y == outB[r] && (r != prow || outB[r] == 0)) continue;
+                ulong cu = outB[r];
+                ulong y = cu | ((outB[r - 1] | outB[r + 1]) & F[r]);
+                if (y == cu && (r != prow || cu == 0)) continue;
                 y = FillRow(y, F[r]);
-                if (y != outB[r]) { outB[r] = y; changed = true; lo = Math.Min(lo, r); hi = Math.Max(hi, r); }
+                if (y != cu) { outB[r] = y; changed = true; if (r < lo) lo = r; if (r > hi) hi = r; }
             }
             if (!changed) break;
             changed = false;
-            for (int r = Math.Min(hi + 1, Hh - 2); r >= 1 && r >= lo - 1; r--)
+            for (int r = Math.Min(hi + 1, Hh - 2), rl = Math.Max(lo - 1, 1); r >= rl; r--)
             {
-                ulong y = outB[r] | ((outB[r - 1] | outB[r + 1]) & F[r]);
-                if (y == outB[r]) continue;
+                ulong cu = outB[r];
+                ulong y = cu | ((outB[r - 1] | outB[r + 1]) & F[r]);
+                if (y == cu) continue;
                 y = FillRow(y, F[r]);
-                outB[r] = y; changed = true; lo = Math.Min(lo, r); hi = Math.Max(hi, r);
+                outB[r] = y; changed = true; if (r < lo) lo = r; if (r > hi) hi = r;
             }
             if (!changed) break;
         }
         int m = -1, size = 0;
-        lo = Math.Min(lo, flo); hi = Math.Max(hi, fhi);
+        if (flo < lo) lo = flo; if (fhi > hi) hi = fhi;
         for (int r = Math.Max(lo, 0); r <= hi && r < Hh; r++)
         {
             ulong w0 = outB[r];
@@ -565,11 +620,11 @@ public sealed unsafe class DeadZoneChecker
 
     bool SeedChild(int p, int seed)
     {
-        var R = rbits;
+        ulong* R = rbits;
         if (seed != 0)
         {
-            int r = rowOf[seed]; int col = colOf[seed];
-            if (r == 0 || r == R.Length - 1 || col == 0) return false;
+            int r = rc[seed] >> 6; int col = rc[seed] & 63;
+            if (r == 0 || r == H - 1 || col == 0) return false;
             if (((R[r] >> col) & 1) != 0)
             {
                 ulong u = (R[r - 1] >> (col - 1)) & 7, m = (R[r] >> (col - 1)) & 7, d = (R[r + 1] >> (col - 1)) & 7;
@@ -577,24 +632,24 @@ public sealed unsafe class DeadZoneChecker
                 if (!RingOK[ring]) return false;
             }
         }
-        Array.Copy(R, cbits, R.Length);
-        if (seed != 0) cbits[rowOf[seed]] &= ~(1UL << colOf[seed]);
-        cbits[rowOf[p]] |= 1UL << colOf[p];
+        Buffer.MemoryCopy(R, cbits, H * 8L, H * 8L);
+        if (seed != 0) cbits[rc[seed] >> 6] &= ~(1UL << (rc[seed] & 63));
+        cbits[rc[p] >> 6] |= 1UL << (rc[p] & 63);
         return true;
     }
 
     bool SeedFinal(int p, int seed)
     {
         if (!pOK) return false;
-        var F = freeB; var R = cbits;
-        foreach (int d in dirs)
+        ulong* F = freeB; ulong* R = cbits;
+        for (int di = 0; di < 4; di++)
         {
-            int u = p + d;
-            int r = rowOf[u], col = colOf[u];
+            int u = p + dirs[di];
+            int r = rc[u] >> 6, col = rc[u] & 63;
             if (((F[r] >> col) & 1) != 0 && ((R[r] >> col) & 1) == 0) return false;
         }
         int size = psz + 1, m = pm;
-        if (seed != 0 && ((rbits[rowOf[seed]] >> colOf[seed]) & 1) != 0)
+        if (seed != 0 && ((rbits[rc[seed] >> 6] >> (rc[seed] & 63)) & 1) != 0)
         {
             size--;
             if (seed == m) return false;
@@ -603,21 +658,43 @@ public sealed unsafe class DeadZoneChecker
         return true;
     }
 
+    /// <summary>Boxes of row r (bit set B) that leave the zone in this pass: not fencing (fm/ain), or pushable out of the zone (snapshot F, region R).</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    ulong EscRow(int r, ulong B)
+    {
+        ulong* F = freeB; ulong* R = cbits; ulong* ainp = ain;
+        ulong uP = F[r - 1] & ~R[r - 1], u0 = F[r] & ~R[r], uN = F[r + 1] & ~R[r + 1];
+        ulong fm = uP | uP << 1 | uP >> 1 | u0 | u0 << 1 | u0 >> 1 | uN | uN << 1 | uN >> 1;
+        ulong sure = B & (~ainp[r] | ~fm);
+        ulong need = B & ~sure;
+        if (need == 0) return sure;
+        ulong* dB = deadB;
+        ulong tP = F[r - 1] & ~dB[r - 1] & ~ainp[r - 1], t0 = F[r] & ~dB[r] & ~ainp[r], tN = F[r + 1] & ~dB[r + 1] & ~ainp[r + 1];
+        ulong push = ((R[r] << 1) & (t0 >> 1)) | ((R[r] >> 1) & (t0 << 1)) | (R[r - 1] & tN) | (R[r + 1] & tP);
+        return sure | (need & push);
+    }
+
     (int pn, int size, int live) EscapeBits(int[] nx, int p, int seed)
     {
         int Hh = H;
-        Array.Clear(bx);
+        new Span<ulong>(bx, Hh).Clear();
         int live = 0, blo = Hh, bhi = -1;
-        foreach (int y in nx)
+        ulong lmask = 0;
+        ushort* rcp = rc;
+        for (int j = 0; j < nx.Length; j++)
+        {
+            int y = nx[j];
             if (y != 0)
             {
-                int r = rowOf[y];
-                bx[r] |= 1UL << colOf[y];
+                int r = rcp[y] >> 6;
+                bx[r] |= 1UL << (rcp[y] & 63);
                 live++;
-                blo = Math.Min(blo, r); bhi = Math.Max(bhi, r);
+                if (r < blo) blo = r; if (r > bhi) bhi = r;
+                if (Hh <= 64) lmask |= 1UL << r;
             }
-        var F = freeB;
-        Array.Copy(baseB, F, Hh);
+        }
+        ulong* F = freeB;
+        Buffer.MemoryCopy(baseB, F, Hh * 8L, Hh * 8L);
         for (int r = blo; r <= bhi; r++) F[r] &= ~bx[r];
         int pn, size;
         if (seed >= 0 && SeedChild(p, seed))
@@ -626,40 +703,58 @@ public sealed unsafe class DeadZoneChecker
             else (pn, size) = FloodFreeMode(p, cbits, true, true);
         }
         else (pn, size) = FloodFree(p, cbits, false);
+        ulong* rmp = rm;
+        int rs = Math.Max(blo, 1), re = Math.Min(bhi, Hh - 2);
         while (true)
         {
-            var R = cbits;
-            bool any = false;
-            for (int r = Math.Max(blo, 1); r <= bhi && r < Hh - 1; r++)
+            bool any = false; ulong rmask = 0;
+            if (Hh <= 64)
             {
-                ulong B = bx[r];
-                rm[r] = 0;
-                if (B == 0) continue;
-                ulong uP = F[r - 1] & ~R[r - 1], u0 = F[r] & ~R[r], uN = F[r + 1] & ~R[r + 1];
-                ulong fm = uP | uP << 1 | uP >> 1 | u0 | u0 << 1 | u0 >> 1 | uN | uN << 1 | uN >> 1;
-                ulong tP = F[r - 1] & ~deadB[r - 1] & ~ain[r - 1], t0 = F[r] & ~deadB[r] & ~ain[r], tN = F[r + 1] & ~deadB[r + 1] & ~ain[r + 1];
-                ulong push = ((R[r] << 1) & (t0 >> 1)) | ((R[r] >> 1) & (t0 << 1)) | (R[r - 1] & tN) | (R[r + 1] & tP);
-                ulong rem = B & (~ain[r] | ~fm | push);
-                if (rem != 0)
+                for (ulong mm = lmask; mm != 0; mm &= mm - 1)
                 {
-                    rm[r] = rem;
-                    bx[r] = B & ~rem;
-                    live -= System.Numerics.BitOperations.PopCount(rem);
-                    any = true;
+                    int r = System.Numerics.BitOperations.TrailingZeroCount(mm);
+                    ulong B = bx[r];
+                    ulong rem = EscRow(r, B);
+                    if (rem != 0)
+                    {
+                        rmp[r] = rem;
+                        ulong nb = B & ~rem;
+                        bx[r] = nb;
+                        if (nb == 0) lmask &= ~(1UL << r);
+                        live -= System.Numerics.BitOperations.PopCount(rem);
+                        any = true; rmask |= 1UL << r;
+                    }
+                }
+            }
+            else
+            {
+                for (int r = rs; r <= re; r++)
+                {
+                    rmp[r] = 0;
+                    ulong B = bx[r];
+                    if (B == 0) continue;
+                    ulong rem = EscRow(r, B);
+                    if (rem != 0)
+                    {
+                        rmp[r] = rem; bx[r] = B & ~rem;
+                        live -= System.Numerics.BitOperations.PopCount(rem);
+                        any = true;
+                    }
                 }
             }
             if (!any) return (pn, size, live);
             for (int j = 0; j < nx.Length; j++)
             {
                 int y = nx[j];
-                if (y != 0 && ((rm[rowOf[y]] >> colOf[y]) & 1) != 0)
+                if (y != 0 && ((rmp[rcp[y] >> 6] >> (rcp[y] & 63)) & 1) != 0)
                 {
                     SetOcc(y, false);
                     nx[j] = 0;
-                    F[rowOf[y]] |= baseB[rowOf[y]] & (1UL << colOf[y]);
+                    F[rcp[y] >> 6] |= baseB[rcp[y] >> 6] & (1UL << (rcp[y] & 63));
                 }
             }
-            (pn, size) = FloodFree(p, cbits, true);
+            if (Hh <= 64) for (ulong mm = rmask; mm != 0; mm &= mm - 1) rmp[System.Numerics.BitOperations.TrailingZeroCount(mm)] = 0;
+            (pn, size) = FloodFree(p, cbits, true, rmask);
         }
     }
 
@@ -767,6 +862,7 @@ public sealed unsafe class DeadZoneChecker
     /// <summary>BFS over zone positions: 1 dead, 2 alive, 3 unknown (cap).</summary>
     uint Search(int k, int p0, int capN)
     {
+        if (bitsOK && ShrinkAll && H <= 64) { occRows = true; try { return SearchBits(k, p0, capN); } finally { occRows = false; } }
         int stride = k + 1;
         arenaLen = 0;
         if (nxt.Length != k) { nxt = new int[k]; cur = new int[k]; nx0Arr = new int[k]; }
@@ -859,6 +955,181 @@ public sealed unsafe class DeadZoneChecker
         return 1;
     }
 
+    // ---- bit-row BFS (board width <= 64, height <= 64): zone states are row words, children are derived by toggling two cells -------------
+    int[] hashZ = [];
+    void EnsureArena(int need) { if (need > arena.Length) { int nl = arena.Length; while (nl < need) nl *= 2; Array.Resize(ref arena, nl); } }
+
+    ulong WriteState(int off, int k, int live, ulong lm, int pn)
+    {
+        EnsureArena(off + k + 1);
+        var ar = arena;
+        int z = k - live;
+        for (int j = 0; j < z; j++) ar[off + j] = 0;
+        int pos = off + z;
+        ulong h = 0; int W0 = W; ulong* bxp = bx; ulong[] zb = zob;
+        for (ulong mm = lm; mm != 0; mm &= mm - 1)
+        {
+            int r = System.Numerics.BitOperations.TrailingZeroCount(mm);
+            int rb = r * W0;
+            for (ulong w = bxp[r]; w != 0; w &= w - 1)
+            {
+                int cell = rb + System.Numerics.BitOperations.TrailingZeroCount(w);
+                ar[pos++] = (short)cell; h ^= zb[cell];
+            }
+        }
+        ar[off + k] = (short)pn; h ^= zb[n + pn];
+        h *= 0x9E3779B97F4A7C15UL;
+        return h ^ (h >> 31);
+    }
+
+    bool AllGoalsRows(ulong lm)
+    {
+        for (ulong mm = lm; mm != 0; mm &= mm - 1)
+        {
+            int r = System.Numerics.BitOperations.TrailingZeroCount(mm);
+            if ((bx[r] & ~goalB[r]) != 0) return false;
+        }
+        return true;
+    }
+
+    /// <summary>EscapeBits on prepared rows: bx = live boxes (lm = rows holding any), freeB = base minus bx.</summary>
+    (int pn, int size, int live) EscapeRows(int p, int seed, ref ulong lm, int live)
+    {
+        int pn, size;
+        if (seed >= 0 && SeedChild(p, seed))
+        {
+            if (SeedFinal(p, seed)) { pn = spn; size = ssz; }
+            else (pn, size) = FloodFreeDirty(p, cbits, true, true, 0);
+        }
+        else (pn, size) = FloodFreeDirty(p, cbits, false, false, 0);
+        ulong* F = freeB; ulong* rmp = rm; ulong* bxp = bx; ulong lmask = lm;
+        ulong cand = lmask;   // rows to judge: all in the first pass, then only those next to a row whose free cells or region changed
+        while (true)
+        {
+            bool any = false; ulong rmask = 0;
+            for (ulong mm = cand; mm != 0; mm &= mm - 1)
+            {
+                int r = System.Numerics.BitOperations.TrailingZeroCount(mm);
+                ulong B = bxp[r];
+                ulong rem = EscRow(r, B);
+                if (rem != 0)
+                {
+                    rmp[r] = rem;
+                    ulong nb = B & ~rem;
+                    bxp[r] = nb;
+                    if (nb == 0) lmask &= ~(1UL << r);
+                    live -= System.Numerics.BitOperations.PopCount(rem);
+                    any = true; rmask |= 1UL << r;
+                }
+            }
+            if (!any) { lm = lmask; return (pn, size, live); }
+            for (ulong mm = rmask; mm != 0; mm &= mm - 1)
+            {
+                int r = System.Numerics.BitOperations.TrailingZeroCount(mm);
+                F[r] |= baseB[r] & rmp[r];
+                rmp[r] = 0;
+            }
+            (pn, size) = FloodFreeDirty(p, cbits, true, false, rmask);
+            ulong ch = rmask | fdChg;
+            cand = lmask & (ch | ch << 1 | ch >> 1);
+        }
+    }
+
+    uint SearchBits(int k, int p0, int capN)
+    {
+        int stride = k + 1;
+        arenaLen = 0;
+        BuildArea();
+        int Hh = H; ulong* bxp = bx; ulong* F = freeB; ulong* bs = baseB; ulong* pr = parR; ulong* fp = fpar;
+        long hb = Hh * 8L;
+        // root: the whole zone, seedless escape
+        new Span<ulong>(bxp, Hh).Clear();
+        ulong lm = 0; int live = 0;
+        for (int i = 0; i < k; i++) { int c = rc[zone[i]]; bxp[c >> 6] |= 1UL << (c & 63); lm |= 1UL << (c >> 6); live++; }
+        for (int r = 0; r < Hh; r++) F[r] = bs[r] & ~bxp[r];
+        var (pn0, size0, live0) = EscapeRows(p0, -1, ref lm, live);
+        if (size0 == floorN - fixedN - live0 || AllGoalsRows(lm)) { Opened++; return 2; }
+        ulong h0 = WriteState(0, k, live0, lm, pn0);
+        arenaLen = stride;
+
+        int need = 1;
+        while (need < 4 * capN) need <<= 1;
+        if (slots.Length < need) slots = new int[need]; else Array.Clear(slots, 0, need);
+        ulong mask = (ulong)(need - 1);
+        bool Insert(int baseOff, ulong hash)
+        {
+            int nId = baseOff / stride;
+            var st = arena.AsSpan(baseOff, stride);
+            for (ulong i = hash & mask; ; i = (i + 1) & mask)
+            {
+                if (slots[i] == 0) { slots[i] = nId + 1; return true; }
+                int o = (slots[i] - 1) * stride;
+                if (arena.AsSpan(o, stride).SequenceEqual(st)) return false;
+            }
+        }
+        Insert(0, h0);
+        int states = 1;
+        ushort* rcp = rc; byte* bk = blk;
+        for (int head = 0; head * stride < arenaLen; head++)
+        {
+            int o = head * stride;
+            new Span<ulong>(pr, Hh).Clear();
+            ulong lmP = 0; int liveP = 0;
+            for (int i = 0; i < k; i++)
+            {
+                int v = arena[o + i];
+                if (v != 0) { int c = rcp[v]; pr[c >> 6] |= 1UL << (c & 63); lmP |= 1UL << (c >> 6); liveP++; }
+            }
+            int p = arena[o + k];
+            for (int r = 0; r < Hh; r++) F[r] = bs[r] & ~pr[r];
+            (pm, psz) = FloodFree(p, rbits, false);
+            pOK = true; PFloods++;
+            Buffer.MemoryCopy(F, fp, hb, hb);
+            for (int i = 0; i < k; i++)
+            {
+                int x = arena[o + i];
+                if (x == 0) continue;
+                int cx = rcp[x]; int rx = cx >> 6; ulong bitx = 1UL << (cx & 63);
+                for (int di = 0; di < 4; di++)
+                {
+                    int t = x + dirs[di];
+                    if (!InParent(x - dirs[di])) continue;
+                    int ct = rcp[t]; int rt = ct >> 6; ulong bitt = 1UL << (ct & 63);
+                    if ((fp[rt] & bitt) == 0 || (deadB[rt] & bitt) != 0) continue;
+                    bool gone = Kill && (ain[rt] & bitt) == 0;
+                    Buffer.MemoryCopy(pr, bxp, hb, hb);
+                    bxp[rx] &= ~bitx;
+                    ulong lmc = lmP;
+                    if (bxp[rx] == 0) lmc &= ~(1UL << rx);
+                    int livec = liveP;
+                    if (gone) livec--;
+                    else { bxp[rt] |= bitt; lmc |= 1UL << rt; if (FrozenOff(t)) continue; }
+                    Buffer.MemoryCopy(fp, F, hb, hb);
+                    F[rx] |= bitx;
+                    if (!gone) F[rt] &= ~bitt;
+                    var (pn, size, lv) = EscapeRows(x, gone ? 0 : t, ref lmc, livec);
+                    if (size == floorN - fixedN - lv || AllGoalsRows(lmc))
+                    {
+                        Opened++;
+                        States += states;
+                        return 2;
+                    }
+                    int baseOff = arenaLen;
+                    ulong hs = WriteState(baseOff, k, lv, lmc, pn);
+                    arenaLen = baseOff + stride;
+                    if (Insert(baseOff, hs))
+                    {
+                        states++;
+                        if (states > capN) { States += states; return 3; }
+                    }
+                    else arenaLen = baseOff;
+                }
+            }
+        }
+        States += states;
+        return 1;
+    }
+
     /// <summary>Writes the boxes of nx into st ascending: nx is the parent's sorted state with box i moved and further boxes removed (0).</summary>
     static void SortedState(Span<short> st, int[] nx, int i)
     {
@@ -889,7 +1160,7 @@ public sealed unsafe class DeadZoneChecker
             var g = new List<int>();
             for (int x = 0; x < b.Goal.Length; x++) if (b.Goal[x] && !b.Wall[x]) g.Add(x);
             goals = [.. g]; gw = (goals.Length + 63) / 64;
-            reachFix = new(); mOf = new int[goals.Length]; mSeen = new ulong[gw];
+            reachFix = new(); mOf = new int[goals.Length]; mSeen = new ulong[gw]; mUsed = new ulong[gw];
         }
         if (!reachFix.TryGetValue(key, out var R))
         {
@@ -917,9 +1188,20 @@ public sealed unsafe class DeadZoneChecker
             reachFix[key] = R;
         }
         Array.Fill(mOf, -1);
+        Array.Clear(mUsed);
         foreach (int x in boxes)
         {
             if (fixedB[x]) continue;
+            // a free reachable goal takes the box at once (the maximum matching size does not depend on which augmenting path is found)
+            bool done = false;
+            for (int w = 0; w < gw; w++)
+            {
+                ulong f = R[x * gw + w] & ~mUsed[w];
+                if (f == 0) continue;
+                int gi = w << 6 | System.Numerics.BitOperations.TrailingZeroCount(f);
+                mOf[gi] = x; mUsed[w] |= 1UL << (gi & 63); done = true; break;
+            }
+            if (done) continue;
             Array.Clear(mSeen);
             if (!Augment(R, x)) return false;
         }
@@ -938,7 +1220,8 @@ public sealed unsafe class DeadZoneChecker
                 ulong bit = cand & (~cand + 1);
                 mSeen[w] |= bit;
                 int gi = w << 6 | System.Numerics.BitOperations.TrailingZeroCount(cand);
-                if (mOf[gi] < 0 || Augment(R, mOf[gi])) { mOf[gi] = x; return true; }
+                if (mOf[gi] < 0) { mOf[gi] = x; mUsed[gi >> 6] |= 1UL << (gi & 63); return true; }
+                if (Augment(R, mOf[gi])) { mOf[gi] = x; return true; }
             }
         }
         return false;

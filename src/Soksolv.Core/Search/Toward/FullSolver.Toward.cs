@@ -1,3 +1,4 @@
+using System.Runtime.Intrinsics;
 using Soksolv.Model;
 using Soksolv.Search.Macro;
 using Soksolv.Search.Meet;
@@ -56,7 +57,7 @@ public sealed unsafe partial class FullSolver
             }
         }
         hfBoxes = new int[n];
-        hu = new int[n + 1]; hv = new int[n + 1]; hp = new int[n + 1]; hway = new int[n + 1]; hminv = new int[n + 1]; hused = new bool[n + 1];
+        HungarianInit();
     }
 
     bool[]? tgtPocket;   // exp-460/480 (hub contexts): floor cells the target board seals off from its player and holds no target box (null: off)
@@ -112,11 +113,31 @@ public sealed unsafe partial class FullSolver
 
     int[] hu = [], hv = [], hp = [], hway = [], hminv = []; bool[] hused = [];
 
-    int Edge(int box, int j) { int e = tgtDist[(j - 1) * cells + box]; return e < 0 ? AssignmentInf : e; }
+    // Hungarian state: duals/columns padded to a multiple of 8 lanes (index 0 is the virtual column); edge table transposed (per box cell: its distance to every target, AssignmentInf for none).
+    int hP; int[] tgtDistT = []; int[] hmask = [];
+
+    /// <summary>(Re)allocates the Hungarian arrays and rebuilds the per-box-cell target distance rows from tgtDist.</summary>
+    void HungarianInit()
+    {
+        int m = n + 1;
+        hP = (m + 7) & ~7;
+        hu = new int[m]; hp = new int[m];
+        hv = new int[hP]; hway = new int[hP]; hminv = new int[hP]; hmask = new int[hP]; hused = new bool[m];
+        tgtDistT = new int[cells * hP];
+        for (int g = 0; g < n; g++)
+            for (int c = 0; c < cells; c++)
+            {
+                int e = tgtDist[g * cells + c];
+                tgtDistT[c * hP + g + 1] = e < 0 ? AssignmentInf : e;
+            }
+    }
+
+    int Edge(int box, int j) => tgtDistT[box * hP + j];
 
     /// <summary>One augmenting path for row (1-based) of the Hungarian algorithm over the current duals hu/hv/hp (e-maxx formulation, as Go augmentAssignment).</summary>
     void AugmentRow(ReadOnlySpan<int> boxes, int row)
     {
+        if (Vector128.IsHardwareAccelerated) { AugmentRowV(boxes, row); return; }
         int m = n; var u = hu; var v = hv; var p = hp; var way = hway; var minv = hminv; var used = hused;
         p[0] = row; int j0 = 0;
         Array.Fill(minv, int.MaxValue); Array.Clear(used);
@@ -125,12 +146,11 @@ public sealed unsafe partial class FullSolver
             used[j0] = true;
             int i0 = p[j0], delta = int.MaxValue, j1 = 0;
             int box = boxes[i0 - 1];
-            int baseIdx = box;
+            int baseIdx = box * hP;
             for (int j = 1; j <= m; j++)
             {
                 if (used[j]) continue;
-                int e = tgtDist[(j - 1) * cells + baseIdx]; if (e < 0) e = AssignmentInf;
-                int cur = e - u[i0] - v[j];
+                int cur = tgtDistT[baseIdx + j] - u[i0] - v[j];
                 if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
                 if (minv[j] < delta) { delta = minv[j]; j1 = j; }
             }
@@ -139,6 +159,70 @@ public sealed unsafe partial class FullSolver
             j0 = j1;
         } while (p[j0] != 0);
         do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
+    }
+
+    /// <summary>
+    /// SSE form of <see cref="AugmentRow"/> (4 columns per step; Vector128 is accelerated in the default Native AOT target). Same arithmetic, first minimal
+    /// column wins ties, but the dual updates are lazy: with D the sum of the deltas so far, minv is kept as minv+D, and a column that became used at
+    /// D_j ends up with v -= D - D_j (and its row u += D - D_j), applied once at the end of the path search.
+    /// </summary>
+    void AugmentRowV(ReadOnlySpan<int> boxes, int row)
+    {
+        int m = n, P = hP;
+        var u = hu; var p = hp;
+        Span<int> usedList = stackalloc int[m + 1];
+        Span<int> usedAt = stackalloc int[m + 1];
+        int nUsed = 0, D = 0;
+        p[0] = row; int j0 = 0;
+        fixed (int* v = hv, way = hway, minv = hminv, um = hmask, dt = tgtDistT)
+        {
+            for (int j = 0; j < P; j += 4)
+            {
+                Vector128.Store(Vector128.Create(int.MaxValue), minv + j);
+                Vector128.Store(Vector128<int>.Zero, um + j);
+            }
+            for (int j = m + 1; j < P; j++) um[j] = -1;
+            var vmax = Vector128.Create(int.MaxValue);
+            do
+            {
+                um[j0] = -1; usedList[nUsed] = j0; usedAt[nUsed++] = D;
+                int i0 = p[j0];
+                int* row0 = dt + boxes[i0 - 1] * P;
+                var vu = Vector128.Create(D - u[i0]);        // cur + D = e - u - v + D
+                var vj0 = Vector128.Create(j0);
+                var dmin = vmax;
+                for (int j = 0; j < P; j += 4)
+                {
+                    var used = Vector128.Load(um + j);
+                    var cur = Vector128.Load(row0 + j) + vu - Vector128.Load(v + j);
+                    var mv = Vector128.Load(minv + j);
+                    var upd = Vector128.AndNot(Vector128.LessThan(cur, mv), used);
+                    mv = Vector128.ConditionalSelect(upd, cur, mv);
+                    Vector128.Store(mv, minv + j);
+                    Vector128.Store(Vector128.ConditionalSelect(upd, vj0, Vector128.Load(way + j)), way + j);
+                    dmin = Vector128.Min(dmin, Vector128.ConditionalSelect(used, vmax, mv));
+                }
+                int mn = int.MaxValue;
+                for (int l = 0; l < 4; l++) { int x = Vector128.GetElement(dmin, l); if (x < mn) mn = x; }
+                D = mn;
+                int j1 = 0;
+                var vm = Vector128.Create(mn);
+                for (int j = 0; j < P; j += 4)
+                {
+                    var used = Vector128.Load(um + j);
+                    var eq = Vector128.AndNot(Vector128.Equals(Vector128.Load(minv + j), vm), used);
+                    uint bits = Vector128.ExtractMostSignificantBits(eq);
+                    if (bits != 0) { j1 = j + System.Numerics.BitOperations.TrailingZeroCount(bits); break; }
+                }
+                j0 = j1;
+            } while (p[j0] != 0);
+            for (int k = 0; k < nUsed; k++)
+            {
+                int j = usedList[k], dj = D - usedAt[k];
+                u[p[j]] += dj; v[j] -= dj;
+            }
+            do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
+        }
     }
 
     long AssignmentCost(ReadOnlySpan<int> boxes)

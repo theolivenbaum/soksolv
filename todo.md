@@ -39,7 +39,8 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] macro 6f plan4 (planner2/planner4/packing_fest + anytime + restart), 6g macroalt; word-parallel boxflood/moveaccess/regionsChild/pairbits for wide levels
 
 ## Phase 3 — Remaining lanes (from `laneTable` in `.reference/lane.go`)
-- [x] reverse (pull) search — default config incl. supply, novelty, types, walks, restart ring (see docs/reverse.md): exact vs Go on 18 testdata + 296/297 LTS sample; 0.9x Go time, ~half memory
+- [x] reverse (pull) search — default config incl. supply, novelty, types, walks, restart ring (see docs/reverse.md): exact vs Go on 18 testdata + 296/297 LTS sample; ~half memory
+- [x] reverse perf pass (docs/perf.md "reverse"): 0.46x Go CPU on testdata, 0.38x on an LTS sample (was 0.95x / 1.1x), exact parity kept, allocation-free steady state, -10..30% peak memory
 - [ ] reverse: `Match`/`Free` heuristics, Root/RootBoxes (toward/relay), `-rev-supply-inherit` validation, delta-coded node store
 - [ ] macro lane: scoped in docs/macro.md (≈7.9k executed Go lines, 35 files; `bench/macro-scope.sh`); staged port order 1–6 there. Unported experiment flags: plan-v2, plan-file, packed-festorder, diag-dead, seed/novelty (exp-192/194/195), inefficient, hf-* (toward lane), fx426/fx477 families
 - [ ] novelty, fa2 (+rooms, plan4), hub / hub-gen / hub-pull, toward, pull, dive, factor, relay

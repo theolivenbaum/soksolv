@@ -20,6 +20,15 @@ public sealed unsafe partial class FullSolver
     uint[]? fcBseen; uint fcBctr;
     int fcPc;
 
+    void GrowFc(int need)
+    {
+        int n2 = Math.Max(need, fcGoal.Length * 2);
+        Array.Resize(ref fcGoal, n2); Array.Resize(ref fcUsed, n2); Array.Resize(ref fcCand, n2); Array.Resize(ref fcBng, n2);
+        Array.Resize(ref fcBdone, n2); Array.Resize(ref fcBl, n2);
+        fcPairs = new ulong[Math.Max(fcPairs.Length, 64)];
+    }
+    ulong[] fcPairs = new ulong[64]; int fcPairN;
+
     int FcComp(int c) => fcGen![c] != fcStamp ? -1 : fcComp![c];
     bool FcIn(int c) => fcGen![c] == fcStamp && fcUsed[fcComp![c]];
 
@@ -32,7 +41,6 @@ public sealed unsafe partial class FullSolver
         if (++fcStamp == 0) { Array.Clear(fcGen!); fcStamp = 1; }
         fcN = 0; fcNBoxes = 0;
         fcCl.Clear(); fcCs.Clear(); fcCs.Add(0);
-        var goalList = new List<bool>();
         var q = cqueue;
         for (int c = 0; c < cells; c++)
         {
@@ -47,14 +55,13 @@ public sealed unsafe partial class FullSolver
                     int y = q[i] + d;
                     if (!wall[y] && !occ[y] && fcGen[y] != fcStamp) { fcGen[y] = fcStamp; fcComp[y] = fcN; hasGoal = hasGoal || goal[y]; q[tail++] = y; }
                 }
-            goalList.Add(hasGoal);
+            if (fcGoal.Length <= fcN) GrowFc(fcN + 1);
+            fcGoal[fcN] = hasGoal;
             for (int i = 0; i < tail; i++) fcCl.Add(q[i]);
             fcCs.Add(fcCl.Count);
             fcN++;
         }
         if (fcN > 250) return 0;
-        if (fcGoal.Length < fcN) { fcGoal = new bool[fcN * 2]; fcUsed = new bool[fcN * 2]; fcCand = new bool[fcN * 2]; fcBng = new bool[fcN * 2]; fcBdone = new uint[fcN * 2]; Array.Resize(ref fcBl, fcN * 2); }
-        for (int i = 0; i < fcN; i++) fcGoal[i] = goalList[i];
         int pc = fcPc = FcComp(player);
         Array.Clear(fcCand, 0, fcN);
         for (int bi = 0; bi < fcNBoxes; bi++)
@@ -70,7 +77,7 @@ public sealed unsafe partial class FullSolver
         for (int i = 0; i < fcN; i++)
             if (fcCand[i]) { uint r = FcTry(i, i, st); if (r != 0) return r; }
         // two-room corrals: components touching the same box, tried in (i, j) order
-        var pairs = new List<ulong>();
+        fcPairN = 0;
         Span<int> nb = stackalloc int[4];
         for (int bi = 0; bi < fcNBoxes; bi++)
         {
@@ -89,14 +96,14 @@ public sealed unsafe partial class FullSolver
                 {
                     int i = nb[x], j = nb[y];
                     if (i > j) (i, j) = (j, i);
-                    if (fcCand[i] || fcCand[j]) pairs.Add((ulong)i << 32 | (uint)j);
+                    if (fcCand[i] || fcCand[j]) { if (fcPairN == fcPairs.Length) Array.Resize(ref fcPairs, fcPairN * 2); fcPairs[fcPairN++] = (ulong)i << 32 | (uint)j; }
                 }
         }
-        SortUtil.Insertion(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(pairs));
-        for (int k = 0; k < pairs.Count; k++)
+        SortUtil.Insertion(fcPairs.AsSpan(0, fcPairN));
+        for (int k = 0; k < fcPairN; k++)
         {
-            if (k > 0 && pairs[k] == pairs[k - 1]) continue;
-            uint r = FcTry((int)(pairs[k] >> 32), (int)(pairs[k] & 0xffffffff), st);
+            if (k > 0 && fcPairs[k] == fcPairs[k - 1]) continue;
+            uint r = FcTry((int)(fcPairs[k] >> 32), (int)(fcPairs[k] & 0xffffffff), st);
             if (r != 0) return r;
         }
         return 0;
@@ -116,7 +123,7 @@ public sealed unsafe partial class FullSolver
         fcBdone[i] = fcStamp;
         if (++fcBctr == 0) { Array.Clear(fcBseen!); fcBctr = 1; }
         int w = W;
-        Span<int> n8 = [1, -1, w, -w, w + 1, w - 1, -w + 1, -w - 1];
+        Span<int> n8 = stackalloc int[8]; n8[0] = 1; n8[1] = -1; n8[2] = w; n8[3] = -w; n8[4] = w + 1; n8[5] = w - 1; n8[6] = -w + 1; n8[7] = -w - 1;
         var list = fcBl[i] ??= new List<int>();
         list.Clear();
         bool ng = false;
