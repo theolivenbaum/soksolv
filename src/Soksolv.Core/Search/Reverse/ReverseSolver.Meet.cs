@@ -5,14 +5,14 @@ namespace Soksolv.Search.Reverse;
 public sealed unsafe partial class ReverseSolver
 {
     readonly List<int> meetPending = new();
-    int meetPosted;
+    int meetPosted, meetAddPending;
 
     /// <summary>A new node: record it in the backward perimeter; if the forward perimeter holds it, queue a meeting.</summary>
     void MeetAdd(int id, ReadOnlySpan<int> boxes, int player)
     {
         var net = opt.Net!;
         ulong k = net.Back.Key(boxes, player);
-        net.Back.Add(k);
+        net.Back.AddBatched(ref meetAddPending, k);
         if (meetPosted < MeetNet.MaxMeetPosts && net.Fwd.Has(k)) meetPending.Add(id);
     }
 

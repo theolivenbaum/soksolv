@@ -511,6 +511,7 @@ public sealed unsafe partial class FullSolver
         }
         bool bbOnLocal = BbEnsure(), bbBuilt = false; int pushes = 0;
         bool node = bbOnLocal && bbNode;
+        mBitsOnly = node && !CheckAccessBits;
         int rb = b / W + 1; ulong bbit = 1UL << (b % W);
         if (node)
         {
@@ -571,7 +572,7 @@ public sealed unsafe partial class FullSolver
                 for (int d2i = 0; d2i < 4; d2i++)
                 {
                     int k2 = nc * 4 + d2i;
-                    if (m3[Front(nc, dirs[d2i])] == ps)
+                    if (mBitsOnly ? InPR(Front(nc, dirs[d2i])) : m3[Front(nc, dirs[d2i])] == ps)
                     {
                         mpost[k2] = bs;
                         if (mseen[k2] != bs) { mseen[k2] = bs; mbprev[k2] = k; mbq[qn++] = k2; }
@@ -580,7 +581,7 @@ public sealed unsafe partial class FullSolver
             }
             return found;
         }
-        finally { SetOcc(b, true); if (node) bbNFreeP[rb] &= ~bbit; }
+        finally { SetOcc(b, true); if (node) bbNFreeP[rb] &= ~bbit; mBitsOnly = false; }
     }
 
     List<Push> MBoxPathTo(int b, int t, uint st, int side, ReadOnlySpan<int> cur)

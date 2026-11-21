@@ -41,7 +41,7 @@ public sealed unsafe partial class FullSolver
         for (int j = 0; j < 8; j += 2)
         {
             bool Wl(int i) => wall[c[i & 7]];
-            bool Rc(int i) => m3[c[i & 7]] == mpstamp;
+            bool Rc(int i) => InPR(c[i & 7]);
             bool Bx(int i) => occ[c[i & 7]];
             if (Wl(j + 2) && Wl(j + 3) && Wl(j + 5) && !Wl(j + 6) && (!Rc(j + 6) || Rc(j))) return true; // types 1 and 3
             if (Wl(j + 3) && Wl(j + 5) && Wl(j + 6) && !Wl(j + 2) && (!Rc(j + 2) || Rc(j))) return true; // types 2 and 4

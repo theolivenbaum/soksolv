@@ -312,9 +312,9 @@ public sealed unsafe partial class FullSolver
     public static bool PairBitsOff, PairBitsCheck;   // test hooks
 
     /// <summary>Row flood with a dirty-row worklist (rows ≤ 64): a row is re-examined only when a neighbouring row changed; passes alternate up/down like the sweeps they replace.</summary>
-    static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp)
+    static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp, bool clear = true)
     {
-        for (int i = 0; i < rows; i++) reg[i] = 0;
+        if (clear) for (int i = 0; i < rows; i++) reg[i] = 0;
         reg[rp] = FillRow(1UL << cp, free[rp]);
         int last = rows - 2;
         ulong valid = ((1UL << last) - 1) << 1;   // bits 1..last
@@ -426,6 +426,82 @@ public sealed unsafe partial class FullSolver
         return p;
     }
 
+    // Pair-state shortcut: the region of two boxes on x, y is (static floor component) minus {x, y} whenever neither cell can split its
+    // component locally (8-ring test) and they are not touching; then the region's minimum cell and every membership test are O(1).
+    int[]? pfComp, pfMin3; bool[]? pfNsp; int[]? pfRow, pfCol;
+    public static bool PairFastOff = Environment.GetEnvironmentVariable("SOKSOLV_PAIRFAST_OFF") == "1";   // test hook
+
+    void PairFastInit()
+    {
+        int Wd = W;
+        pfComp = new int[cells]; pfNsp = new bool[cells]; pfRow = new int[cells]; pfCol = new int[cells];
+        Array.Fill(pfComp, -1);
+        var q = new int[cells]; var min3 = new List<int>(); int nc = 0;
+        for (int c = 0; c < cells; c++)
+        {
+            pfRow[c] = c / Wd; pfCol[c] = c % Wd;
+            if (wall[c] || pfComp[c] >= 0) continue;
+            int cnt = 0, tail = 0; q[tail++] = c; pfComp[c] = nc;
+            min3.Add(c); cnt = 1; min3.Add(int.MaxValue); min3.Add(int.MaxValue);
+            for (int i = 0; i < tail; i++)
+                foreach (int d in dirs)
+                {
+                    int y = q[i] + d;
+                    if (y < 0 || y >= cells || wall[y] || pfComp[y] >= 0) continue;
+                    pfComp[y] = nc; q[tail++] = y;
+                }
+            // three smallest cells of the component (cells are visited in BFS order, so collect by scanning the queue)
+            Array.Sort(q, 0, tail);
+            for (int j = 0; j < Math.Min(3, tail); j++) min3[nc * 3 + j] = q[j];
+            nc++;
+        }
+        pfMin3 = [.. min3];
+        Span<int> ring = [-Wd - 1, -Wd, -Wd + 1, 1, Wd + 1, Wd, Wd - 1, -1];   // circular, odd indices are orthogonal
+        for (int c = 0; c < cells; c++)
+        {
+            if (wall[c] || pfRow[c] == 0 || pfRow[c] == lv.H + 1 || pfCol[c] == 0 || pfCol[c] == Wd - 1) continue;
+            int mask = 0;
+            for (int k = 0; k < 8; k++) if (!wall[c + ring[k]]) mask |= 1 << k;
+            int start = -1;
+            for (int k = 0; k < 8; k++) if ((mask >> k & 1) == 0) { start = k; break; }
+            int runs = 0; bool inRun = false, orth = false;
+            if (start < 0) runs = 1;
+            else
+            {
+                for (int j = 1; j <= 8; j++)
+                {
+                    int k = (start + j) & 7;
+                    if ((mask >> k & 1) != 0) { inRun = true; if ((k & 1) != 0 && !orth) { orth = true; runs++; } }
+                    else { inRun = false; orth = false; }
+                }
+                _ = inRun;
+            }
+            pfNsp[c] = runs <= 1;
+        }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    bool PairFast(int x, int y) =>
+        !PairFastOff && pfNsp![x] && pfNsp[y] && (Math.Abs(pfRow![x] - pfRow[y]) >= 2 || Math.Abs(pfCol![x] - pfCol[y]) >= 2);
+
+    int PairFastMin(int start, int x, int y)
+    {
+        int ci = pfComp![start] * 3; var m3 = pfMin3!;
+        int m = m3[ci];
+        if (m == x || m == y) { m = m3[ci + 1]; if (m == x || m == y) m = m3[ci + 2]; }
+        return m;
+    }
+
+    ulong[]? psregA; ulong* psregP; int psregCap;
+    void PsregGrow(int need)
+    {
+        int cap = Math.Max(256, psregCap);
+        while (cap < need) cap *= 2;
+        var n = GC.AllocateArray<ulong>(cap * bbRows, pinned: true);
+        if (psregA != null) Array.Copy(psregA, n, psregCap * bbRows);
+        psregA = n; psregP = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref n[0]); psregCap = cap;
+    }
+
     bool PairDeadFromBits(int a, int b, int from)
     {
         const int capStates = 200;
@@ -440,6 +516,8 @@ public sealed unsafe partial class FullSolver
             ulong all = Wd < 64 ? (1UL << Wd) - 1 : ~0UL;
             for (int r = 0; r < H; r++) { ulong wallRow = 0; for (int x = 0; x < Wd; x++) if (wall[r * Wd + x]) wallRow |= 1UL << x; bbFloor[r + 1] = all & ~wallRow; }
             if (pstarts.Length == 0) pstarts = new int[cells];
+            PsregGrow(256);
+            PairFastInit();
         }
         ulong* free = bbFree; ulong* reg = bbReg;
         for (int i = 0; i < bbRows; i++) free[i] = bbFloor[i];
@@ -459,20 +537,48 @@ public sealed unsafe partial class FullSolver
                 }
         }
         Span<int> mvBox = stackalloc int[8], mvT = stackalloc int[8], mvOther = stackalloc int[8];
+        Span<ushort> succ = stackalloc ushort[24];
         for (int si = 0; si < nstarts; si++)
         {
             int p0 = pstarts[si];
             if (++pgen == 0) { Array.Clear(pvis); pgen = 1; }
             PVisit(a, b, p0);
             int nseen = 1, qn = 1;
-            pqx[0] = a; pqy[0] = b; pqp[0] = p0;
+            pqx[0] = a; pqy[0] = b; pqp[0] = p0; pqHas[0] = false;
             for (int i = 0; i < qn; i++)
             {
                 if (nseen > capStates) return false;
                 int cx = pqx[i], cy = pqy[i], cp = pqp[i];
+                // successor memo: the expansion of an ordered state (cx, cy, region start cp) is a pure function of the state
+                ulong mkey = (uint)cx | (ulong)(uint)cy << 16 | (ulong)(uint)cp << 32;
+                int ms = PmFind(mkey);
+                if (ms >= 0)
+                {
+                    uint inf = pmInfo![ms];
+                    if ((inf & 16) != 0) return false;
+                    int cnt = (int)(inf & 15), off = pmOff![ms];
+                    for (int j = 0; j < cnt; j++)
+                    {
+                        int nx = pmArena![off + 3 * j], ny = pmArena[off + 3 * j + 1], np = pmArena[off + 3 * j + 2];
+                        if (PVisit(nx, ny, np))
+                        {
+                            nseen++;
+                            if (qn == pqx.Length) { Array.Resize(ref pqx, qn * 2); Array.Resize(ref pqy, qn * 2); Array.Resize(ref pqp, qn * 2); Array.Resize(ref pqHas, qn * 2); }
+                            pqx[qn] = nx; pqy[qn] = ny; pqp[qn] = np; pqHas[qn] = false; qn++;
+                        }
+                    }
+                    continue;
+                }
                 free[a / Wd + 1] ^= 1UL << (a % Wd); free[b / Wd + 1] ^= 1UL << (b % Wd);
-                free[cx / Wd + 1] ^= 1UL << (cx % Wd); free[cy / Wd + 1] ^= 1UL << (cy % Wd);
-                BbReach(cp);
+                // a generated state's region was usually flooded when it was generated (same blocked set, same start): reuse its rows
+                ulong* sr = null;
+                bool fastS = PairFast(cx, cy);
+                int cc = fastS ? pfComp![cp] : 0;
+                if (!fastS)
+                {
+                    if (i == 0 || !pqHas[i]) { free[cx / Wd + 1] ^= 1UL << (cx % Wd); free[cy / Wd + 1] ^= 1UL << (cy % Wd); BbReach(cp); sr = reg; free[cx / Wd + 1] ^= 1UL << (cx % Wd); free[cy / Wd + 1] ^= 1UL << (cy % Wd); }
+                    else sr = psregP + i * bbRows;
+                }
                 int nm = 0;
                 for (int side = 0; side < 2; side++)
                 {
@@ -480,29 +586,80 @@ public sealed unsafe partial class FullSolver
                     for (int di = 0; di < 4; di++)
                     {
                         int d = dirs[di], t = bx + d, q = bx - d;
-                        if ((reg[q / Wd + 1] >> (q % Wd) & 1) != 0 && !wall[t] && t != other && dist[t] >= 0) { mvBox[nm] = bx; mvT[nm] = t; mvOther[nm] = other; nm++; }
+                        if ((fastS ? pfComp![q] == cc && q != cx && q != cy : (sr[q / Wd + 1] >> (q % Wd) & 1) != 0) && !wall[t] && t != other && dist[t] >= 0) { mvBox[nm] = bx; mvT[nm] = t; mvOther[nm] = other; nm++; }
                     }
                 }
-                free[cx / Wd + 1] ^= 1UL << (cx % Wd); free[cy / Wd + 1] ^= 1UL << (cy % Wd);
                 for (int mi = 0; mi < nm; mi++)
                 {
                     int t = mvT[mi], other = mvOther[mi];
-                    if (goal[t] && goal[other]) return false;
-                    free[t / Wd + 1] ^= 1UL << (t % Wd); free[other / Wd + 1] ^= 1UL << (other % Wd);
-                    int np = BbReach(mvBox[mi]);
-                    free[t / Wd + 1] ^= 1UL << (t % Wd); free[other / Wd + 1] ^= 1UL << (other % Wd);
+                    if (goal[t] && goal[other]) { PmInsert(ms, mkey, 16, null); return false; }
+                    int np;
+                    bool fastN = PairFast(t, other);
+                    if (fastN) np = PairFastMin(mvBox[mi], t, other);
+                    else
+                    {
+                        free[t / Wd + 1] ^= 1UL << (t % Wd); free[other / Wd + 1] ^= 1UL << (other % Wd);
+                        np = BbReach(mvBox[mi]);
+                        free[t / Wd + 1] ^= 1UL << (t % Wd); free[other / Wd + 1] ^= 1UL << (other % Wd);
+                    }
                     int nx = Math.Min(t, other), ny = Math.Max(t, other);
+                    succ[3 * mi] = (ushort)nx; succ[3 * mi + 1] = (ushort)ny; succ[3 * mi + 2] = (ushort)np;
                     if (PVisit(nx, ny, np))
                     {
                         nseen++;
-                        if (qn == pqx.Length) { Array.Resize(ref pqx, qn * 2); Array.Resize(ref pqy, qn * 2); Array.Resize(ref pqp, qn * 2); }
+                        if (qn == pqx.Length) { Array.Resize(ref pqx, qn * 2); Array.Resize(ref pqy, qn * 2); Array.Resize(ref pqp, qn * 2); Array.Resize(ref pqHas, qn * 2); }
+                        pqHas[qn] = !fastN;
+                        if (!fastN)
+                        {
+                            if (qn >= psregCap) PsregGrow(qn + 1);
+                            for (int k = 0; k < bbRows; k++) psregP[qn * bbRows + k] = reg[k];
+                        }
                         pqx[qn] = nx; pqy[qn] = ny; pqp[qn] = np; qn++;
                     }
                 }
+                PmInsert(ms, mkey, (uint)nm, succ);
                 free[a / Wd + 1] ^= 1UL << (a % Wd); free[b / Wd + 1] ^= 1UL << (b % Wd);
             }
         }
         return true;
+    }
+
+    // ---- successor memo of the pair-state search (state = ordered box cells + region start; successors in generation order) ----------
+    ulong[]? pmKey; int[]? pmOff; byte[]? pmInfo; ushort[]? pmArena; int pmMask, pmShift, pmCount, pmArenaN, pmLimit; bool[] pqHas = new bool[512];
+    public static bool PairMemoOff = Environment.GetEnvironmentVariable("SOKSOLV_PAIRMEMO_OFF") == "1";   // test hook
+
+    void PmInit()
+    {
+        int bits = 15;
+        while (bits < 20 && (1L << bits) < (long)cells * 128) bits++;
+        int slots = 1 << bits;
+        pmKey = new ulong[slots]; pmOff = new int[slots]; pmInfo = new byte[slots]; pmArena = new ushort[slots * 10];
+        pmMask = slots - 1; pmShift = 64 - bits; pmLimit = slots / 4 * 3;
+    }
+
+    /// <summary>Slot of key, or -1 - (insertion slot) when absent (-1 - 0 ... never aliases a hit).</summary>
+    int PmFind(ulong key)
+    {
+        if (PairMemoOff) return -1;
+        if (pmKey == null) PmInit();
+        var keys = pmKey!;
+        for (int h = (int)(key * 0x9E3779B97F4A7C15UL >> pmShift); ; h = (h + 1) & pmMask)
+        {
+            ulong k = keys[h];
+            if (k == key) return h;
+            if (k == 0) return -1 - h;
+        }
+    }
+
+    void PmInsert(int missSlot, ulong key, uint info, ReadOnlySpan<ushort> succ)
+    {
+        if (PairMemoOff || pmCount >= pmLimit) return;
+        int cnt = (int)(info & 15);
+        if (pmArenaN + 3 * cnt > pmArena!.Length) return;
+        int h = -1 - missSlot;
+        pmKey![h] = key; pmInfo![h] = (byte)info; pmOff![h] = pmArenaN;
+        for (int j = 0; j < 3 * cnt; j++) pmArena[pmArenaN + j] = succ[j];
+        pmArenaN += 3 * cnt; pmCount++;
     }
 
     bool PairDeadFrom(int a, int b, int from)

@@ -60,6 +60,81 @@ dictionaries and their `Push[]` arrays, ~10-50 B per node on levels that have go
 * Pitfall found on the way: `GC.AllocateArray(pinned: true)` arrays referenced only through a raw pointer are *collected* (heap
   corruption, silent wrong results). Keep a field reference to every pinned array whose address you cache.
 
+## reverse (reverse/pull lane: `Search/Reverse/*`, `Search/Meet/*`)
+
+Method as above, plus a deterministic second metric: callgrind instruction counts of the AOT binary
+(`valgrind --tool=callgrind`, `DOTNET_TieredCompilation=0`; Go does not run under valgrind) - immune to the load of the shared VM and
+the tool that found everything below (`--dump-instr=yes` + `objdump` gives per-instruction counts of one function).
+Equal work = `-nodes N` (`-procs 1`, Go default lanes = our default `-rev-lanes 2`, supply 4). `bench/lane-cpu.py reverse N R set` prints CPU s.
+
+### Result (CPU seconds, best of 3 / 2; Go : C# before : C# after)
+
+| set | Go | C# before | C# after | before/Go | after/Go |
+|---|---|---|---|---|---|
+| testdata 22 levels, default lane, `-nodes 100000` | 6.52 | 6.40 | 2.96 | 0.98 | **0.46** |
+| testdata 22 levels, `-rev-lanes 1`, `-nodes 100000` | 5.72 | 5.21 | 2.51 | 0.91 | **0.45** |
+| LTS sample 43 levels (every 7th of the 297-level parity sample), default lane, `-nodes 20000` | 7.69 | 8.51 | 2.99 | 1.11 | **0.38** |
+| same, `-rev-lanes 1` | 7.66 | 8.32 | 2.80 | 1.09 | **0.38** |
+
+Per level (testdata, default lane, 100k nodes, after/Go): Dive_Sven_1623_197 0.33, Sasquatch_IV_50_42 0.39, Holland_81_27 0.43,
+Grigr2002_40_24 0.44, SokEvo_107_55 0.46, Sasquatch_VI_50_24 0.48, SokHard_163_13/23/36 0.48-0.51, Aymeric_282_273 0.51,
+Factor_SasquatchII_50_24 0.58 (placement-macro heavy), GrigrSpecial_40_3 0.58, Holland_81_57 0.59 (the < 0.1 s levels are dominated by process start-up).
+
+Instruction counts at 10k nodes (before -> after): Holland_81_27 689M -> 236M, Factor_SasquatchII_50_24 546M -> 261M,
+Dive_Sven_1623_197 1612M -> 311M, SokHard_163_13 282M -> 138M, Sasquatch_IV_50_42 273M -> 126M.
+
+Parity (all exact, identical solved / nodes_expanded / pushes vs the unpatched Go binary, `bench/lane-parity.py reverse`):
+testdata 24/24 at `-nodes 200000` (default lane and `-rev-lanes 1`) and 24/24 `-rev-supply 0` at 100000; LTS sample 297/297 at 100000 (default lane) and 297/297 at 50000 (`-rev-lanes 1`); `dotnet test` green (261 + new capped-run / allocation tests).
+
+### Allocation / memory
+
+`alloc_mb` (GC heap, AOT) is flat in the node count: Holland_81_27 3.3 MB @200k nodes, 3.7 MB @800k (the remainder is the bounded
+bucket/type tables); before 30.0 MB @100k, 62.1 MB @400k (~60-90 B/node: managed `List` type queue, `Array.Resize` of the expanded
+bits / supply values, one managed object per supply slot, 20 MB lossy reach cache). Everything per node is unmanaged now.
+Peak tracked MB at equal node counts (before -> after): Holland_81_27 @100k 28.6 -> 22.0 (-23%), @400k 75.5 -> 63.7 (-16%),
+Sasquatch_IV_50_42 @100k 13.9 -> 9.5, @400k 39.3 -> 32.9, Dive_Sven_1623_197 @100k 31.1 -> 26.7, @400k 84.5 -> 78.5 (-7%; 4-word keys).
+The type queue lost its payload (the node's h is the h of its type): -4 B/node. Remaining per node (Holland, 1-word keys):
+record 16, table ~12, queues 5+6+4, supply values 1.
+
+### What won
+
+1. **Supply slots** (see docs/reverse.md): compact unmanaged floor-indexed graph blocks, 4-way LRU slot cache keyed by the occupied
+   start squares, canonical piece ids, per-slot SCC memo with single-pass Tarjan (partial reach sets accumulated along the DFS).
+   The Go layout (direct mapped 512 slots) rebuilt the DFS forest for 19 of 20 evaluations (56k builds for 2.9k distinct keys);
+   supply U went from 6.9 us to 1.2 us per evaluation (-83%, section timers on), the whole run 0.96x -> 0.70x Go on its own.
+2. **Lazy player normalisation**: hash and key cover the boxes only; the stored player is any cell of the region; equal-box probe hits
+   test "stored player in my region" with an early-exit flood. Floods per expanded node 5 -> 2; no per-child `Normalize`/ring test.
+   Exact: the identity of a state is still (boxes, region), only its representative cell differs.
+3. **Deferred flood**: a pop that ends in a supply deferral (50% of pops) never needs the region; the flood moved behind the deferral.
+   Marked (second) pops also skip the feasibility check.
+4. **Bitset matching**: `Feasible`/`Inherits` on per-cell start-square masks, supply U for <= 64 boxes in one word (recursion on a
+   `seen` mask, no stamps). `[SkipLocalsInit]` on the stackalloc users.
+5. **Placement macros**: lazy piece labels on the scratch graph, "no legal first pull -> no graph" pre-check (10-20% of calls), cut-vertex
+   label fast paths (non-articulation and two-neighbour cells), `Reset` clears only what the graph reads.
+6. **Pointer kernels, `nint` indices, hoisted pointers**: AOT reloads `readonly` instance fields and sign-extends every `int` index
+   (`movsxd`) inside loops; floods/DFS/BFS with local pointers and `nint` cell indices were 10-25% fewer instructions each.
+   The big `Search` method also spilled; extracting `PullChildren`/`EmitChild` removed the spills (-35% for the loop).
+7. **Child box list only on demand** (novelty scan when the at-home count changes, meeting network); the novelty scan of a child
+   whose count did not change checks the one moved box. Bucket queue with a non-empty bitmap (was a linear scan over empty buckets).
+8. **Hash-slot prefetch**: the candidate children of an expansion are enumerated first and their table slots prefetched (`Sse.Prefetch0`)
+   before the probes: -6..10% CPU at 400k nodes (no change below ~100k, where the table is cache resident). Prefetching the next
+   popped record: no gain.
+9. `TypeQueue`, expanded bits, supply values, supply slots on unmanaged memory (allocation-free steady state);
+   `Table.AddBatched` (meeting perimeter: shared add counter updated once per 64 adds).
+
+### What did not work / not done
+* Compact neighbour lists for the supply DFS (fewer iterations, more spills): +8% instructions. Reverted.
+* Parent-region shortcut for the duplicate region test (child region = parent region - p + b when the ring is connected): applies
+  too rarely, net +1%. Reverted. Pre-scan of a probe chain for an exactly equal stored player: no gain.
+* `-p:IlcInstructionSet=x86-64-v3`: no measurable change (confirms core's note).
+* Row-bitboard flood: regions are 14-60 cells on these levels, a queue flood is ~1.3k instructions; not worth a second representation.
+* Not done: delta-coded / compact node records (Go's compact store keeps a full key every 4th node): a chain walk is a cache miss
+  per ancestor on every unpack and duplicate compare; byte-list keys would save 8-20 B/node only for levels with >= 2-word keys.
+  Merging the blocked-cell and mark arrays of the flood (est. 2-3%). Skipping the macro graph DFS by reusing the region flood.
+* Remaining profile (default lane, testdata, instruction share): supply U 11%, macro graph DFS+labels 15%, pull children 14%,
+  floods 8%, queues/store 12%. Per node roughly 55 B and ~2.3-3 us CPU.
+
+
 ## fa2 / dive / factor
 
 Same method as above (CPU time, equal work `-nodes N`, `-parity`, Go from `.reference`). Totals over the 22 testdata levels (fa2 N=5000, dive N=8000) and 8 gated factor levels (N=4000):
