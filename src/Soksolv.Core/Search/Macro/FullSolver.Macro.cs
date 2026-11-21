@@ -385,7 +385,7 @@ public sealed unsafe partial class FullSolver
         for (int di = 0; di < 4; di++)
         {
             int d = dirs[di];
-            if (mark[b - d] == st) { int k = b * 4 + di; mseen[k] = bs; mbprev[k] = -1; mbq[qn++] = k; }
+            if (mark[Front(b, d)] == st && (!pull || !wall[b + 2 * d] && !occ[b + 2 * d])) { int k = b * 4 + di; mseen[k] = bs; mbprev[k] = -1; mbq[qn++] = k; }
         }
         SetOcc(b, false);
         bool found = false;
@@ -397,10 +397,11 @@ public sealed unsafe partial class FullSolver
                 int c = k >> 2, di = k & 3;
                 int nc = c + dirs[di];
                 if (wall[nc] || occ[nc] || dist[nc] < 0) continue;
+                if (pull) { int pd = nc + dirs[di]; if (wall[pd] || occ[pd]) continue; } // the pulling player needs room to step back
                 if (mpost[nc * 4 + di] == bs) continue;
                 SetOcc(nc, true);
                 uint ps = ++mpstamp;
-                int pc = nc - dirs[di];
+                int pc = PlayerAfter(nc, dirs[di]);
                 int minC = pc;
                 {
                     int* q = queueP; int tail = 0; q[tail++] = pc; m3P[pc] = ps;
@@ -431,7 +432,7 @@ public sealed unsafe partial class FullSolver
                 for (int d2i = 0; d2i < 4; d2i++)
                 {
                     int k2 = nc * 4 + d2i;
-                    if (m3[nc - dirs[d2i]] == ps)
+                    if (m3[Front(nc, dirs[d2i])] == ps)
                     {
                         mpost[k2] = bs;
                         if (mseen[k2] != bs) { mseen[k2] = bs; mbprev[k2] = k; mbq[qn++] = k2; }

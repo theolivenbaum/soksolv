@@ -30,7 +30,7 @@ public sealed unsafe partial class FullSolver
                 int q = hotQ[i];
                 foreach (int d in dirs)
                 {
-                    int b = q - d, sup = b - d;
+                    int b = q - d, sup = SupportCell(b, q, d);
                     if (wall[b] || hotSeen[b] == st || wall[sup] || b == blocker || sup == blocker) continue;
                     hotSeen[b] = st; hotQ[tail++] = b;
                 }
@@ -92,7 +92,7 @@ public sealed unsafe partial class FullSolver
             for (int di = 0; di < 4; di++)
             {
                 int d = dirs[di];
-                int support = b - d, to = b + d;
+                int support = Front(b, d), to = pull ? b + 2 * d : b + d;
                 if (m3[support] != cs) continue;
                 mobility++;
                 bool fresh = i != moved && mark[support] != mOpenSt;

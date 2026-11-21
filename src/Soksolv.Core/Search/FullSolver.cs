@@ -36,6 +36,8 @@ public sealed class FullOptions
     /// <summary>Go StallFinish (timed runs only): when the best node stops improving, try a short private backward search toward it.
     /// StallScale = timeLimit/600 s when the limit is below 600 s (main.go -stall-scale), scaling the 1 s cap/floor.</summary>
     public bool StallFinish = true;
+    /// <summary>Pull mode (Go pull lane): the macro engine run backward on a pull view of the level (see Pull/FullSolver.Pull.cs).</summary>
+    public bool Pull;
     /// <summary>Macro alt engine (exp-769): plan4 with festsink + roomsep + keep-parks 1.</summary>
     public bool PlanAlt;
     /// <summary>Go -macro-alt-plan (default on): the macro lane runs a second engine on the alt plan4 config, alternating on a baton.</summary>
@@ -108,9 +110,15 @@ public sealed unsafe partial class FullSolver : IDisposable
     struct Push1 { public int I, B, T; public sbyte Dir; public int R, Pen; }
     Cand[] cands; Push1[] pushes1;
     readonly Stopwatch clock = Stopwatch.StartNew();
+    // pull mode (Go solver.pull): front()/playerAfter()/supportCell() generalise push geometry
+    readonly bool pull;
+    int Front(int b, int d) => pull ? b + d : b - d;
+    int PlayerAfter(int nc, int d) => pull ? nc + d : nc - d;
+    int SupportCell(int b, int c, int d) => pull ? c + d : b - d;
 
     public FullSolver(Level level, FullOptions options)
     {
+        pull = options.Pull;
         lv = level; opt = options; n = lv.Boxes.Length; cells = lv.Cells; W = lv.W;
         dirs = [-W, W, -1, 1]; wall = lv.Wall; goal = lv.Goal;
         occ = new bool[cells];
@@ -155,7 +163,7 @@ public sealed unsafe partial class FullSolver : IDisposable
             foreach (int d in dirs)
             {
                 int b = c - d;
-                if (!wall[b] && !wall[b - d] && dist[b] < 0) { dist[b] = dist[c] + 1; q[tail++] = b; }
+                if (!wall[b] && !wall[SupportCell(b, c, d)] && dist[b] < 0) { dist[b] = dist[c] + 1; q[tail++] = b; }
             }
         }
     }
@@ -177,7 +185,7 @@ public sealed unsafe partial class FullSolver : IDisposable
                 foreach (int dir in dirs)
                 {
                     int b = c - dir;
-                    if (!wall[b] && !wall[b - dir] && d[b] < 0) { d[b] = d[c] + 1; queue[tail++] = b; }
+                    if (!wall[b] && !wall[SupportCell(b, c, dir)] && d[b] < 0) { d[b] = d[c] + 1; queue[tail++] = b; }
                 }
             }
         }
