@@ -88,7 +88,7 @@ public sealed unsafe class DeadZoneChecker
     int gw;
     Dictionary<ulong, ulong[]>? reachFix;
     int[] mOf = [];
-    ulong[] mSeen = [];
+    ulong[] mSeen = [], mUsed = [];
     readonly ulong[] zob;
     // word-parallel path (board width <= 64): one ulong per row
     readonly bool bitsOK;
@@ -143,6 +143,7 @@ public sealed unsafe class DeadZoneChecker
 
     uint StampR() { if (++rst == 0) { Array.Clear(rmarkA); rst = 1; } return rst; }
     bool occRows;   // SearchBits: live occupancy is the row words bx, not the blk bytes
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     bool Occ(int x) => occRows ? ((bx[rc[x] >> 6] >> (rc[x] & 63)) & 1) != 0 : (blk[x] & BOcc) != 0;
     bool Wall2(int x) => (blk[x] & BWall2) != 0;
     void SetOcc(int x, bool v) { if (v) blk[x] |= BOcc; else blk[x] &= unchecked((byte)~BOcc); }
@@ -394,6 +395,7 @@ public sealed unsafe class DeadZoneChecker
         uint rs = StampR(); var r = Flood(p, rmark, rs); prs = rs; return r;
     }
     (int, int) ChildFlood(int p) { CFloods++; if (++cmst == 0) { Array.Clear(cmarkA); cmst = 1; } return Flood(p, cmark, cmst); }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     bool InParent(int x) => bitsOK ? ((rbits[rc[x] >> 6] >> (rc[x] & 63)) & 1) != 0 : rmark[x] == prs;
     bool InChild(int x) => cmark[x] == cmst;
 
@@ -1158,7 +1160,7 @@ public sealed unsafe class DeadZoneChecker
             var g = new List<int>();
             for (int x = 0; x < b.Goal.Length; x++) if (b.Goal[x] && !b.Wall[x]) g.Add(x);
             goals = [.. g]; gw = (goals.Length + 63) / 64;
-            reachFix = new(); mOf = new int[goals.Length]; mSeen = new ulong[gw];
+            reachFix = new(); mOf = new int[goals.Length]; mSeen = new ulong[gw]; mUsed = new ulong[gw];
         }
         if (!reachFix.TryGetValue(key, out var R))
         {
@@ -1186,9 +1188,20 @@ public sealed unsafe class DeadZoneChecker
             reachFix[key] = R;
         }
         Array.Fill(mOf, -1);
+        Array.Clear(mUsed);
         foreach (int x in boxes)
         {
             if (fixedB[x]) continue;
+            // a free reachable goal takes the box at once (the maximum matching size does not depend on which augmenting path is found)
+            bool done = false;
+            for (int w = 0; w < gw; w++)
+            {
+                ulong f = R[x * gw + w] & ~mUsed[w];
+                if (f == 0) continue;
+                int gi = w << 6 | System.Numerics.BitOperations.TrailingZeroCount(f);
+                mOf[gi] = x; mUsed[w] |= 1UL << (gi & 63); done = true; break;
+            }
+            if (done) continue;
             Array.Clear(mSeen);
             if (!Augment(R, x)) return false;
         }
@@ -1207,7 +1220,8 @@ public sealed unsafe class DeadZoneChecker
                 ulong bit = cand & (~cand + 1);
                 mSeen[w] |= bit;
                 int gi = w << 6 | System.Numerics.BitOperations.TrailingZeroCount(cand);
-                if (mOf[gi] < 0 || Augment(R, mOf[gi])) { mOf[gi] = x; return true; }
+                if (mOf[gi] < 0) { mOf[gi] = x; mUsed[gi >> 6] |= 1UL << (gi & 63); return true; }
+                if (Augment(R, mOf[gi])) { mOf[gi] = x; return true; }
             }
         }
         return false;

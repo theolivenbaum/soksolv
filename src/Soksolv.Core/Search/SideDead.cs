@@ -69,6 +69,11 @@ public sealed class SideDead
         }
     }
 
+    /// <summary>The cell separates the floor into several player components when a box sits on it (Dead then depends on the player's side).</summary>
+    public bool IsSplitter(int c) => label[fi[c]] != null;
+    /// <summary>For a non-splitter cell: a box there is dead whatever the player's side.</summary>
+    public bool StaticDead(int c) => !live[fi[c] * 4];
+
     /// <summary>Whether a box on c, with the player on cell player, can no longer reach any goal.</summary>
     public bool Dead(int c, int player)
     {

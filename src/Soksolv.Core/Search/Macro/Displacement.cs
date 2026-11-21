@@ -9,7 +9,7 @@ namespace Soksolv.Search;
 /// Goals \ {p}, p MUST move. Theorem 2: collective unpacking when unpacked boxes cannot reach the empty goals with all
 /// occupied goals as walls.
 /// </summary>
-public sealed class DisplacementLandmarks
+public sealed unsafe class DisplacementLandmarks
 {
     readonly bool[] wall;
     readonly int[] dirs;
@@ -24,6 +24,9 @@ public sealed class DisplacementLandmarks
     readonly List<int> uBoxes = new(), eGoals = new(), unpackedOthers = new();
     readonly bool[] isGoalBox;
     readonly ulong[] canReach = new ulong[64];
+    // row-bit kernel of the static canWalk precompute (boards <= 64 wide and <= 62 tall): free rows of Board \ (Walls U {p}) and a region scratch
+    readonly int gw, gh; readonly ulong[]? rowFree, rowReg; readonly ulong[]? rowWall;
+    public static bool RowKernelOff = Environment.GetEnvironmentVariable("SOKSOLV_DISP_ROWS_OFF") == "1";   // test hook
 
     public static DisplacementLandmarks? Create(Level lv, int[] dirs, int[] goals)
         => goals.Length == 0 || goals.Length > 64 ? null : new DisplacementLandmarks(lv, dirs, goals);
@@ -31,6 +34,13 @@ public sealed class DisplacementLandmarks
     DisplacementLandmarks(Level lv, int[] dirs, int[] goals)
     {
         wall = lv.Wall; this.dirs = dirs; cells = wall.Length; numGoals = goals.Length; this.goals = goals;
+        gw = lv.W; gh = lv.H;
+        if (gw <= 64 && gh + 2 <= 64 && !RowKernelOff)
+        {
+            rowFree = new ulong[gh + 2]; rowReg = new ulong[gh + 2]; rowWall = new ulong[gh + 2];
+            for (int r = 0; r < gh; r++)
+                for (int x = 0; x < gw; x++) if (!wall[r * gw + x]) rowWall[r + 1] |= 1UL << x;
+        }
         GoalIdx = new int[cells]; Array.Fill(GoalIdx, -1);
         for (int g = 0; g < goals.Length; g++) GoalIdx[goals[g]] = g;
         pinnedGoalMask = new ulong[numGoals][]; pinComp = new ushort[numGoals][];
@@ -77,17 +87,62 @@ public sealed class DisplacementLandmarks
         }
     }
 
+    /// <summary>canWalk[to][d1][d2]: neighbours to-dirs[d1] and to-dirs[d2] are connected in rowFree minus {to} (row-bit flood per component).</summary>
+    void CanWalkRows(int to, bool[] canWalk)
+    {
+        int tr = to / gw + 1; ulong tbit = 1UL << (to % gw);
+        Span<int> comp = [-1, -1, -1, -1];
+        int cid = 0;
+        ulong[] fr = rowFree!, rg = rowReg!;
+        fixed (ulong* free = fr, reg = rg)
+        {
+            free[tr] &= ~tbit;
+            for (int d = 0; d < 4; d++)
+            {
+                int n = to - dirs[d];
+                int nr = n / gw + 1, nc = n % gw;
+                if ((free[nr] >> nc & 1) == 0 || comp[d] >= 0) continue;
+                cid++;
+                comp[d] = cid;
+                bool more = false;
+                for (int d2 = d + 1; d2 < 4; d2++)
+                {
+                    int n2 = to - dirs[d2], r2 = n2 / gw + 1;
+                    if ((free[r2] >> (n2 % gw) & 1) != 0 && comp[d2] < 0) { more = true; break; }
+                }
+                if (!more) continue;
+                FullSolver.FloodRowsDirty(free, reg, gh + 2, nr, nc);
+                for (int d2 = d + 1; d2 < 4; d2++)
+                {
+                    int n2 = to - dirs[d2], r2 = n2 / gw + 1;
+                    if ((free[r2] >> (n2 % gw) & 1) != 0 && (reg[r2] >> (n2 % gw) & 1) != 0) comp[d2] = cid;
+                }
+            }
+            free[tr] |= tbit;
+        }
+        for (int d1 = 0; d1 < 4; d1++)
+            for (int d2 = 0; d2 < 4; d2++)
+                if (comp[d1] > 0 && comp[d1] == comp[d2]) canWalk[to * 16 + d1 * 4 + d2] = true;
+    }
+
     void PrecomputeGoalPin(int pIdx, int p, bool[] canWalk, uint[] walkComputed, uint[] walkVisited, int[] walkQ, uint computeStamp, ref uint walkStamp, int[] bfsQ)
     {
         var mask = pinnedGoalMask[pIdx];
         bool IsBlocked(int c) => c < 0 || c >= cells || wall[c] || c == p;
         uint ws = walkStamp;
 
+        if (rowFree != null)
+        {
+            Array.Copy(rowWall!, rowFree, rowFree.Length);
+            int pr = p / gw + 1; rowFree[pr] &= ~(1UL << (p % gw));
+        }
+
         void ComputeCanWalk(int to)
         {
             if (walkComputed[to] == computeStamp) return;
             walkComputed[to] = computeStamp;
             for (int i = 0; i < 16; i++) canWalk[to * 16 + i] = false;
+            if (rowFree != null) { CanWalkRows(to, canWalk); return; }
             Span<int> comp = [-1, -1, -1, -1];
             int cid = 0;
             for (int d = 0; d < 4; d++)

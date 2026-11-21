@@ -186,3 +186,95 @@ Wins (each verified with `SOKSOLV_CHECK_*` reference hooks where one exists):
 Did not work: restricting row sweeps to the region's row span for the box-search flood (no gain: regions already small; pair-search floods dominate FloodRows).
 Remaining: ClusterChecker.Region is the top item on long runs (not in this area); pair-search floods; plan4 expansion (ComputeElim4/Expand4/CutQueryFill) ~20% on 50-box levels;
 full-DFS articulation per box; room-fragment recomputation on Holland-like levels. Targets of <=0.5x Go are met only on some levels (novelty/hf/SokHard), not overall.
+
+## deadzone / cluster / articulation (Search/DeadZone/*, ClusterChecker, FullSolver.Expand.cs)
+
+Method as above (AOT, `nice`, CPU time, `-parity`, equal work); the machine was shared with 3-5 other agents (load 6-16), so wall/CPU ratios carry +-10% noise and
+the work was steered by deterministic callgrind instruction counts (Ir) of the C# AOT binary (`valgrind --tool=callgrind`, 600-3000 node runs). Every step below is
+fingerprint-identical (solved / nodes / pushes / stored / generated / duplicates, and the macro/novelty S1HASH-style `fingerprint`) against the previous C# build on
+all 23 testdata levels for full, macro, novelty, pull, hf (-no-meet), fa2, dive, factor, and on the 12 wide levels for macro/novelty; `dotnet test` green.
+
+### Result (CPU s user+sys, 8 testdata levels: Holland 57/27, Sasquatch VI 24 / IV 42, Aymeric 273, SokHard 36, Dive Sven 197, SokEvo 82; best of 2; cs/go; before = same tree with only the two DZ/cluster files reverted)
+
+| lane (nodes) | before | after |
+|---|---|---|
+| full (8000) | 0.341 | 0.313 |
+| macro (5000) | 0.806 | 0.745 |
+| novelty (5000) | 0.794 | 0.730 |
+| pull / hf / dive | 0.94 / 0.81 / 0.62 | 0.93 / 0.84 / 0.62 (DZ/cluster are ~0% of pull and dive; hf within noise) |
+
+### What won
+1. **Cluster proof search keeps a region per queued state** (`ClusterChecker.SearchBfsBits`, bit-row boards). The BFS used to flood the player's region of every
+   expanded state (+ a second flood for every move whose 8-ring said "may split"). Now a child's region rows are *derived* from the parent's:
+   `R - t + x + pockets(x)` (copy of `reg`, clear t, set x, OR the pocket rows that `FastPlayerB` already floods), written to a preallocated pinned slab only for states that
+   are new in the seen-set; only ring-split candidates flood (into a scratch row buffer that is copied into the slab if the state is new). No flood at expansion time any more
+   (floods per Holland_81_57 macro run: 178k -> 105k). Derived rows are verified against a real flood by `SOKSOLV_CHECK_CLUSTER=1` (`ClusterChecker.CheckRegions`; deliberately not `CheckFast`, which the unit tests toggle while other tests run in parallel). The child's key is built
+   directly as the 8 x ushort lane array (`Key` layout is exactly that), `MoveSorted` on the lanes, no per-move spans. Cluster share of `full` was 51-80% of all instructions;
+   this step: -14..-17% Ir on Holland macro/full, FastPlayerB micro-cleanup another -4%.
+2. **Corral prover (`DeadZoneChecker`) rewritten on pointers + row words** (boards <= 64x64):
+   * all row kernels on pinned `ulong*` (cell -> `row<<6|col` table in one ushort load instead of two byte-table loads + bounds checks);
+   * `FloodFreeDirty`: dirty-row worklist flood (tzcnt) instead of the up/down sweep passes; the escape fixpoint passes only re-judge rows next to a row whose free cells or
+     flooded region changed (`fdChg`/`rmask`, exact because a row's verdict depends only on rows r-1..r+1 of F and R);
+   * **`SearchBits`: corral states are row words**. A child (box x -> t, or killed) is parent rows with two bits toggled; F is the parent's F with the same two bits; the escape
+     fixpoint runs on rows (`EscapeRows`, removals are whole row words, no per-box arrays); the child state array is written by *enumerating the bits in row-major order*
+     (which is exactly ascending cell order = Go's sorted state) with an incremental Zobrist hash instead of FNV over the shorts; no blk-byte occupancy toggling
+     (`Occ()` reads the rows). Per child cost went from O(k) several times over (k = zone boxes, ~30 on Sasquatch) to O(H) copies + O(live rows).
+   * `MatchFixed`: free reachable goal first (the maximum matching size does not depend on the augmenting path), `Array.Clear(mSeen)` only when an augmentation is needed.
+   Sasquatch_VI_50#34 macro 600 nodes: DZ functions 1.1G -> 0.4G Ir; whole run 4.6G -> 3.9G (-15%); DZ share of macro on the 8 reference levels 4.6% (was ~10%).
+3. `FestCorral`: no per-call `List<bool>`/`List<ulong>`/`Span` array literals (growable pooled arrays) - 0 B/call.
+
+### What did not work (measured, reverted)
+* **Lazy articulation** (ring-table `pieces(t)` for non-splitting candidates, one region flood for `comps`, flood per split candidate; or hybrid: Tarjan only when a candidate's ring
+  splits): total Ir unchanged (+0.6%). Most boxes with >= 2 candidates have at least one ring-split candidate (corridors), and a pointer Tarjan (~13 instr per free cell,
+  4.7k Ir on Sasquatch, ~17k on Holland) costs about 4-8 row floods, so floods only win when almost no candidate splits. Also tried an adaptive budget (flood the first K
+  ring-split candidates, then switch to the Tarjan pass; K=0/2/6): pull 0.707G -> 0.723/0.718/0.711G Ir, macro 6.69G -> 6.70G: no gain on any lane.
+* Rewriting the Tarjan frame loop with the current frame in registers and a monotone discovery base (no per-pass stamps): -4% of MArtic itself; kept, and `ComputeArticulation`
+  (full/fa2) now shares that single pass (`MArtic`) instead of a second array-based copy.
+* **7x7 window connectivity** to resolve ring-split candidates without a flood (all free orthogonal neighbours of t joined by a path inside the window): only ~25% of the
+  split-possible cases resolve (42-60% are real splits, the rest connect over longer paths), the window test costs ~310 Ir -> net +6% on Holland `full`.
+* Ternary-selected neighbour offsets instead of `b.Dirs[di]` in `FastPlayerB`: slower (kept the table, now a pinned `int*`).
+* Statistics: ring-split candidates are 33% of cluster BFS moves; of those 40-85% only look splitting (diagonals), 42-60% are real splits and the lost fragment is
+  < 40 cells in >95% of them. A flood from the *small side* with early exit (or lockstep floods) is the remaining idea for `FloodBitsTo` (15-21% of `full` on Holland).
+
+### Remaining in this area
+* `ClusterChecker` is still 7% (macro family, 50-80% on Holland-like `full` runs): SearchBfsBits self ~300 Ir/move (spills; the `Key` compare and `seenSlots` probe dominate TryAdd),
+  FastPlayerB ~200 Ir/move, FloodBitsTo ~680 Ir/flood.
+* `MArtic` (Tarjan, macro/pull/novelty 5-9%): needs a different formulation (incremental block-cut tree per parent node) to beat floods.
+* `DeadAfterCore` (player region flood on `bool[]`, corral discovery) and `BuildZoneCells` are ~1% each and still on managed arrays.
+
+## macro open() (per-candidate / per-node hot path: pair search, box-search flood, move access, region counts)
+
+Method as above (AOT, CPU time, `-parity`, equal work); deterministic C# callgrind instruction counts (Ir) guided the work. Everything below is
+exact: fingerprints/node counts identical to the pre-change binary and to Go on testdata (macro, novelty, pull, fa2, dive, hf 24/24 @3000) and on the
+12 wide levels (macro 12/12 @600); `dotnet test` green.
+
+Profile facts that decided the order: on testdata levels the macro engine's own code (box search, MVisit, move access, floods) is only ~5% of a macro/novelty
+run - the rest is the sink planner (plan4/cut scan), cluster/dead-zone proofs (other agents' areas). It is dominant only on **pull** (pure open() work) and on
+levels with 100+ boxes and corridor-heavy boards (Sven_1623), where one wide node costs 2-3 M Ir. There the top items were the pair-deadlock searches (21% Ir),
+move access (9%), side-dead (3%) and the displacement precompute (8%).
+
+| change | effect (Ir, deterministic) |
+|---|---|
+| **pair-search successor memo** (`PmFind/PmInsert`, Expand.cs): the expansion of an ordered state (box cells x, y + region start p) is a pure function of the state, so its successor list (in generation order) is cached in a fixed open-addressing table + ushort arena; 600k floods -> 50k on Sven_1623#21. Same visited-set/cap semantics, goal-pair flag cached too | Sven#21: 3.34G -> 2.65G (-21%) |
+| generated pair states keep their region rows (`psreg`), so the expansion of a generated state does not flood again | -3% of the above |
+| non-splitting pair shortcut: when neither box cell can split its component locally (8-ring LUT) and they do not touch, the region is `component(start) \ {x,y}`: min cell and membership in O(1) (`PairFast`); only used when it applies (open rooms; none on Sven#21) | exact vs `PairDeadFromScan` (`SOKSOLV_PAIR_CHECK=1`) |
+| **move access as a delta** (`MMoveAccessDelta`): per-node tables (parent region rows, `accCnt[cell]` = (box,dir) pairs supported by a cell, parent mobility); child mobility = Mp + sum(cnt over D) - sum(cnt over E) + 8 corrections, explorer from D only (D/E = child region xor parent region, usually a handful of cells); row kernel as fallback for > 160 changed cells and for the novelty fact recording | MMoveAccessBits 294M -> 72M on Sven#21 (4x) |
+| box-search flood keeps the region **only as row bits** (no `m3` stamping loop over the region; `InPR(c)` bit test with a multiply-shift row index), clears only the previous region's rows, contiguity gives min/lo/hi without scanning | BbFlood 151M -> 34M |
+| side-dead per box search: boxes on cells whose verdict is independent of the player's side are counted once, only separator cells (and the moved box) are asked per candidate (`MSdBuild`) | MPushDead+SideDead -5% on Sven |
+| displacement precompute `canWalk` via the row-bit flood (`CanWalkRows`) instead of a queue BFS per neighbour (`SOKSOLV_DISP_ROWS_OFF=1` = old; unit test compares the pinned masks) | -4% on short Sven runs |
+| child region count: 8-ring LUT settles a non-separator candidate (0 or 1 piece removed) from the component count learned on an earlier candidate; the whole-board Tarjan pass (`MArtic`) runs only after two separator candidates (a lone one costs one flood) (`SOKSOLV_REGRING_OFF=1` = old; `SOKSOLV_CHECK=1` compares with a flood) | pull -4..-12% Ir |
+
+Equal-work CPU time vs Go (22 testdata levels, 5000 nodes, best of 3, same minute): macro 0.764 -> 0.673, novelty 0.749 -> 0.69, pull 0.88 -> 0.84,
+wide macro (12 levels) 0.91 -> 0.88 (Sven_1623#21 0.98 -> 0.67, #10 0.98 -> 0.54; the total is dominated by Sasquatch_IV#32 (13 s, 12 s of it plan4 setup) and
+Sasquatch_VI#48 (6 s, plan4/cut scan) - not in this area).
+
+Allocation: steady-state garbage 0 (gen0 count unchanged, alloc_mb grows 0.1-1 MB per 1000 nodes by retained `mmv`/novelty words only; the macros / nodeMacros dictionaries
+belong to the `full` lane, not to this engine). The pair memo adds 1-3 MB once (preallocated, sized by the board).
+
+What did not work / not worth it
+* Skipping the box-search flood for non-splitting `nc` (region = base component minus nc, ring LUT on the free rows, base flood once per box search): exact, but <= 0.6% Ir
+  on testdata and Sven (separator-dense boards defeat the LUT). Reverted.
+* Pointer rewrite of `MBoxSearch` (fixed pointers for mpost/mseen/mbq/dist, `blk` instead of wall||occ): no change in Ir (ILC already hoists the bounds checks). Reverted.
+* Pair floods across the pair search cannot all be skipped: the memo only helps for repeated states; the remaining 50k floods are first visits.
+Remaining (not in this area): plan4/cut scan setup dominates the Sasquatch wide levels (12 s of 13 s on Sasquatch_IV#32); cluster/dead-zone proofs dominate the testdata macro/novelty
+profile (~35%); pull is now spread flat over MArtic 9%, MBoxSearch 8%, RoomBroken 7%, floods 7%, MVisit 6%, move access 6%.

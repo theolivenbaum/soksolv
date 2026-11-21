@@ -131,70 +131,13 @@ public sealed unsafe partial class FullSolver
     // For the board with box b removed, one iterative Tarjan pass over the free cells gives the number of
     // empty-floor components and, for each free cell t, how many pieces t's component splits into when a box is
     // placed on t. A child moving b to t then has comps - 1 + pieces[t] regions: O(1) per candidate.
-    int[]? artDisc, artLow, artPieces; uint[]? artSeen; uint artStamp; int artComps;
-    int[]? artStackC, artStackP; sbyte[]? artStackNext;
+    int artComps;
     /// <summary>Test hook: verify every incremental region count against a full flood.</summary>
-    public static bool CheckRegions;
+    public static bool CheckRegions = Environment.GetEnvironmentVariable("SOKSOLV_CHECK") == "1";
 
-    void ComputeArticulation()
-    {
-        if (artDisc == null)
-        {
-            artDisc = new int[cells]; artLow = new int[cells]; artPieces = new int[cells]; artSeen = new uint[cells];
-            artStackC = new int[cells + 1]; artStackP = new int[cells + 1]; artStackNext = new sbyte[cells + 1];
-        }
-        uint st = ++artStamp;
-        artComps = 0;
-        int timer = 0, comps = 0;
-        int w = W;
-        fixed (int* disc = artDisc, low = artLow, pieces = artPieces, sc = artStackC, sp = artStackP)
-        fixed (uint* seen = artSeen)
-        fixed (sbyte* sn = artStackNext)
-        fixed (int* fcs = FloorCells())
-        {
-            int nf = floorCells.Length;
-            for (int fi = 0; fi < nf; fi++)
-            {
-                int root = fcs[fi];
-                if (blk[root] != 0 || seen[root] == st) continue;
-                comps++;
-                timer++;
-                disc[root] = timer; low[root] = timer; pieces[root] = 0; seen[root] = st;
-                sc[0] = root; sp[0] = -1; sn[0] = 0; int sz = 1;
-                while (sz > 0)
-                {
-                    int top = sz - 1;
-                    int c = sc[top];
-                    int k = sn[top];
-                    if (k < 4)
-                    {
-                        sn[top] = (sbyte)(k + 1);
-                        int y = k == 0 ? c - w : k == 1 ? c + w : k == 2 ? c - 1 : c + 1;
-                        if (blk[y] != 0) continue;
-                        if (seen[y] != st)
-                        {
-                            timer++;
-                            disc[y] = timer; low[y] = timer; pieces[y] = 1; seen[y] = st;
-                            sc[sz] = y; sp[sz] = c; sn[sz] = 0; sz++;
-                        }
-                        else if (y != sp[top])
-                        {
-                            if (disc[y] < low[c]) low[c] = disc[y];
-                        }
-                        continue;
-                    }
-                    int pp = sp[top];
-                    sz--;
-                    if (pp < 0) continue;
-                    if (low[c] < low[pp]) low[pp] = low[c];
-                    if (low[c] >= disc[pp]) pieces[pp]++;
-                }
-            }
-        }
-        artComps = comps;
-    }
+    void ComputeArticulation() => MArtic();   // one pointer Tarjan pass (MacroBits.cs), shared by full / macro / fa2
 
-    int ChildRegions(int t) => artComps - 1 + artPieces![t];
+    int ChildRegions(int t) => MChildRegions(t);
 
     // ---- PI-corral ---------------------------------------------------------------------------------------------------
     uint PiCorral(uint st)
@@ -309,10 +252,10 @@ public sealed unsafe partial class FullSolver
     // ---- word-parallel pair search (Go pairbits.go: pairDeadFromBits; boards up to 64 wide) -------------------------------------------
     ulong[]? bbFloorA, bbFreeA, bbRegA, bbRemA;
     ulong* bbFloor, bbFree, bbReg, bbRem; int bbRows;
-    public static bool PairBitsOff, PairBitsCheck;   // test hooks
+    public static bool PairBitsOff, PairBitsCheck = Environment.GetEnvironmentVariable("SOKSOLV_PAIR_CHECK") == "1";   // test hooks
 
     /// <summary>Row flood with a dirty-row worklist (rows ≤ 64): a row is re-examined only when a neighbouring row changed; passes alternate up/down like the sweeps they replace.</summary>
-    static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp, bool clear = true)
+    internal static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp, bool clear = true)
     {
         if (clear) for (int i = 0; i < rows; i++) reg[i] = 0;
         reg[rp] = FillRow(1UL << cp, free[rp]);
