@@ -29,6 +29,7 @@ public sealed unsafe partial class FullSolver
 
     // process-wide tried-strata table (Go raceShared): shared by both hub lanes
     static readonly Dictionary<ulong, (int tries, float best)> raceShared = new();
+    internal static void RaceSharedMark(ulong k, float frac) { lock (raceShared) { raceShared.TryGetValue(k, out var rec); raceShared[k] = (rec.tries + 1, Math.Max(rec.best, frac)); } }
     internal static void ResetRaceShared() { lock (raceShared) raceShared.Clear(); }
 
     ulong RaceBytes => (ulong)(nodes.Bytes + mmv.Bytes + mmvScore.Bytes + maux.Bytes);
@@ -36,7 +37,7 @@ public sealed unsafe partial class FullSolver
     internal bool MemFull => mMemFull;
 
     /// <summary>Go newTowardReal: the real-level toward search aimed at tgt (HF ranking against the target board).</summary>
-    static FullSolver NewTowardReal(string[] rows, Level lv, FullOptions opt, TowardTarget tgt, long nodeLimit, bool nodeMode, Func<ulong>? peerBytes)
+    static FullSolver NewTowardReal(string[] rows, Level lv, FullOptions opt, TowardTarget tgt, long nodeLimit, bool nodeMode, Func<ulong>? peerBytes, bool regRel = false)
     {
         var to = opt.Clone();
         to.Pull = false; to.PfOn = false; to.NodeBudget = 0; to.Net = null; to.MacroAlt = false; to.Novelty = 0;
@@ -45,6 +46,7 @@ public sealed unsafe partial class FullSolver
         to.PeerBytes = peerBytes;
         var s = new FullSolver(lv, to) { mRows = rows, nodeLimitOverride = nodeLimit };
         s.hfRank = true; s.tgtFull = tgt; s.SetTarget(tgt.Boxes);
+        if (regRel) s.SetTargetPockets(tgt);
         return s;
     }
 

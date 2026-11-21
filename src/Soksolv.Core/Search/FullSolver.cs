@@ -47,6 +47,10 @@ public sealed class FullOptions
     public ulong RngSeed;
     /// <summary>Hub lanes: &gt; 0 replaces the wall-clock slices (Go festbUnit 250 ms) by this many pull expansions (deterministic mode; opt.NodeBudget then caps the lane's total expansions).</summary>
     public long HubNodeSlices;
+    /// <summary>The tried-strata table is shared with other hub lanes of the same run (portfolio): do not reset it at lane start.</summary>
+    public bool SharedRace;
+    /// <summary>`-strategy hub-gen -hub-gen-only`: run the generator alone (harness).</summary>
+    public bool HubGenOnly;
     /// <summary>Go RetargetReuse (exp-299, default on): a toward tree retargeted to a new target board keeps its stored nodes (active graph reuse).</summary>
     public bool RetargetReuse = true;
     /// <summary>Bytes held by the lane's other trees (Go peerTracked): they count against BudgetBytes.</summary>

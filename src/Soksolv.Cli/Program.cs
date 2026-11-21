@@ -10,7 +10,7 @@ ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster p
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
 bool portPull = true, portHubPull = false, portNovelty = true, portFa2 = true;
-bool noMeet = false, pfOn = false; string? strataDump = null; bool retargetReuse = true; long hubSlices = 0;
+bool noMeet = false, pfOn = false, hubGenOnly = false; string? strataDump = null; bool retargetReuse = true; long hubSlices = 0;
 var hfSwitches = new Dictionary<string, bool>();
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
@@ -31,6 +31,7 @@ for (int i = 0; i < args.Length; i++)
             hfSwitches[name] = val != "false"; break;
         }
         case "-no-meet": noMeet = true; break;
+        case "-hub-gen-only": hubGenOnly = true; break;
         case "-hub-strata-dump": strataDump = args[++i]; break;
         case "-hub-node-slices": hubSlices = long.Parse(args[++i]); break; // hub lanes: expansion-count slices instead of wall-clock ones (deterministic; -nodes caps the lane)
         case "-retarget-reuse=false": retargetReuse = false; break;
@@ -118,7 +119,11 @@ SolveResult Run(string[] r, double tl)
     if (strategy == "full") return FullSolver.Solve(r, opt, tl);
     if (strategy == "hf") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveHf(r, opt, tl); }
     if (strategy == "hub-pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveHubPull(r, opt, tl); }
-    if (strategy is "hub-gen" or "hub") return new SolveResult { Reason = "hub-gen/hub lanes are not ported yet (docs/lanes.md: hub lane family)" };
+    if (strategy is "hub-gen" or "hub")
+    {
+        opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0;
+        return hubGenOnly ? FullSolver.SolveHubGenOnly(r, opt) : FullSolver.SolveHub(r, opt, tl);
+    }
     if (strategy == "hub-strata") { opt.StallScale = 1.0; return FullSolver.SolveHubStrata(r, opt, tl, strataDump ?? "hub-strata.txt"); }
     if (strategy == "pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolvePull(r, opt, tl); }
     if (strategy == "fa2") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveFa2(r, opt, tl); }

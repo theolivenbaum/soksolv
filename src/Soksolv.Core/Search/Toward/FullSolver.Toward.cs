@@ -59,6 +59,27 @@ public sealed unsafe partial class FullSolver
         hu = new int[n + 1]; hv = new int[n + 1]; hp = new int[n + 1]; hway = new int[n + 1]; hminv = new int[n + 1]; hused = new bool[n + 1];
     }
 
+    bool[]? tgtPocket;   // exp-460/480 (hub contexts): floor cells the target board seals off from its player and holds no target box (null: off)
+
+    /// <summary>Go setTargetPockets (hub forward contexts, regRel): pockets the target itself seals; Regions() ignores components made only of them.</summary>
+    void SetTargetPockets(TowardTarget t)
+    {
+        var o = new bool[cells];
+        foreach (int b in t.Boxes) o[b] = true;
+        var seenC = new bool[cells];
+        var q = new List<int> { t.Player };
+        seenC[t.Player] = true;
+        for (int i = 0; i < q.Count; i++)
+            foreach (int d in dirs)
+            {
+                int y = q[i] + d;
+                if (!seenC[y] && !wall[y] && !o[y]) { seenC[y] = true; q.Add(y); }
+            }
+        var pk = new bool[cells];
+        for (int c = 0; c < cells; c++) pk[c] = !wall[c] && !o[c] && !seenC[c];
+        tgtPocket = pk;
+    }
+
     bool OnTarget(ReadOnlySpan<int> boxes)
     {
         foreach (int b in boxes) if (!tgt![b]) return false;
