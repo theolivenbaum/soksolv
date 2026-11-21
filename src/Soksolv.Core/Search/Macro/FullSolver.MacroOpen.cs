@@ -74,9 +74,12 @@ public sealed unsafe partial class FullSolver
         uint corral = 0;
         if (!pull) // PI-corral pruning is a push argument
         {
+            if (hfRank && opt.HfFestCorral) { corral = FestCorral(nodes.Player(id), st); if (corral != 0) stats.Corrals++; }
+            else {
             if (Feat(1)) corral = FirstPushCorral(nodes.Player(id), st); // FrontierCorral (corral_frontier.go)
             if (corral == 0) corral = PiCorral(st);
             if (corral != 0) stats.Corrals++;
+            }
         }
         packPrepared = false;
         if (Feat(4)) PreparePackingObligations();
