@@ -294,7 +294,9 @@ public sealed unsafe partial class FullSolver
         }
         if (noveltyN > 0) MNoveltyBlock(id, cur, nm, noveltyN, parentConn);
         bool useTier = noveltyN > 0 && AccessNovelty;
-        if (!pfOn && TryPackedSort(nm, useTier)) { }
+        int kNeed = (int)Math.Min(maux[id].MvOff, (uint)nm);
+        { int w0 = nm - kNeed; if (MoveWindow > 0 && w0 > MoveWindow) w0 = MoveWindow; kNeed += w0; }   // only the first off+win places of the order are ever read in order
+        if (!pfOn && TryPackedSort(nm, useTier, kNeed)) { }
         else {
         for (int k = 0; k < nm; k++) mKeys[k] = new MKey { Tier = useTier ? mCands[k].Tier : 0, Bad = Feat(6) && mCands[k].RevBad ? 1 : 0, W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = pfOn ? mCands[k].B : mCands[k].Plen, Y = pfOn ? mCands[k].T : 0, Idx = k };
         MSortKeys(nm);
@@ -308,6 +310,7 @@ public sealed unsafe partial class FullSolver
             ref var m = ref mCands[k];
             ulong word = (ulong)m.I | (ulong)m.T << 15 | (ulong)mWeights[k] << 30 | (ulong)m.Side << 31 | (ulong)m.R << 33 | (m.Plen < 0x8000 ? (ulong)m.Plen << 48 : 0UL);
             mmv.Add(m.AlreadyUsed ? word | MMoveUsed : word);
+            mmvNp.Add((ushort)(m.Np > 0 && m.Np < 65536 ? m.Np : 0));
             mmvScore.Add(new MoveScore { Oop = (ushort)m.Oop, Packed = (ushort)m.Packed, Conn = (ushort)m.R, Hot = (ushort)Math.Min(m.Hot, 65535), Room = (uint)m.Room, Mobility = (uint)m.Mobility });
         }
         ref var a = ref maux[id];
@@ -458,14 +461,14 @@ public sealed unsafe partial class FullSolver
     }
 
     struct PKey { public ulong Hi, Lo; public int Idx; }
-    PKey[] mPKey = new PKey[64], mPKeyTmp = new PKey[64];
+    PKey[] mPKey = new PKey[64], mPKeyTmp = new PKey[64]; uint[] mPSeen = new uint[64]; uint mPStamp;
 
     /// <summary>
     /// The move order of MKeyCmp on two packed words (high: bad, weight, tier, oop, -packed, conn; low: room, hot, -mobility, path length) with the
     /// candidate index as the last tie-break. Only when every field fits its 14/16-bit lane; false = use the general comparator.
     /// Result: mKeys[0..nm).Idx in sorted order.
     /// </summary>
-    bool TryPackedSort(int nm, bool useTier)
+    bool TryPackedSort(int nm, bool useTier, int kNeed)
     {
         if (mPKey.Length < nm) { mPKey = new PKey[nm * 2]; mPKeyTmp = new PKey[nm * 2]; }
         var a = mPKey; bool f6 = Feat(6);
@@ -478,6 +481,24 @@ public sealed unsafe partial class FullSolver
             a[k].Hi = (f6 && m.RevBad ? 1UL << 50 : 0UL) | (ulong)w << 48 | (ulong)tier << 46 | (ulong)m.Oop << 32 | (ulong)(0xFFFF - m.Packed) << 16 | (ulong)m.R;
             a[k].Lo = (ulong)m.Room << 48 | (ulong)m.Hot << 32 | (ulong)(0xFFFF - m.Mobility) << 16 | (ulong)m.Plen;
             a[k].Idx = k;
+        }
+        if (kNeed * 3 <= nm && kNeed <= 64)
+        {
+            // partial selection: the kNeed smallest in order; the remaining candidates follow in index order (only their number of unused moves is read)
+            var top = mPKeyTmp; int cnt = 0;
+            for (int k = 0; k < nm; k++)
+            {
+                if (cnt == kNeed && !PLess(a[k], top[kNeed - 1])) continue;
+                var x = a[k]; int j = cnt < kNeed ? cnt++ : kNeed - 1;
+                while (j > 0 && PLess(x, top[j - 1])) { top[j] = top[j - 1]; j--; }
+                top[j] = x;
+            }
+            if (mPSeen.Length < nm) mPSeen = new uint[nm * 2];
+            uint stp = ++mPStamp; if (stp == 0) { Array.Clear(mPSeen); stp = mPStamp = 1; }
+            for (int j = 0; j < kNeed; j++) { mKeys[j].Idx = top[j].Idx; mPSeen[top[j].Idx] = stp; }
+            int o = kNeed;
+            for (int k = 0; k < nm; k++) if (mPSeen[k] != stp) mKeys[o++].Idx = k;
+            return true;
         }
         var src = a; var dst = mPKeyTmp;
         for (int i = 0; i < nm; i += 8)
@@ -690,7 +711,7 @@ public sealed unsafe partial class FullSolver
                     if (mRevExits.Contains(cExit)) cGroupDup = true; else cDistinct = true;
                 }
             }
-            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, AlreadyUsed = cAlready, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterMemo(cm, cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
+            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, AlreadyUsed = cAlready, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterMemo(cm, cur, i, t) : 0, Mobility = mob, Np = mCandNP, Explorer = expl, AccStart = accS, AccLen = accL };
         }
         SetOcc(t, false);
         return true;
@@ -786,7 +807,8 @@ public sealed unsafe partial class FullSolver
         SortUtil.Insertion(child);
         SetOcc(b, false); SetOcc(t, true);
         int sideC = PlayerAfter(t, dirs[lastDir]);
-        int np = Reach(sideC, mark2);
+        // the child's region was flooded when the move was generated; only the cluster/dead-zone checkers read the stamped region
+        int np = mApplyNp != 0 && cl == null && dz == null ? mApplyNp : Reach(sideC, mark2);
         long tcl = Prof.Start();
         bool clDead = cl != null && cl.Dead(occ, t, sideC, mark2, stamp, -1);
         Prof.Stop(12, tcl);
@@ -901,6 +923,7 @@ public sealed unsafe partial class FullSolver
             hfAddDist = hfRank ? mmvScore[(int)e.Move].Hot : -1;
             if (pfOn) { var ms = mmvScore[(int)e.Move]; pfNext = PfFest.Tuple.FromMove(ms.Oop, (int)ms.Room, ms.Hot, (int)ms.Mobility); pfHave = true; }
             mAddRoom = pfOn || hfRank ? -1 : (int)mmvScore[(int)e.Move].Room;
+            mApplyNp = mmvNp[(int)e.Move];
             int cid = MApply(id, mv & ~MMoveUsed, cur, child, h, st, parentHash, out int ch);
             mAddRoom = -1;
             hfAddDist = -1; pfHave = false;

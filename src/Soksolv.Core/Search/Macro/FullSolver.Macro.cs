@@ -19,6 +19,8 @@ public sealed unsafe partial class FullSolver
     readonly ChunkList<MacroAux> maux = new();
     readonly ChunkList<ulong> mmv = new();            // move arena (Go s.mv)
     readonly ChunkList<MoveScore> mmvScore = new();   // Go s.mvScore
+    readonly ChunkList<ushort> mmvNp = new();         // normalised player cell (minimum cell of the child's region) of each stored move, 0 = unknown
+    int mApplyNp;                                     // mmvNp of the move being applied
     readonly List<MacroEdge> medges = new();
     readonly List<FeatureCell> mcells = new();
     readonly List<FessHeap> mqueues = new();
@@ -34,7 +36,7 @@ public sealed unsafe partial class FullSolver
 
     struct MCand
     {
-        public int I, B, T, R, Packed, Plen, Side, Room, Oop, Progress, Hot, Mobility; public bool Explorer;
+        public int I, B, T, R, Packed, Plen, Side, Room, Oop, Progress, Hot, Mobility, Np; public bool Explorer;
         public ulong ScoreKey;
         public bool Undo, Internal, DeadChild, GroupDupExit, DistinctExit, Stored, AlreadyUsed; public ulong ExitKey; public int AccStart, AccLen, Tier;
         public readonly bool RevBad => Undo || Internal || DeadChild;
