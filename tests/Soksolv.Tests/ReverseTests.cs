@@ -27,6 +27,39 @@ public class ReverseTests
         Assert.Equal(pushes, r.Solution.Count(char.IsUpper));
     }
 
+    // Node-capped runs of the default lane (supply, macros, novelty, types, walks): expansions equal Go's (bench/lane-parity.py).
+    [Theory]
+    [InlineData("Holland_81_27", 99193)]
+    [InlineData("Factor_SasquatchII_50_24", 97675)]
+    [InlineData("SokHard_163_23", 98035)]
+    [InlineData("Dive_Sven_1623_197", 95874)]
+    public void CappedRunsMatchGoExpansions(string level, long nodes)
+    {
+        var o = ReverseRunner.Config(2, 4);
+        o.NodeBudget = 100000;
+        var r = ReverseRunner.Solve(TestPaths.Level(level), o, 120);
+        Assert.False(r.Solved);
+        Assert.Equal(nodes, r.Nodes);
+    }
+
+    // The search itself does not allocate on the GC heap: doubling the node cap adds (almost) no managed bytes.
+    [Fact]
+    public void SteadyStateDoesNotAllocate()
+    {
+        var rows = TestPaths.Level("Holland_81_27");
+        long Run(long cap)
+        {
+            var o = ReverseRunner.Config(2, 4);
+            o.NodeBudget = cap;
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            ReverseRunner.Solve(rows, o, 120);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Run(2000); // warm-up (JIT, statics)
+        long small = Run(20000), large = Run(40000);
+        Assert.True(large - small < 600_000, $"{small} B at 20k nodes, {large} B at 40k nodes");
+    }
+
     [Theory]
     [InlineData("Holland_81_43")]
     [InlineData("GrigrSpecial_40_39")]

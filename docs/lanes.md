@@ -418,6 +418,17 @@ complete meetings between forward slices (`PullDrain`; Go: a drain goroutine). T
 **Not ported / known gaps.** The generator-only config of the lane never runs the pull search (as Go); `-hub-inject`, `relayBack`, the idle-ring record keeping (`hubRec`, trace extras), `RetainFwdMail`
 (mail-only), elastic memory (`budgetP` shares by lane), the toward lane's meetings and `towardStop` mid-slice polling (here: 50 ms slices).
 
+### hub-gen / portfolio results (16th fork; shared 4-core Xeon with load average 9-16 from other agents: counts are noisy, compare counts first)
+* **hub-gen alone, real wall clock** (`bench/hub-timing.py hub-gen 10 3`, JIT build, Go `-procs 1`): testdata 24 levels: Go 54 / C# 55 solved runs of 72; hard.tsv (28 levels): Go 27 / C# 27 of 84 (same set of
+  solved levels). Time on solved levels: JIT start-up adds 0.1-0.5 s on quick levels (Microban_155_65 0.07 s vs 0.41 s) and 1.0-1.7x on mid levels; with the AOT build the slow solves are 0.9-1.4x Go
+  (Sasquatch_III_50#30 3.85/3.49 s, VII_50#38 2.22/2.37 s, VI_50#34 1.95/1.99 s, V_50#44 3.85/5.26 s, Aymeric_273 1.48/1.77 s; Go/C#).
+* **Portfolio vs Go** (`bench/portfolio-cmp.py 10 only_go_r4.txt 3`, AOT build, Go `-t 10 -procs 4`; the 25 boards Go's portfolio solves and the previous C# portfolio did not): Go 39 / C# 32 solved
+  runs of 75. Boards solved by both: 15 of 25 (Sasquatch VIII#35, Small chessboards#37, SokoStation#222, Sokoban Revenge#212, Sonic -3-#19, Sven Egevad#1903, Bagatelle 2#7, beear#91, IAG#6, ...).
+  Go-only after this fork: Sasquatch_50#40, Sven_1623#1560, Kevin -01-#26, Sasquatch XI#15 (Go solves them in 2-9 s but with a different winning lane from run to run — pull, fa2, hub-gen, toward — i.e. marginal under
+  load; repeating Go alone gave 1/3-3/3). C#-only: Sasquatch II_50#10, Premysl Zika#146, Primus gradus#56. The C# portfolio also runs the `full` lane (Go's `fullLane = false`) and has no
+  `-procs`: ~11 threads on 4 cores vs Go's 8 lanes; `-no-full` / `-no-reverse` switches exist for experiments (Kevin -01-#26: novelty alone solves it in 4.3 s in both; in the C# portfolio each lane gets
+  ~1/3 core). `SOKSOLV_LANE_DEBUG=1` prints every lane's result.
+
 ### hub-pull results (15th fork; machine: shared 4-core Xeon, JIT build, `-strategy hub-pull -procs 1 -t 10`, 3 runs per level)
 * **Node-slice parity** (`bench/hub-parity.py`, retarget reuse on, vs the patched Go): testdata (24 files) 24/24 identical at slice/nodes 256/100k, 1000/120k, 4000/150k, 1000/20k;
   no-reuse ablation (`RETARGET_REUSE=0`, 512/60k) 24/24; LTS 42-level list at 1000/60k 42/42. Compared: solved, pushes and the 11 HUBRACE counters (pull/base/forward expansions,

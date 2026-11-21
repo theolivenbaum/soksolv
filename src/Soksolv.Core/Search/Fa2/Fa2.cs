@@ -247,8 +247,8 @@ public sealed unsafe partial class FullSolver
     bool Fa2DeadLate(int[] cur, int i, int t, int side, int[] child, ulong stateHash)
     {
         ulong mk = Fa2MemoKey(stateHash, t);
-        if (fa2LiveMemo.Has(mk)) { fa2MemoHits++; return false; }
-        if (fa2DeadMemo.Has(mk)) { fa2MemoHits++; return true; }
+        if (!fa2NoMemo && fa2LiveMemo.Has(mk)) { fa2MemoHits++; return false; }
+        if (!fa2NoMemo && fa2DeadMemo.Has(mk)) { fa2MemoHits++; return true; }
         bool dead = Fa2DeadLateCompute(cur, i, t, side, child);
         (dead ? fa2DeadMemo : fa2LiveMemo).Insert(mk);
         return dead;
@@ -356,6 +356,9 @@ public sealed unsafe partial class FullSolver
     // pure function of that triple, and the same child is reached again from other parents and again at pop time.
     readonly U64Set fa2LiveMemo = new(), fa2DeadMemo = new();
     long fa2MemoHits;
+    // Opt-in only (SOKSOLV_FA2MEMO=1): skipping repeated cluster/dead-zone proofs is NOT parity-exact (the checkers are history dependent: lossy caches), Sven_1623#901 diverges.
+    static readonly bool fa2FastMemo = Environment.GetEnvironmentVariable("SOKSOLV_FA2MEMO") == "1";
+    static readonly bool fa2NoMemo = !fa2FastMemo, fa2NoVer = !fa2FastMemo;
     public void F2MemoReport() { }
     static ulong Fa2MemoKey(ulong stateHash, int t) => (stateHash + (ulong)t) * 0x9E3779B97F4A7C15UL ^ (ulong)t << 17;
     static readonly bool fa2Check = Environment.GetEnvironmentVariable("SOKSOLV_FA2CHECK") == "1";
