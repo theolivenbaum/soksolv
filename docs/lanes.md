@@ -55,3 +55,55 @@ direction (`mark[b-d]`, push legality, dead squares from goal distances, plan4�
 * [ ] hub-pull: hubrace.go (393), hubstrata.go (255) → `-strategy hub-pull`
 * [ ] hub-gen/hub: hubgen.go (1037), hub.go (1112), fess_toward.go (388) + hfsched.go (58) → `-strategy hub-gen|hub`
 * [ ] Portfolio lanes (hub-gen, hub-pull) once the above run; timed behaviour: `hubUnit(T)`, doubling windows, StallScale.
+
+---
+
+# Pull, novelty (and toward) — status (seventh fork)
+
+Machine for all numbers: Intel Xeon @ 2.10GHz, 4 vCPU shared with other forks' runs (niced), .NET 11 RC3 Native AOT build vs Go 1.2x
+(`bench/lane-parity.py`, `bench/lane-timing.py` print/compare; both print the machine header via `-header`).
+
+## `pull` — DONE, exact parity
+`-strategy pull` = `FullSolver.SolvePull` (`Search/Pull/FullSolver.Pull.cs`): the macro engine in **pull direction**. A pull view of the level
+(boxes on the real goals, start squares as goals, one root per player zone of the solved position) runs through the existing macro
+solver with `pull = true`; `front()/playerAfter()/supportCell()` generalise the push geometry at the ~12 sites that matter at default
+flags (distance BFS, box search, hotspot rows, move access, apply). Pull-specific: spread feature (`packed = Σ spreadDist / 4`,
+incremental per child), `pullFreezeDead` (64-visit frozen-group proof, replaces the push deadlock family), no cluster / side-dead /
+deadzone / PI-corral / displacement / basin / packing plan, best-state feasibility (`PullBestFeasible`), multi-root start, solved when all
+boxes reach start squares with the real player in the region → `pullTail` (pulls reversed) + `meet.Complete` walking → forward LURD.
+Not ported (not on the standalone path): perimeter tables / meetings (`publishCandidate`, `pullPostMeetings`, mailboxes), pfOn
+(Festival-order pull used by the hub lanes), revive-diversify restarts.
+
+| check (Go `-strategy pull -procs 1 -nodes N` vs C# `-parity`) | result |
+|---|---|
+| 19 testdata levels, N=5000 (solved, pushes, expanded, stored, generated, duplicates) | 19/19 identical |
+| + 40 sampled LTS levels, N=20000 | 59/59 identical |
+| equal-work time, N=20000, 17 testdata levels | Go 7.2 s, C# 6.7 s (**0.93x**); wide levels (Sasquatch) 1.2–1.4x slower (word-parallel box search not ported) |
+| mean peak memory | Go 14.9 MB, C# 8.8 MB |
+
+## `novelty` — DONE, exact parity
+`-strategy novelty` = `FullSolver.SolveNovelty`: the macro lane as Go's laneID 5 (v1 sink plan, **no plan4, no alt engine**) with
+`novelty = 100`: per FESS cell memory of box squares (width 1), box-square pairs (width 2, `Novelty2`) and access capability facts
+(`AccessNovelty`: push sides, passage, displacement; recorded by `MMoveAccess`), novel moves cost nothing, tiers 0–3 order them
+(StableWindows: recorded per node for reopened windows). Code: `Macro/FullSolver.MacroOpen.cs` (`MNoveltyBlock`, tier keys),
+`Macro/FullSolver.MacroHot.cs` (fact recording), `Novelty/FullSolver.Novelty.cs`.
+
+| check (Go `-strategy novelty -procs 1 -nodes N` vs C# `-parity`) | result |
+|---|---|
+| 19 testdata levels, N=3000 (incl. 5 solved, same pushes) | 19/19 identical |
+| + 40 sampled LTS levels, N=20000 | 59/59 identical |
+| equal-work time, N=5000, 17 testdata levels | Go 7.4 s, C# 7.1 s (**0.96x**) |
+| mean peak memory | Go 13.1 MB, C# 8.6 MB |
+
+Both lanes are in `Portfolio` (`novelty` on by default, `pull` opt-in with `-pull`: without the backward perimeter it rarely finishes a
+level alone and would only burn a core).
+
+## `toward` / `tfwd` / `hf` — NOT ported (scoped)
+Go's `toward` lane cannot run alone: it waits for the pull lane's best state (`meet.Best[PullLane]`) and then runs the FESS
+"toward" search (`fessTowardRealWithPrev`, fess_toward.go) against that board, meeting the live perimeter. The deterministic
+stand-alone form is `-strategy hf` (pull for 1/3 of the nodes, then toward). Coverage of `hf -nodes 20000` on testdata (executed
+lines): solver.go 1030/1586 (target ranking `tgt*`, `hfRank` features), deadzone 808, corral_fest.go 231, diagdead 124, meet.go 111
+(perimeter tables / `Complete`), pullfest 0 (pfOn off), fess_toward 49, festineff 61, incremental_match 45, hfsched 31, plus the
+already ported macro/pull code. Needs: target-board machinery (`setTarget`, `tgtDist/tgtPocket`, `hfRank` scoring in open/advisors,
+`hfMatchParent` incremental matching), `festCorral`, `diagdead`, `festIneff`, and the in-process `meet` tables with mailboxes (shared with
+the hub family). Estimate ~1.5k Go lines; it is the first thing to port once the perimeter exists, together with the hub lanes.

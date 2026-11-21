@@ -9,6 +9,7 @@ using Soksolv.Search.Reverse;
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
+bool portPull = false, portNovelty = true;
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
 var fa2o = new Fa2Options();
@@ -32,6 +33,8 @@ for (int i = 0; i < args.Length; i++)
         case "-cluster-cap": ClusterChecker.StateCap = int.Parse(args[++i]); break;
         case "-procs": i++; break; // accepted for CLI compatibility (single lane for now)
         case "-strategy": strategy = args[++i]; break;
+        case "-pull": portPull = true; break;           // add the pull lane to the portfolio (off by default: no backward perimeter yet)
+        case "-no-novelty": portNovelty = false; break;
         case "-rev-lanes": revLanes = int.Parse(args[++i]); break;
         case "-rev-supply": revSupply = int.Parse(args[++i]); break;
         case "-rev-novelty": revExtra = 1; break;
@@ -93,7 +96,7 @@ SolveResult Run(string[] r, double tl)
     if (strategy == "fa2") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveFa2(r, opt, tl); }
     if (strategy == "novelty") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveNovelty(r, opt, tl); }
     if (strategy == "macro") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveMacroLane(r, opt, tl); } // main.go -stall-scale
-    return Portfolio.Solve(r, new PortfolioOptions { NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
+    return Portfolio.Solve(r, new PortfolioOptions { Pull = portPull, Novelty = portNovelty, NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
 }
 SolveResult res;
 {

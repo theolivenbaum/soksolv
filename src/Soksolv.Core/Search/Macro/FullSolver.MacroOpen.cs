@@ -11,6 +11,7 @@ public sealed unsafe partial class FullSolver
     readonly List<ulong[]?> mNovSeen = new(), mNovPushSeen = new();
     readonly HashSet<ulong> mNovPairs = new(), mNovAccess = new();
     readonly List<ulong> mNovWords = new(), mNovT0 = new(), mNovT1 = new();
+    long mParentSpread;
     int mOpenId, mOpenCands, mParentOop, mParentRoom, mParentConn, mParentPackedF; uint mOpenSt; int[]? mHotCounts;
     DisplacementLandmarks? dl; bool dlInit; ulong mCmdMask, mUnpinMask;
 
@@ -68,6 +69,7 @@ public sealed unsafe partial class FullSolver
         mPlan?.NodeSetup(cur);
         Prof.Stop(5, tc);
         mAccN = 0;
+        if (pull) { long sp = 0; foreach (int bx in cur) sp += spreadDist[bx]; mParentSpread = sp; }
         { int bk0 = (int)maux[id].Bucket; mUnpackedRegime = bk0 < mcells.Count && parentPacked < mcells[bk0].Packed; }
         mOpenId = id; mOpenSt = st; mParentOop = parentOop; mParentRoom = parentRoom; mHotCounts = counts;
         for (int i = 0; i < cur.Length; i++)
@@ -411,7 +413,7 @@ public sealed unsafe partial class FullSolver
                 packed = mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.Packed(occ) : cpacked; progress = cphase;
                 oop = MOutOfPlan(cur, cphase, i, t);
             }
-            else { packed = MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
+            else { packed = pull ? (int)((mParentSpread - spreadDist[cur[i]] + spreadDist[t]) / SpreadBucket) : MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
             if (mCmdMask != 0 && dl != null && r <= mParentConn)
             {
                 int gIdxB = dl.GoalIdx[cur[i]];

@@ -64,3 +64,9 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [x] HubReach (hubreach.go) ported, exact vs Go goldens (HubTests)
 - [ ] BLOCKER: pull-direction mode of the C# macro engine (+ `-strategy pull` parity), then pullfest/meet/festineff
 - [ ] hub-pull (hubrace/hubstrata), hub-gen/hub (hubgen/hub/toward/hfsched), portfolio lanes
+
+## Lanes pull / novelty / toward (seventh fork)
+- [x] pull: exact parity 59/59 (testdata+LTS sample), 0.93x Go time, -strategy pull, Portfolio (opt-in)
+- [x] novelty: exact parity 59/59, 0.96x Go time, -strategy novelty, Portfolio (default on)
+- [ ] toward/tfwd/hf: needs target-board ranking (hfRank/tgt*), festCorral, diagdead, festIneff, meet tables — see docs/lanes.md
+- [ ] pull: perimeter publishing/meetings, pfOn (Festival-order), revive restarts; wide-level word-parallel box search speed
