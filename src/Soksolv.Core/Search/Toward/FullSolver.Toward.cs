@@ -379,7 +379,7 @@ public sealed unsafe partial class FullSolver
         meetPending.Clear();
         mBest = -1; mNext = 0; mTurn = 0;
         mcells.Clear(); mcellIDs.Clear(); mqueues.Clear();
-        mmv.Clear(); mmvScore.Clear(); medges.Clear(); mNovWords.Clear(); mNovT0.Clear(); mNovT1.Clear(); mRevWords.Clear();
+        mmv.Clear(); mmvScore.Clear(); mmvNp.Clear(); medges.Clear(); mNovWords.Clear(); mNovT0.Clear(); mNovT1.Clear(); mRevWords.Clear();
         hfOwn.Clear(); hfBest.Clear();
         int nNodes = nodes.Count;
         var boxes = new int[n];

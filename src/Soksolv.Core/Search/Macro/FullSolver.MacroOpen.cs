@@ -310,6 +310,7 @@ public sealed unsafe partial class FullSolver
             ref var m = ref mCands[k];
             ulong word = (ulong)m.I | (ulong)m.T << 15 | (ulong)mWeights[k] << 30 | (ulong)m.Side << 31 | (ulong)m.R << 33 | (m.Plen < 0x8000 ? (ulong)m.Plen << 48 : 0UL);
             mmv.Add(m.AlreadyUsed ? word | MMoveUsed : word);
+            mmvNp.Add((ushort)(m.Np > 0 && m.Np < 65536 ? m.Np : 0));
             mmvScore.Add(new MoveScore { Oop = (ushort)m.Oop, Packed = (ushort)m.Packed, Conn = (ushort)m.R, Hot = (ushort)Math.Min(m.Hot, 65535), Room = (uint)m.Room, Mobility = (uint)m.Mobility });
         }
         ref var a = ref maux[id];
@@ -710,7 +711,7 @@ public sealed unsafe partial class FullSolver
                     if (mRevExits.Contains(cExit)) cGroupDup = true; else cDistinct = true;
                 }
             }
-            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, AlreadyUsed = cAlready, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterMemo(cm, cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
+            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, AlreadyUsed = cAlready, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterMemo(cm, cur, i, t) : 0, Mobility = mob, Np = mCandNP, Explorer = expl, AccStart = accS, AccLen = accL };
         }
         SetOcc(t, false);
         return true;
@@ -806,7 +807,8 @@ public sealed unsafe partial class FullSolver
         SortUtil.Insertion(child);
         SetOcc(b, false); SetOcc(t, true);
         int sideC = PlayerAfter(t, dirs[lastDir]);
-        int np = Reach(sideC, mark2);
+        // the child's region was flooded when the move was generated; only the cluster/dead-zone checkers read the stamped region
+        int np = mApplyNp != 0 && cl == null && dz == null ? mApplyNp : Reach(sideC, mark2);
         long tcl = Prof.Start();
         bool clDead = cl != null && cl.Dead(occ, t, sideC, mark2, stamp, -1);
         Prof.Stop(12, tcl);
@@ -921,6 +923,7 @@ public sealed unsafe partial class FullSolver
             hfAddDist = hfRank ? mmvScore[(int)e.Move].Hot : -1;
             if (pfOn) { var ms = mmvScore[(int)e.Move]; pfNext = PfFest.Tuple.FromMove(ms.Oop, (int)ms.Room, ms.Hot, (int)ms.Mobility); pfHave = true; }
             mAddRoom = pfOn || hfRank ? -1 : (int)mmvScore[(int)e.Move].Room;
+            mApplyNp = mmvNp[(int)e.Move];
             int cid = MApply(id, mv & ~MMoveUsed, cur, child, h, st, parentHash, out int ch);
             mAddRoom = -1;
             hfAddDist = -1; pfHave = false;
