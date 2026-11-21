@@ -364,4 +364,57 @@ public sealed unsafe partial class FullSolver
     }
 
     int MChildRegions(int t) => artComps - 1 + maP[t].Pieces;
+
+    static readonly bool[] RingNsp = BuildRingNsp();
+    /// <summary>ring (bit k = ring cell k free; order up-left, up, up-right, right, down-right, down, down-left, left; odd = orthogonal):
+    /// the free orthogonal neighbours all lie in one run of free ring cells, so removing the centre cannot disconnect them.</summary>
+    static bool[] BuildRingNsp()
+    {
+        var t = new bool[256];
+        for (int mask = 0; mask < 256; mask++)
+        {
+            int start = -1;
+            for (int k = 0; k < 8; k++) if ((mask >> k & 1) == 0) { start = k; break; }
+            int runs = 0; bool orth = false;
+            if (start < 0) runs = 1;
+            else
+                for (int j = 1; j <= 8; j++)
+                {
+                    int k = (start + j) & 7;
+                    if ((mask >> k & 1) != 0) { if ((k & 1) != 0 && !orth) { orth = true; runs++; } }
+                    else orth = false;
+                }
+            t[mask] = runs <= 1;
+        }
+        return t;
+    }
+
+    int mCompsF, mSplitSeen; bool mArtDone;   // per box search: components of the free floor (searched box lifted), and whether MArtic ran
+    public static bool RegionRingOff = Environment.GetEnvironmentVariable("SOKSOLV_REGRING_OFF") == "1";   // test hook
+
+    /// <summary>
+    /// Number of empty-floor regions of the child (t occupied, the searched box lifted) for the 1st, 2nd, ... alive candidate of a box search.
+    /// A candidate whose 8-ring shows it cannot split its component removes 0 or 1 pieces (an isolated cell vanishes): the child's count follows from the
+    /// component count of the floor without t, learned from an earlier such candidate; only separator cells need the Tarjan pass (<see cref="MArtic"/>).
+    /// </summary>
+    int MChildRegionCount(int t, int nth)
+    {
+        if (!RegionRingOff)
+        {
+            int w = W; byte* bk = blk;
+            int mask = (bk[t - w - 1] == 0 ? 1 : 0) | (bk[t - w] == 0 ? 2 : 0) | (bk[t - w + 1] == 0 ? 4 : 0) | (bk[t + 1] == 0 ? 8 : 0)
+                | (bk[t + w + 1] == 0 ? 16 : 0) | (bk[t + w] == 0 ? 32 : 0) | (bk[t + w - 1] == 0 ? 64 : 0) | (bk[t - 1] == 0 ? 128 : 0);
+            if (RingNsp[mask])
+            {
+                int pieces = (mask & 0xAA) != 0 ? 1 : 0;
+                if (mCompsF >= 0) return mCompsF - 1 + pieces;
+                int r0 = Regions();
+                mCompsF = r0 + 1 - pieces;
+                return r0;
+            }
+        }
+        if (!mArtDone && mSplitSeen++ < 2) return Regions();   // a lone separator candidate is cheaper by one flood than a whole-board Tarjan pass
+        if (!mArtDone) { SetOcc(t, false); MArtic(); SetOcc(t, true); mArtDone = true; mCompsF = artComps; }
+        return MChildRegions(t);
+    }
 }

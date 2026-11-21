@@ -503,6 +503,7 @@ public sealed unsafe partial class FullSolver
             Array.Clear(m3); Array.Clear(mseen); Array.Clear(mpost); mpstamp = mbstamp = 0;
         }
         uint bs = ++mbstamp;
+        mSdBuilt = false;
         int qn = 0;
         for (int di = 0; di < 4; di++)
         {

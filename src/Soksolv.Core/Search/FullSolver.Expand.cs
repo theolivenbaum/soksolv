@@ -133,7 +133,7 @@ public sealed unsafe partial class FullSolver
     // placed on t. A child moving b to t then has comps - 1 + pieces[t] regions: O(1) per candidate.
     int artComps;
     /// <summary>Test hook: verify every incremental region count against a full flood.</summary>
-    public static bool CheckRegions;
+    public static bool CheckRegions = Environment.GetEnvironmentVariable("SOKSOLV_CHECK") == "1";
 
     void ComputeArticulation() => MArtic();   // one pointer Tarjan pass (MacroBits.cs), shared by full / macro / fa2
 
@@ -252,10 +252,10 @@ public sealed unsafe partial class FullSolver
     // ---- word-parallel pair search (Go pairbits.go: pairDeadFromBits; boards up to 64 wide) -------------------------------------------
     ulong[]? bbFloorA, bbFreeA, bbRegA, bbRemA;
     ulong* bbFloor, bbFree, bbReg, bbRem; int bbRows;
-    public static bool PairBitsOff, PairBitsCheck;   // test hooks
+    public static bool PairBitsOff, PairBitsCheck = Environment.GetEnvironmentVariable("SOKSOLV_PAIR_CHECK") == "1";   // test hooks
 
     /// <summary>Row flood with a dirty-row worklist (rows ≤ 64): a row is re-examined only when a neighbouring row changed; passes alternate up/down like the sweeps they replace.</summary>
-    static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp, bool clear = true)
+    internal static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp, bool clear = true)
     {
         if (clear) for (int i = 0; i < rows; i++) reg[i] = 0;
         reg[rp] = FillRow(1UL << cp, free[rp]);
