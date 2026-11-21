@@ -116,12 +116,26 @@ public sealed unsafe partial class FullSolver
     /// <summary>FloodRowsDirty on rows whose reg is already zero (the caller cleared them).</summary>
     static void FloodRowsDirtyC(ulong* free, ulong* reg, int rows, int rp, int cp) => FloodRowsDirty(free, reg, rows, rp, cp, false);
 
+    ulong[]? bbParFreeA; ulong* bbParFreeP;
     byte[]? accCntA; byte* accCnt; int accMp, accParLo, accParHi; int[] accSupOff = new int[4];
     /// <summary>Per-node tables of the delta move-access terms: the parent's region rows, the number of (box, direction) pairs
     /// supported by each cell (<c>accCnt</c>), the parent's mobility <c>accMp</c> = sum of accCnt over the parent's region.</summary>
     void BbBuildParent(uint st, ReadOnlySpan<int> cur)
     {
         int lo = bbH + 2, hi = -1;
+        if (bbH + 2 <= 64 && !CheckAccessBits)
+        {
+            // the parent's region as one row flood (the searched box put back into the free rows) instead of reading the stamp of every cell
+            if (bbParFreeA == null) { bbParFreeA = GC.AllocateArray<ulong>(bbH + 2, pinned: true); bbParFreeP = (ulong*)Unsafe.AsPointer(ref bbParFreeA[0]); }
+            ulong* pf = bbParFreeP;
+            for (int r = 0; r < bbH + 2; r++) pf[r] = bbNFreeP[r];
+            int b = cur[mVisitI];
+            pf[b / W + 1] &= ~(1UL << (b % W));
+            int pl = nodes.Player(mOpenId);
+            FloodRowsDirty(pf, bbParP, bbH + 2, pl / W + 1, pl % W);
+            for (int r = 1; r <= bbH; r++) if (bbParP[r] != 0) { if (lo > r) lo = r; hi = r; }
+        }
+        else
         for (int r = 0; r < bbH; r++)
         {
             ulong m = 0;
