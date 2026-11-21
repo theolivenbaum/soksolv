@@ -73,7 +73,7 @@ public sealed unsafe partial class FullSolver
 
         var cur = new int[n]; var child = new int[n];
         Array.Copy(lv.Boxes, cur, n);
-        Array.Sort(cur);
+        SmallSort.Ints(cur);
         ulong bh = 0; bool allGoal = true;
         foreach (int b in cur)
         {
@@ -115,7 +115,7 @@ public sealed unsafe partial class FullSolver
             int b = e.B;
             if (!ReferenceEquals(curArr, child)) Array.Copy(curArr, child, n);
             child[Fa2IdxOf(curArr, b)] = e.T;
-            Array.Sort(child);
+            SmallSort.Ints(child);
             for (int c = 0; c < cells; c++) if (occ[c]) SetOcc(c, false);
             ulong* pk2 = nodes.Key(id);
             for (int w = 0; w < nodes.Nw; w++) ckey[w] = pk2[w];
@@ -151,7 +151,7 @@ public sealed unsafe partial class FullSolver
             int eb = e.B, et = e.T;
             Array.Copy(cur, child, n);
             child[Fa2IdxOf(cur, eb)] = et;
-            Array.Sort(child);
+            SmallSort.Ints(child);
             SetOcc(eb, false); SetOcc(et, true);
             int side = et - dirs[e.Dir];
             int np = Reach(side, mark);

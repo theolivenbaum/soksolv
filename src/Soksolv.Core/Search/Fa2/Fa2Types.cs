@@ -82,3 +82,18 @@ public sealed class U64Set
         }
     }
 }
+
+/// <summary>Allocation-free small sorts (Array.Sort/Span.Sort allocate a comparison delegate per call under Native AOT).</summary>
+public static class SmallSort
+{
+    public static void Ints(int[] a) => Ints(a.AsSpan());
+    public static void Ints(Span<int> a)
+    {
+        for (int i = 1; i < a.Length; i++)
+        {
+            int v = a[i], j = i - 1;
+            while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; j--; }
+            a[j + 1] = v;
+        }
+    }
+}

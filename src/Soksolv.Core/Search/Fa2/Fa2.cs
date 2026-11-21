@@ -585,7 +585,7 @@ public sealed unsafe partial class FullSolver
         }
         if (fa2Ord.Length < nc) Array.Resize(ref fa2Ord, Math.Max(nc, fa2Ord.Length * 2));
         for (int i = 0; i < nc; i++) fa2Ord[i] = new Fa2Ord { Key = cand[i].Key, Wi = (uint)cand[i].W << 31 | (uint)i };
-        Array.Sort(fa2Ord, 0, nc, Fa2OrdCmp.Instance);
+        Fa2OrdSort(fa2Ord, nc);
         int win = opt.Fa2.EdgeWin;
         if (win > 0 && (fa2Rebase >= 0 || nc > win + 1))
         {
@@ -596,6 +596,30 @@ public sealed unsafe partial class FullSolver
         for (int i = 0; i < nc; i++) fa2Ed.Add(cand[(int)(fa2Ord[i].Wi & (1u << 31) - 1)].Edge());
         node.ELen = nc;
         return -1;
+    }
+
+    static bool OrdLess(in Fa2Ord a, in Fa2Ord b)
+    {
+        if (a.Wi >> 31 != b.Wi >> 31) return a.Wi >> 31 < b.Wi >> 31;
+        if (a.Key != b.Key) return a.Key < b.Key;
+        return (a.Wi & (1u << 31) - 1) < (b.Wi & (1u << 31) - 1);
+    }
+    /// <summary>Heapsort (total order, no allocation).</summary>
+    static void Fa2OrdSort(Fa2Ord[] a, int n)
+    {
+        for (int i = n / 2 - 1; i >= 0; i--) Sift(a, i, n);
+        for (int e = n - 1; e > 0; e--) { (a[0], a[e]) = (a[e], a[0]); Sift(a, 0, e); }
+        static void Sift(Fa2Ord[] a, int i, int n)
+        {
+            while (true)
+            {
+                int l = 2 * i + 1, m = i;
+                if (l < n && OrdLess(a[m], a[l])) m = l;
+                if (l + 1 < n && OrdLess(a[m], a[l + 1])) m = l + 1;
+                if (m == i) return;
+                (a[i], a[m]) = (a[m], a[i]); i = m;
+            }
+        }
     }
 
     sealed class Fa2OrdCmp : IComparer<Fa2Ord>
