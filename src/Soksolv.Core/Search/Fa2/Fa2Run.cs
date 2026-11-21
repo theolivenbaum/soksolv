@@ -48,6 +48,7 @@ public sealed unsafe partial class FullSolver
         double limitMs = timeLimitSec > 0 && opt.NodeBudget == 0 ? timeLimitSec * 1000 : 0;
         bool Expired() => (mNodeLimit > 0 && fa2ExpandedN >= mNodeLimit) || opt.Stop || (opt.Cancel?.Stopped ?? false) || (limitMs > 0 && sw.ElapsedMilliseconds > limitMs);
 
+        MComputeRooms(); MComputeBasin();
         if (Fa2Setup(sw, timeLimitSec) is { } early) { early.TimeMs = sw.Elapsed.TotalMilliseconds; return early; }
 
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
@@ -132,6 +133,7 @@ public sealed unsafe partial class FullSolver
             an2.ECur++;
             if (an2.ECur < an2.ELen) Fa2Push(c, id);
             ulong eh = an2.BoxH ^ fa2Zb[e.B] ^ fa2Zb[e.T] ^ fa2Zp[e.Np];
+            if (fa2Trace) Console.Error.WriteLine($"pop c={c} id={id} b={e.B} t={e.T} seen={fa2Seen.Has(eh)} np={e.Np} side={e.Side} pl={nodes.Player(id)}");
             if (fa2Seen.Has(eh)) { fa2Dups++; continue; }
             nodes.Unpack(id, cur);
             foreach (int b in cur) SetOcc(b, true);
@@ -143,14 +145,15 @@ public sealed unsafe partial class FullSolver
             int side = et - dirs[e.Side];
             int np = Reach(side, mark);
             uint st = stamp;
+            if (fa2Trace) Console.Error.WriteLine("  child " + string.Join(" ", child) + $" sideCell={side} np={np}");
             bool dead = false;
             if (cl != null && cl.Dead(occ, et, side, mark, st, -1)) dead = true;
             else if (dz != null && dz.DeadAfter(occ, child, side, et)) dead = true;
             if (dead)
             {
-                fa2LateDead++;
+                fa2LateDead++; if (fa2Trace) Console.Error.WriteLine($"  late dead cl={(cl != null && cl.Dead(occ, et, side, mark, st, -1))} dz.Frozen={dz?.Frozen} matching={dz?.MatchingDead} corrals={dz?.Corrals} searches={dz?.Searches}");
                 fa2Seen.Insert(eh);
-                SetOcc(et, false);
+                foreach (int x in child) SetOcc(x, false);
                 continue;
             }
             if (stamp != st) { Reach(side, mark); st = stamp; }
@@ -206,6 +209,7 @@ public sealed unsafe partial class FullSolver
             mPlan ??= new PackingPlan();
             mPlan.Fest = fa2Fp;
         }
+        if (opt.Fa2.Debug && fa2Fp != null) { Console.Error.Write(" "); foreach (var e in fa2Fp.E) Console.Error.Write($" {e.From}->{e.To}/{e.Until}"); Console.Error.WriteLine($" plan init {fa2Fp.InitNum}"); }
         Fa2SetupRooms();
         return null;
     }

@@ -344,7 +344,7 @@ public sealed unsafe partial class FullSolver
             MBoxSearch(b, st, false, 0, 0, cur);
         }
         int solved = fa2Solved;
-        if (fa2Trace) Console.Error.WriteLine($"fa2 expand id={id} cands={fa2CandN} corral={corral} feasible");
+        if (fa2Trace) { Console.Error.WriteLine($"fa2 expand id= {id} cands= {fa2CandN} corral= {corral}"); for (int q = 0; q < fa2CandN; q++) Console.Error.WriteLine($"  cand b= {fa2Cand[q].B} t= {fa2Cand[q].T} packed= {fa2Cand[q].Packed} conn= {fa2Cand[q].Conn} hot= {fa2Cand[q].Hot} oop= {fa2Cand[q].Oop} key= {fa2Cand[q].Key}"); }
         var cand = fa2Cand;
         int nc = fa2CandN;
         var chosen = fa2Chosen;
