@@ -9,10 +9,7 @@ using Soksolv.Search.Reverse;
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
-<<<<<<< HEAD
 bool portPull = false, portNovelty = true, portFa2 = true;
-=======
-bool portPull = false, portNovelty = true;
 bool noMeet = false;
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
