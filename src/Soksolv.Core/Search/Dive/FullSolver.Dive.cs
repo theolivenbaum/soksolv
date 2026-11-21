@@ -365,8 +365,12 @@ public sealed unsafe partial class FullSolver
         mLastAdded = -1;
         int b = cur[c.I];
         cur.CopyTo(child);
-        child[c.I] = c.T;
-        child.Sort();
+        { // cur is sorted: slide the moved box to its place (Span.Sort allocates in the AOT runtime)
+            int k = c.I, nn = child.Length, tv = c.T;
+            while (k + 1 < nn && child[k + 1] < tv) { child[k] = child[k + 1]; k++; }
+            while (k > 0 && child[k - 1] > tv) { child[k] = child[k - 1]; k--; }
+            child[k] = tv;
+        }
         ulong* pk = nodes.Key(id);
         for (int x = 0; x < nodes.Nw; x++) ckey[x] = pk[x];
         Flip(b); Flip(c.T);

@@ -120,6 +120,18 @@ public sealed unsafe class ClusterChecker
         deadP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref deadArr[0]); goalP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref goalArr[0]);
     }
 
+    /// <summary>Insertion sort for the few cells of a cluster (no delegate/comparer machinery).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void SortSmall(Span<int> a)
+    {
+        for (int i = 1; i < a.Length; i++)
+        {
+            int v = a[i], j = i - 1;
+            while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; j--; }
+            a[j + 1] = v;
+        }
+    }
+
     static ulong KeyOf(ReadOnlySpan<int> cells, int side)
     {
         ulong h = (ulong)side * 0x9E3779B97F4A7C15UL + (ulong)cells.Length;
@@ -162,7 +174,7 @@ public sealed unsafe class ClusterChecker
             }
         if (!cut) return false;
         var cells = cl[..n];
-        cells.Sort();
+        SortSmall(cells);
         ulong k = KeyOf(cells, side) ^ (b.Salt & ~0xFFUL);
         ClusterTable? shared = null, penalties = null;
         if (!Private) { shared = Shared; penalties = SharedPen; }
@@ -319,7 +331,7 @@ public sealed unsafe class ClusterChecker
                 ref var m = ref moves[mi];
                 cur.CopyTo(nb);
                 nb[m.I] = m.To;
-                nb.Sort();
+                SortSmall(nb);
                 bool done = true;
                 for (int i = 0; i < n; i++) if (goalP[nb[i]] == 0) { done = false; break; }
                 if (done) { NAlive++; StAlive += head; return (false, depth + 1); }
@@ -440,7 +452,7 @@ public sealed unsafe class ClusterChecker
                 ref var m = ref moves[mi];
                 cur.CopyTo(nb);
                 nb[m.I] = m.To;
-                nb.Sort();
+                SortSmall(nb);
                 int np = ResolveNp(m.Np, m.From, nb);
                 int ng = g + 1, nh = hh - dist[m.From] + dist[m.To];
                 int ci = Touch(MkKey(nb, np), ng, nh, out _);

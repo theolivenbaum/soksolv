@@ -13,11 +13,12 @@ public sealed unsafe partial class FullSolver
 {
     // ---- state ------------------------------------------------------------------------------------------------------------
     bool fa2On;
-    static readonly long[] F2T = new long[12]; static readonly long[] F2N = new long[12];
-    static long F2S() => Prof.On ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
-    static void F2E(int k, long t0) { if (Prof.On) { F2T[k] += System.Diagnostics.Stopwatch.GetTimestamp() - t0; F2N[k]++; } }
-    static readonly string[] F2Names = ["pushDead", "regions", "packed", "rooms", "hot", "oop+hall", "explorer", "mobility", "boxSearch(all)", "advisors+sort", "deadLate", "setup(parent)"];
-    public static void F2Report(double ms) { if (!Prof.On) return; for (int i = 0; i < F2Names.Length; i++) if (F2N[i] > 0) Console.Error.WriteLine($"fa2prof {F2Names[i],-16} {F2T[i] * 1000.0 / System.Diagnostics.Stopwatch.Frequency,9:F0} ms {F2T[i] * 100.0 / System.Diagnostics.Stopwatch.Frequency / ms,5:F1}% calls {F2N[i],9}"); }
+    static readonly long[] F2T = new long[16]; static readonly long[] F2N = new long[16];
+    static readonly long[] F2B = new long[16]; static readonly long[] f2ab = new long[8]; static int f2sp;
+    static long F2S() { if (!Prof.On) return 0; f2ab[f2sp++] = GC.GetAllocatedBytesForCurrentThread(); return System.Diagnostics.Stopwatch.GetTimestamp(); }
+    static void F2E(int k, long t0) { if (Prof.On) { F2T[k] += System.Diagnostics.Stopwatch.GetTimestamp() - t0; F2N[k]++; F2B[k] += GC.GetAllocatedBytesForCurrentThread() - f2ab[--f2sp]; } }
+    static readonly string[] F2Names = ["pushDead", "regions", "packed", "rooms", "hot", "oop+hall", "explorer", "mobility", "boxSearch(all)", "advisors+sort", "dl.cluster", "setup(parent)", "dl.dz", "dl.reach"];
+    public static void F2Report(double ms) { if (!Prof.On) return; for (int i = 0; i < F2Names.Length; i++) if (F2N[i] > 0) Console.Error.WriteLine($"fa2prof {F2Names[i],-16} {F2T[i] * 1000.0 / System.Diagnostics.Stopwatch.Frequency,9:F0} ms {F2T[i] * 100.0 / System.Diagnostics.Stopwatch.Frequency / ms,5:F1}% calls {F2N[i],9} alloc {F2B[i]/1024,9} KB"); }
     static readonly bool fa2Trace = Environment.GetEnvironmentVariable("SOKSOLV_FA2TRACE") == "1";
     FestPlan? fa2Fp;
     readonly ChunkList<Fa2Aux> fa2Aux = new();
@@ -188,11 +189,12 @@ public sealed unsafe partial class FullSolver
     // ---- helpers ----------------------------------------------------------------------------------------------------------------
     int Fa2Mobility(ReadOnlySpan<int> cur, int moved, int t, uint[] mk, uint st)
     {
-        int cnt = 0;
+        // every neighbour of a box is a (box, side) pair whichever way pushes go: count the ones in the child's player region
+        uint* m = ReferenceEquals(mk, m3) ? m3P : markP; int w = W, cnt = 0;
         for (int i = 0; i < cur.Length; i++)
         {
             int b = i == moved ? t : cur[i];
-            foreach (int d in dirs) if (mk[Front(b, d)] == st) cnt++;
+            cnt += (m[b - w] == st ? 1 : 0) + (m[b + w] == st ? 1 : 0) + (m[b - 1] == st ? 1 : 0) + (m[b + 1] == st ? 1 : 0);
         }
         return cnt;
     }
@@ -227,18 +229,16 @@ public sealed unsafe partial class FullSolver
     /// <summary>The child (occ; m3 == mpstamp its player region, mark == st the parent's) lets the player stand, for the first time, beside an unchanged box with that push free.</summary>
     bool Fa2Explores(ReadOnlySpan<int> cur, int moved, uint st)
     {
-        int b = cur[moved];
+        int b = cur[moved], w = W;
+        uint* m = m3P, mk = markP; byte* bk = blk; uint ps = mpstamp;
         for (int j = 0; j < cur.Length; j++)
         {
             if (j == moved) continue;
             int x = cur[j];
-            foreach (int d in dirs)
-            {
-                int sq = x + d;
-                if (m3[sq] != mpstamp || sq == b || mark[sq] == st) continue;
-                int dst = x - d;
-                if (!wall[dst] && !occ[dst]) return true;
-            }
+            int sq = x - w; if (m[sq] == ps && sq != b && mk[sq] != st && bk[x + w] == 0) return true;
+            sq = x + w; if (m[sq] == ps && sq != b && mk[sq] != st && bk[x - w] == 0) return true;
+            sq = x - 1; if (m[sq] == ps && sq != b && mk[sq] != st && bk[x + 1] == 0) return true;
+            sq = x + 1; if (m[sq] == ps && sq != b && mk[sq] != st && bk[x - 1] == 0) return true;
         }
         return false;
     }
@@ -246,23 +246,61 @@ public sealed unsafe partial class FullSolver
     /// <summary>Apply-time deadlock tests (lazy cluster, corral) on the child of moving cur[i] to t through side; occ holds the parent and is restored.</summary>
     bool Fa2DeadLate(int[] cur, int i, int t, int side, int[] child)
     {
-        int b = cur[i];
-        Array.Copy(cur, child, cur.Length);
-        child[i] = t;
-        Array.Sort(child);
+        int b = cur[i], n = cur.Length;
+        // child = cur with cur[i] replaced by t, kept sorted
+        Array.Copy(cur, child, n);
+        int k = i;
+        while (k + 1 < n && child[k + 1] < t) { child[k] = child[k + 1]; k++; }
+        while (k > 0 && child[k - 1] > t) { child[k] = child[k - 1]; k--; }
+        child[k] = t;
         SetOcc(b, false); SetOcc(t, true);
         try
         {
             int ps = t - dirs[side];
-            if (cl != null)
+            if (cl != null && Fa2ClusterPossible(t))
             {
+                long q0 = F2S();
                 Reach(ps, mark2);
+                F2E(13, q0); q0 = F2S();
                 uint st = stamp;
-                if (cl.Dead(occ, t, ps, mark2, st, -1)) return true;
+                bool dd = cl.Dead(occ, t, ps, mark2, st, -1);
+                F2E(10, q0);
+                if (dd) return true;
             }
-            return dz != null && dz.DeadAfter(occ, child, ps, t);
+            long q1 = F2S();
+            bool r2 = dz != null && dz.DeadAfter(occ, child, ps, t);
+            F2E(12, q1);
+            return r2;
         }
         finally { SetOcc(t, false); SetOcc(b, true); }
+    }
+
+    /// <summary>Whether the cluster of t (t plus the boxes touching it, up to MaxBoxes) has >= 3 boxes and is not all on goals; else ClusterChecker.Dead is false whatever the player region.</summary>
+    bool Fa2ClusterPossible(int t)
+    {
+        Span<int> cl3 = stackalloc int[8];
+        int cn = 1; cl3[0] = t;
+        int maxB = ClusterChecker.MaxBoxes;
+        int w = W;
+        for (int i = 0; i < cn && cn < maxB; i++)
+        {
+            int c = cl3[i];
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if ((dx | dy) == 0) continue;
+                    int x = c + dy * w + dx;
+                    if (x >= 0 && x < occ.Length && occ[x] && cn < maxB)
+                    {
+                        bool dup = false;
+                        for (int j = 0; j < cn; j++) if (cl3[j] == x) { dup = true; break; }
+                        if (!dup) cl3[cn++] = x;
+                    }
+                }
+        }
+        if (cn < 3) return false;
+        for (int i = 0; i < cn; i++) if (!goal[cl3[i]]) return true;
+        return false;
     }
 
     /// <summary>Push distance of a lone box from plan step k's out-of-plan zone, on the board whose walls are the walls plus the step's parked targets.</summary>
