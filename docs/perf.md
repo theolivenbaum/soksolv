@@ -388,3 +388,61 @@ a closure + delegate per `MOpen` (`PackingObligationAdvice(k => MChoose(ref pk, 
 ### Remaining (not in this area)
 hub-pull/hf are now dominated by the macro engine and the proofs: `MPushDead` + dead-zone (11-16%), box-search floods (`BbFlood` 13%), `MArtic` 6%, `MMoveAccessDelta` 3-7%, `RoomBroken`/`MRoomConnChild` in the pull phase (5-8%);
 mine: remaining Hungarian augments of the missed children (5%), `PfFill` 2%, `FestCorral` 3% (the whole-board component labelling per expanded node), hub-gen `Local` 14% / `BiconBits` 18% / flood 15%.
+
+## pull / dive / novelty + frontier (macro engine shared per-candidate and per-node costs)
+
+Method as above (AOT, CPU time of the child, `-parity`, equal work `-nodes 5000`, best of 3, Go and C# back to back on the shared VM, +-10% noise), steered by
+callgrind instruction counts of the AOT binary (`valgrind --tool=callgrind`, `DOTNET_TieredCompilation=0`; copy the whole `artifacts/aot` directory, the `.dbg` file
+carries the symbols). Every step is fingerprint-identical (solved / nodes / pushes / stored / generated / duplicates / hash) against the previous AOT build on the 24
+testdata levels for pull, novelty, macro, hf, dive, fa2, full (`bench/bin-parity.py`, 3000 nodes; every 2nd level at 20000), and equal to the unpatched Go binary
+(`bench/lane-parity.py` pull novelty dive macro fa2 at 5000: 24/24).
+
+### Result (equal-work CPU, 22 testdata levels, 5000 nodes, C# / Go)
+
+| lane | before | after |
+|---|---|---|
+| pull | 0.83 | **0.56** |
+| dive | 0.69 | **0.49** (Dive_Sven_1623_197 0.52 -> ~0.40) |
+| novelty | 0.63 | **0.47** (Sven_1623_197 0.62 -> ~0.45) |
+| macro | 0.62 | 0.54 |
+| hf (shared pull / macro code) | 0.57 | 0.48 |
+| fa2 / full / reverse (untouched lanes, shared helpers) | 0.61 / 0.29 / 0.42 | 0.61 / 0.28 / 0.41 |
+
+Callgrind instruction counts, 3000 nodes, 22 levels, new/old: pull 0.63, dive 0.79 (Sven_1623_197 0.68), novelty 0.74 (Sven_1623_197 0.60), macro ~0.9, hf 0.84.
+Parity: pull/novelty/dive/macro/fa2 24/24 identical to unpatched Go at 5000 nodes (`bench/lane-parity.py`), 24/24 vs the previous AOT build at 3000 nodes and 12/12 (every 2nd level)
+at 20000 nodes for pull, novelty, macro, dive, hf, fa2, 12/12 wide levels at 600 nodes (macro, novelty, pull, dive); `dotnet test` 277/277.
+Allocation: no per-node garbage was added; what grows with the node count is retained data only (alloc_mb 5000 -> 20000 nodes: pull +1.4 MB, novelty +0.5, macro +0.6; dive +8 MB per 57k stored
+children = the `DiveHeap` items, 24 B per child). The new tables are unmanaged and fixed or doubling: `CandMemo` 1.5 MB, pull freeze memo 1 MB (allocated on first use), `PairBook`/`FlatSet64` ~ pairs seen.
+
+### What won (largest first)
+
+1. **Candidate memo keyed by the Zobrist hash of the child's box set** (`CandMemo`, MacroOpen.cs). The region count, room connectivity, hotspot count, and (plan lanes) the
+   plan phase / packed / out-of-plan count of a candidate child are pure functions of its box set (and the static level), and 35-60% of the generated candidates are
+   transpositions (the same child reached from another expanded parent): a 2^16-entry direct-mapped table of 24-byte entries filled lazily field by field. Hit = no
+   `MChildRegionCount`, no `MRoomConnChild`, no `HotAfter`, no `ChildStatus`. pull -19% Ir alone. (`SOKSOLV_CANDMEMO_OFF=1` = old.) Not memoisable: move access
+   (explorer and the novelty facts depend on the parent's region). The pull freeze proof (`PullFreezeDead`) is pure of (child set, t): a second memo of verdict bits.
+2. **Dive**: the child's player region as row bits (`DiveFlood` on `FloodRowsDirty`, `DiveFeat` untouched-box count by one row expression over the box rows) instead of a queue flood +
+   per-box stamp loops; matching distances (`MatchChild`) only for *new* children (45-65% of dive children are duplicates and were matched, then thrown away); `MinReducedRow` / the tie-break scan
+   of the Hungarian augment on `Vector128` over the box-major transposed table (the row potential scan was a stride-`cells` gather). -21% Ir, Sven_1623_197 -32%.
+3. **No second box search in `MApply`**: the move word carries the path length (bits 48-62) of the search that generated it, the last push direction is the move's side: the
+   `MBoxPathTo` re-run (a whole BFS with a flood per push state) was ~10% of pull on Sasquatch_IV. Falls back to the search for paths >= 32768 pushes.
+4. **Novelty books**: the width-2 pair book became a transposed bit-row table (`PairBook`: row (bucket, cell) has bit floorIdx(x) when the pair {cell, x} was recorded), so
+   "is every pair (target, other box) seen" is one bit test per box in cache-resident rows instead of one `HashSet<ulong>` probe per box (Sven_1623_197: 30M probes per 3000 nodes, 96% of
+   the pair tests find every pair seen); the facts/group-exit sets are flat unmanaged `FlatSet64`; novelty tests that cannot matter are skipped (budget exhausted, rev-bad, pair test
+   only when neither the width-1 nor the access fact made the move novel); **the novelty fact recording runs on the delta move access** (`MMoveAccessDelta(rec: true)`: the same
+   facts enumerated over the D cells, verified by `SOKSOLV_CHECK_BITS=1` against the scan) instead of the full row kernel. Novelty -22% Ir.
+5. **Room connectivity**: the child's room count is stored in the move score and reused by `MAdd` (it recomputed the whole board's room connectivity for every new node);
+   pointer kernels for `LabelCorridors` / `RmFlood` / `MRoomConnChild` (wall|box byte map instead of two bool arrays, unrolled by a pinned direction table).
+6. Smaller: the move word also carries the BFS path length; apply reuses the child's normalised player cell found by the box search (stored per move, `mmvNp`) when no checker needs the stamped region (pull);
+   node free rows copied from the maintained `frR` bitset (`BbBuild`), parent region rows by a row flood; move-window order by partial selection when only the first off+8 places are read; `HotCounts` as popcounts of the row words and no per-node array (it allocated), `PullFrozen` without tuples/`Span` literals, pull `MPacked` as a sum over the box list (was a scan of
+   all floor cells per node), packed 2x64-bit candidate sort keys with an index tie-break (`TryPackedSort`; fields that do not fit their 14/16-bit lane fall back to the comparator),
+   BFS depth per push state instead of a parent-chain walk per candidate, pair deadlock tests walk the set bits of a 5x5 window mask (`BoxWindow5`) instead of the 24 offsets,
+   no `SetOcc(nc)` toggling around node row floods.
+
+### What did not work / not done
+* Parent-region shortcut for the dive child region (child region = parent region - t + b when t cannot cut it and b touches no other region): the ring test fails for 90% of the
+  pulled boxes (a pulled box leaves a corridor cell with two opposite free neighbours); +0 net. Reverted.
+* Mobility delta as popcounts of per-direction support rows (instead of walking the D/E cells): D/E are a handful of cells, eight popcounts per row cost more. Reverted.
+* Per-room memo of `RoomBroken`: its result depends on the corridor components' touch sets (non-local), keying it exactly costs as much as the walk; 30-55% of the calls
+  re-derive an unchanged value but there is no cheap exact test.
+* Remaining top items (pull): `MMoveAccessDelta` 9%, flood kernels 13% (not here), `RoomBroken1`+`RmFlood` 12%, `MVisit`/`MBoxSearch` self 13%, `MArtic` 5%.
