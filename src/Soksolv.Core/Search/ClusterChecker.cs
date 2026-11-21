@@ -127,6 +127,13 @@ public sealed unsafe class ClusterChecker
             rowOf = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref ra[0]); colOf = rowOf + n;
             for (int c = 0; c < n; c++) { rowOf[c] = (byte)(c / W); colOf[c] = (byte)(c % W); if (!board.Wall[c]) freeR[c / W] |= 1UL << (c % W); }
             regLo = 1; regHi = 0;
+            Wd = W;
+            dirsPin = GC.AllocateArray<int>(4, pinned: true); dirsP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref dirsPin[0]);
+            for (int k = 0; k < 4; k++) dirsP[k] = board.Dirs[k];
+            splitPin = GC.AllocateArray<byte>(256, pinned: true); splitP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref splitPin[0]);
+            for (int k = 0; k < 256; k++) splitP[k] = (byte)(SplitTab[k] ? 1 : 0);
+            rcPin = GC.AllocateArray<ushort>(n, pinned: true); rcP = (ushort*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rcPin[0]);
+            for (int c = 0; c < n; c++) rcP[c] = (ushort)(c / W << 6 | c % W);
             scrArr = GC.AllocateArray<ulong>(rows * 3 + 8, pinned: true);
             scrR = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref scrArr[0]); pkB = scrR + rows + 2; chkR = pkB + rows + 2;
         }
@@ -139,10 +146,15 @@ public sealed unsafe class ClusterChecker
     readonly int rows;
     readonly ulong* freeR, regR, pkR, mkR;
     readonly byte* rowOf, colOf;
+    readonly int Wd; readonly int* dirsP; readonly byte* splitP; readonly ushort* rcP; readonly int[]? dirsPin; readonly byte[]? splitPin; readonly ushort[]? rcPin;
     int regLo, regHi; readonly ulong[]? keepA; readonly byte[]? keepB; // keep the pinned arrays alive
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void Block(int c) { blk[c] = 1; if (bits) freeR[rowOf[c]] &= ~(1UL << colOf[c]); }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void BlockB(int c) { blk[c] = 1; int rc = rcP[c]; freeR[rc >> 6] &= ~(1UL << (rc & 63)); }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void UnblockB(int c) { blk[c] = 0; int rc = rcP[c]; freeR[rc >> 6] |= 1UL << (rc & 63); }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void Unblock(int c) { blk[c] = 0; if (bits) freeR[rowOf[c]] |= 1UL << colOf[c]; }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -271,7 +283,7 @@ public sealed unsafe class ClusterChecker
         int n = start.Length;
         int rows = this.rows;
         EnsureStore(capStates + 80);
-        for (int i = 0; i < n; i++) Block(start[i]);
+        for (int i = 0; i < n; i++) BlockB(start[i]);
         new Span<ulong>(store, rows).Clear();
         int rlo = 1, rhi = 0;
         int p0 = FloodBitsTo(side, store, ref rlo, ref rhi);
@@ -305,9 +317,9 @@ public sealed unsafe class ClusterChecker
 
         TryAdd(MkKey(start, p0), 0);
         int* dd = stackalloc int[4];
-        for (int k = 0; k < 4; k++) dd[k] = b.Dirs[k];
+        for (int k = 0; k < 4; k++) dd[k] = dirsP[k];
         ushort* lanes = stackalloc ushort[8]; ushort* nl = stackalloc ushort[8];
-        byte* ro = rowOf; byte* co = colOf; byte* gl = goalP; byte* dp = deadP; byte* bk = blk;
+        ushort* rq = rcP; byte* gl = goalP; byte* dp = deadP; byte* bk = blk;
         for (int head = 0; head < qn; head++)
         {
             if (seenCount > capStates) { NCap++; StCap += head; return (false, 0); }
@@ -315,7 +327,7 @@ public sealed unsafe class ClusterChecker
             var st = cq[head]; int depth = cdepth[head];
             *(ulong*)lanes = st.Lo; *(ulong*)(lanes + 4) = st.Hi;
             int off = 0;
-            for (int i = 0; i < n; i++) { if (gl[lanes[i]] == 0) off++; Block(lanes[i]); }
+            for (int i = 0; i < n; i++) { if (gl[lanes[i]] == 0) off++; BlockB(lanes[i]); }
             int minR = lanes[7]; // the stored player is the region's minimum cell
             ulong* reg = store + (long)head * rows;
             for (int i = 0; i < n; i++)
@@ -327,19 +339,19 @@ public sealed unsafe class ClusterChecker
                     int d = dd[k];
                     int to = x + d;
                     int px = x - d;
-                    if ((reg[ro[px]] >> co[px] & 1) == 0 || bk[to] != 0 || dp[to] != 0) continue;
+                    if ((reg[rq[px] >> 6] >> (rq[px] & 63) & 1) == 0 || bk[to] != 0 || dp[to] != 0) continue;
                     if (offx + (gl[to] == 0 ? 1 : 0) == 0)
                     {
-                        for (int j = 0; j < n; j++) Unblock(lanes[j]);
+                        for (int j = 0; j < n; j++) UnblockB(lanes[j]);
                         NAlive++; StAlive += head; return (false, depth + 1);
                     }
                     int np = FastPlayerB(x, to, minR, reg);
                     bool viaScr = np < 0;
                     if (viaScr)
                     {
-                        Unblock(x); Block(to);
+                        UnblockB(x); BlockB(to);
                         np = FloodBitsTo(x, scrR, ref scrLo, ref scrHi);
-                        Unblock(to); Block(x);
+                        UnblockB(to); BlockB(x);
                     }
                     // child lanes: box i replaced by `to`, kept ascending; player in lane 7
                     *(ulong*)nl = st.Lo; *(ulong*)(nl + 4) = st.Hi;
@@ -359,14 +371,14 @@ public sealed unsafe class ClusterChecker
                         {
                             Buffer.MemoryCopy(reg, dst, rows * 8L, rows * 8L);
                             for (int r = pkLo; r <= pkHi; r++) dst[r] |= pkB[r];
-                            dst[ro[to]] &= ~(1UL << co[to]); dst[ro[x]] |= 1UL << co[x];
+                            dst[rq[to] >> 6] &= ~(1UL << (rq[to] & 63)); dst[rq[x] >> 6] |= 1UL << (rq[x] & 63);
                         }
                         if (CheckFast) CheckDerived(x, to, dst);
                     }
                     if (!viaScr && pkHi >= pkLo) { for (int r = pkLo; r <= pkHi; r++) pkB[r] = 0; pkLo = 0; pkHi = -1; }
                 }
             }
-            for (int i = 0; i < n; i++) Unblock(lanes[i]);
+            for (int i = 0; i < n; i++) UnblockB(lanes[i]);
         }
         NDead++; StDead += qn;
         return (true, 0);
@@ -383,7 +395,7 @@ public sealed unsafe class ClusterChecker
     /// <summary>FastPlayer for the stored-region BFS (parent region reg; pockets accumulate in pkB, rows pkLo..pkHi, cleared by the caller).</summary>
     int FastPlayerB(int x, int t, int minR, ulong* reg)
     {
-        int tr = rowOf[t], tc = colOf[t];
+        int ctt = rcP[t]; int tr = ctt >> 6, tc = ctt & 63;
         ulong tb = 1UL << tc;
         bool tInR = (reg[tr] & tb) != 0;
         if (tInR)
@@ -395,8 +407,8 @@ public sealed unsafe class ClusterChecker
             ulong mid = fr[tr] >> (tc - 1);
             m |= (uint)(mid & 4) << 1 | (uint)(mid & 1) << 7;
             int dx = x - t;
-            m |= dx == -b.W ? 2u : dx == 1 ? 8u : dx == b.W ? 32u : 128u;
-            if (SplitTab[m]) return -1;
+            m |= dx == -Wd ? 2u : dx == 1 ? 8u : dx == Wd ? 32u : 128u;
+            if (splitP[m] != 0) return -1;
         }
         int min = x;
         if (tInR && t == minR)
@@ -406,7 +418,7 @@ public sealed unsafe class ClusterChecker
             int r = tr;
             while (true)
             {
-                if (v != 0) { m2 = r * b.W + System.Numerics.BitOperations.TrailingZeroCount(v); break; }
+                if (v != 0) { m2 = r * Wd + System.Numerics.BitOperations.TrailingZeroCount(v); break; }
                 if (++r >= rows) break;
                 v = reg[r];
             }
@@ -418,9 +430,9 @@ public sealed unsafe class ClusterChecker
         bool started = false; ulong fsave = 0;
         for (int di = 0; di < 4; di++)
         {
-            int y0 = x + b.Dirs[di];
+            int y0 = x + dirsP[di];
             if (blk[y0] != 0 || y0 == t) continue;
-            int r0 = rowOf[y0]; ulong bit0 = 1UL << colOf[y0];
+            int cy = rcP[y0]; int r0 = cy >> 6; ulong bit0 = 1UL << (cy & 63);
             if ((reg[r0] & bit0) != 0 || (pk[r0] & bit0) != 0) continue;
             if (!started) { started = true; pkLo = rows; pkHi = -1; fsave = f[tr]; f[tr] = fsave & ~tb; }
             if (r0 < pkLo) pkLo = r0; if (r0 > pkHi) pkHi = r0;
@@ -450,7 +462,7 @@ public sealed unsafe class ClusterChecker
         {
             f[tr] = fsave;
             for (int r = pkLo; r <= pkHi; r++)
-                if (pk[r] != 0) { int m = r * b.W + System.Numerics.BitOperations.TrailingZeroCount(pk[r]); if (m < min) min = m; break; }
+                if (pk[r] != 0) { int m = r * Wd + System.Numerics.BitOperations.TrailingZeroCount(pk[r]); if (m < min) min = m; break; }
         }
         return min;
     }
