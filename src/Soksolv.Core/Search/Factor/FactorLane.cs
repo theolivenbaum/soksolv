@@ -111,15 +111,15 @@ public static class FactorLane
         for (long scale = 1; ; scale *= 2)
         {
             f.CapScale = scale; f.PoolN = pool * scale; f.Used = 0; f.Reserve = 40000 * scale;
-            if (f.Attempt(nt, triv)) return new SolveResult { Solved = true, Solution = f.Lurd.ToString(), Nodes = f.Used, TimeMs = sw.Elapsed.TotalMilliseconds };
+            if (f.Attempt(nt, triv)) return new SolveResult { Solved = true, Solution = f.Lurd.ToString(), Nodes = f.Used, TimeMs = sw.Elapsed.TotalMilliseconds, PeakBytes = f.PeakBytes };
             if (fo.Solo && f.PoolN - f.Used >= 1000 && !f.Expired())
             {
                 // last resort (alone only; in the portfolio other lanes own the real board)
                 var rows = f.Rows(new bool[n], f.Occ, lv.Goal, f.Pl);
                 var (sol, _) = f.SubSolve(rows, "macro", f.PoolN - f.Used);
-                if (sol != "" && f.ApplyLurd(sol) && f.AllDone()) return new SolveResult { Solved = true, Solution = f.Lurd.ToString(), Nodes = f.Used, TimeMs = sw.Elapsed.TotalMilliseconds };
+                if (sol != "" && f.ApplyLurd(sol) && f.AllDone()) return new SolveResult { Solved = true, Solution = f.Lurd.ToString(), Nodes = f.Used, TimeMs = sw.Elapsed.TotalMilliseconds, PeakBytes = f.PeakBytes };
             }
-            if (fo.NodeBudget > 0 || f.Expired()) return new SolveResult { Reason = "factor: unsolved", Nodes = f.Used, TimeMs = sw.Elapsed.TotalMilliseconds };
+            if (fo.NodeBudget > 0 || f.Expired()) return new SolveResult { Reason = "factor: unsolved", Nodes = f.Used, TimeMs = sw.Elapsed.TotalMilliseconds, PeakBytes = f.PeakBytes };
         }
     }
 
@@ -186,7 +186,8 @@ public static class FactorLane
     {
         readonly Level lv; readonly FactorOptions fo; readonly double limitSec; readonly Stopwatch clock;
         readonly int[] d; readonly int n;
-        public long CapScale, PoolN, Used, Reserve;
+        public long CapScale, PoolN, Used, Reserve, PeakBytes;
+        void NotePeak(FullSolver s) { try { PeakBytes = Math.Max(PeakBytes, s.SubBytes); } catch { } }
         List<FGroup> groups = [], triv = [];
         readonly Dictionary<string, FPlan> cache = new();
         Dictionary<string, FPlan> live = new();
@@ -427,7 +428,7 @@ public static class FactorLane
                     {
                         var s = MakeSub(sub, rows, FullSolver.SubKind.Macro, cap);
                         r = s.SubRunMacro(Remaining());
-                        cnt = s.SubExpanded;
+                        cnt = s.SubExpanded; NotePeak(s);
                         while (r.Reason == "replan" && !Expired() && cnt < cap) // as the macro lane (exp-563)
                         {
                             var pre = s.SubPrePlan; int at = s.SubPrePlanAt;
@@ -444,7 +445,7 @@ public static class FactorLane
                     {
                         var s = MakeSub(sub, rows, FullSolver.SubKind.Novelty, cap);
                         r = s.SubRunMacro(Remaining());
-                        cnt = s.SubExpanded;
+                        cnt = s.SubExpanded; NotePeak(s);
                         KeepSolver(rkey, lane, s, r, cnt);
                         break;
                     }
@@ -453,7 +454,7 @@ public static class FactorLane
                         var s = MakeSub(sub, rows, FullSolver.SubKind.Fa2, cap);
                         var fr = new Fa2Runner(s, Remaining()); // a pausable engine (baton slices), resumed by the next larger cap
                         var (rr, done) = fr.RunTo(cap);
-                        r = rr; cnt = s.SubExpanded;
+                        r = rr; cnt = s.SubExpanded; NotePeak(s);
                         KeepFa2(rkey, fr, done, cnt);
                         if (done) s.Dispose();
                         break;

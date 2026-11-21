@@ -30,6 +30,8 @@ public sealed unsafe partial class FullSolver
     internal void SubSetPre(object? p, int at) { prePlan = (PackingPlan?)p; prePlanAt = at; }
     public void SubSetNodeLimit(long limit) => nodeLimitOverride = limit;
     public long SubNodeLimit => nodeLimitOverride;
+    /// <summary>Bytes held by this sub-search's tracked structures (for the factor lane's peak-memory report).</summary>
+    public long SubBytes => fa2On ? (long)Fa2Bytes() : (long)(nodes.Bytes + mmv.Bytes + mmvScore.Bytes + maux.Bytes);
 
     /// <summary>Macro / novelty engine: runs (or resumes) until nodeLimit expansions in total or the clock runs out.</summary>
     public SolveResult SubRunMacro(double remainingSec) => RunMacro(remainingSec);

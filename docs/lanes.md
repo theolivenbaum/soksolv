@@ -186,3 +186,43 @@ xunit: `tests/Soksolv.Tests/Fa2Tests.cs` (Go golden counts for default and `old`
   slices) — the C# portfolio runs the plain fa2 engine (Go's `-strategy fa2` / `-fa2-lane-solo` engine 1).
 * Experiment flags off by default: planner `v2ng`, `-fa2-hall-sup`, `-fa2-mobility=false` (last key = goal distance), plan files, replay/stream modes.
 * Time-dependent behaviour: planner budget = min(1 s, t/10) (as Go); nothing else in the plain engine reads the clock.
+
+## factor lane (`-strategy factor`) — Go factor.go (exp-645)
+
+Boards whose live squares (pull flood from the goals) split into >= 2 non-trivial static box components (a component with boxes != goals).
+Each component is solved as its own level (the other components' boxes absent, trivial components as walls then absent) by a ladder of
+engines — fa2, macro, reverse (private, `MaxNodes = cap*16`), novelty — under escalating node caps (steps 1k..8k, 16k..32k, 64k..128k,
+round robin); the plans are scheduled on the real board by a depth-first search over (plan index per group, box set of each small
+group, player region); stuck groups are re-planned with the other boxes frozen as walls, planned by another engine (`altEngine`), or
+merged with the group that blocks the player. Gate (`FactorLane.Gate`): 224 of the 13,315 levels (`bench` scan of LTS+OTS).
+Code: `Search/Factor/FactorLane.cs` (lane, scheduler), `Search/Factor/FullSolver.Sub.cs` (sub-engine entry points).
+
+* **Resumable sub-engines**: Go keeps each sub-level's macro/novelty solver alive between caps (`s.resume`) and the fa2 engine paused on a
+  baton (it yields every 1024 expansions). C#: `MacroSearch` is now resumable (`mStarted`/`SubRunMacro`, node limit raised per call, deadline
+  relative to the call, `MExpired` follows Go's `expired()` — a node limit no longer disables the clock in timed mode); the fa2 engine runs on a
+  thread with the lane's `Baton` (yield added at the 1024-expansion mark, `Fa2Runner.RunTo`).
+* **Parity** (`bench/lane-parity.py factor "" 20000`, unpatched Go, `-parity` cluster mode): **12/12 gated levels identical** (solved, nodes,
+  pushes), incl. Sasquatch_50 #29 (596 nodes) and unsolved 20000-node pools; goldens in `tests/Soksolv.Tests/FactorTests.cs`.
+* **Speed** (AOT, equal work, `-nodes 20000`, gated levels): 1.12–1.17x Go's time (Sasquatch_50 #29: 3.9 s vs 3.4 s; #46: 16.4 s vs 14.0 s) —
+  the time is the sub-engines (macro/fa2 box search on wide boards), whose speed work is tracked in `docs/macro.md`.
+* Portfolio: lane `factor` (not solo) joins gated boards (`PortfolioOptions.Factor`). Not ported: `-factor-alt` (off by default).
+
+## dive lane (`-strategy dive`) — Go dive.go (exp-691/693)
+
+Landmark-phased greedy *backward* search on the pull view: landmarks are real goals that are not start squares; while one holds a box
+(E > 0) the search is one zero-weight greedy queue on (fewer E, fewer U, larger matching distance D), then nodes join two FESS-style
+return axes (R1: boxes on start squares / least matching distance to the start squares; R2: chain prefix / largest D), every fourth
+pop from the dive queue. The default lane runs two engines — base and the "A" dive (strategy A's crowding/box-gap-box terms) — alternating on a baton
+(1024-expansion slices, each with half the node budget). Gate: solved-board peel depth of a start-empty goal >= 10 (315 of 13,315
+levels); on gated boards the dive replaces the reverse lane (`DiveReplace=reverse`).
+Code: `Search/Dive/` — `FullSolver.Dive.cs` (loop, queues, features, pair runner), `DiveAssign.cs` (Hungarian matcher with dual reuse:
+`matchPrime`/`matchChild`), `PullFest.cs` (Festival push distances with player access, exact single-box reach via `HubReach`, `pullZoneDead`
+root filter). The box search is the macro engine's pull mode (`MBoxSearch` with a dive visitor).
+
+* **Parity** (`bench/lane-parity.py dive "" 20000`, solved/nodes/pushes identical): testdata 22/22, LTS sample 40/40, dive-gated sample 38/40 —
+  the two exceptions (Galadriel #29 with 119 boxes, Sokodeal #52 with 212 boxes) never finish their setup within Go's 120 s either
+  (Go reports 0 expansions at the deadline); C# needs ~30 s / ~130 s. One quirk mirrored on purpose: Go evaluates strategy A's term for
+  the *roots* after clearing the box map (so it is 0 there).
+* **Speed/memory** (AOT, equal work `-nodes 20000`, testdata): **0.89x Go's time** (10.1 s vs 11.3 s), mean peak memory 4.9 MB vs 19.2 MB.
+* Portfolio: lane `dive` on gated boards (reverse dropped). Not ported: perimeter posts/meetings of the dive's states, the revive ring on
+  memory deaths, `-dive-ineff`, `-dive-share`.
