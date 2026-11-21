@@ -37,7 +37,7 @@ public sealed unsafe partial class FullSolver
     string? PullMeetCheckMail()
     {
         var net = opt.Net!;
-        while (net.Back.Receive(PullOwner, out var m))
+        while (net.Back.Receive(opt.BackOwner, out var m))
         {
             if (m.Boxes.Length != n) continue;
             bool ok = true;

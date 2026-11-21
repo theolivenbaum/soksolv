@@ -15,6 +15,7 @@ public sealed class PfFest
     /// <summary>PfDist[g*cells + c]: pushes to bring a box on c to real goal g (-1 never); goals ascending.</summary>
     public readonly int[] PfDist;
     public readonly int NGoals;
+    public bool IsGoal(int c) => isGoal[c];
     int[]? scored;
     // bicon scratch
     readonly int[] disc, low; readonly uint[] bcOn; uint bcStamp; int[] bcStack = new int[0];

@@ -34,6 +34,8 @@ public sealed class FullOptions
     /// <summary>Bidirectional meeting network (null: no meetings). Forward lanes add to Net.Fwd, probe Net.Back, read mailbox MeetOwner of Net.Fwd.</summary>
     public Meet.MeetNet? Net;
     public int MeetOwner;
+    /// <summary>Pull lanes: mailbox of Net.Back this search drains (Go PullLane 3, festb 4, festx 5).</summary>
+    public int BackOwner = 3;
     /// <summary>Macro lane: highest ported feature stage (1..5) and the stage-6 default-on feature mask (bit0 move windows, ...).</summary>
     public int MacroStage = 5, MacroFeatures = 255; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     /// <summary>Go StallFinish (timed runs only): when the best node stops improving, try a short private backward search toward it.
@@ -47,6 +49,14 @@ public sealed class FullOptions
     public ulong RngSeed;
     /// <summary>Hub lanes: &gt; 0 replaces the wall-clock slices (Go festbUnit 250 ms) by this many pull expansions (deterministic mode; opt.NodeBudget then caps the lane's total expansions).</summary>
     public long HubNodeSlices;
+    /// <summary>The tried-strata table is shared with other hub lanes of the same run (portfolio): do not reset it at lane start.</summary>
+    public bool SharedRace;
+    /// <summary>Pull lane (Go publishPullBest): offers the frontier's best state (boxes, player, backward tail) as a forward target at most every 100 ms; the portfolio's toward lane reads it.</summary>
+    public Action<TowardTarget>? PublishBest;
+    /// <summary>pfOn: the spread key (Go pfStyle.spread, festXStyle D: hub-pull) replaces the matching distance in the scored tuple.</summary>
+    public bool PfSpread = true;
+    /// <summary>`-strategy hub-gen -hub-gen-only`: run the generator alone (harness).</summary>
+    public bool HubGenOnly;
     /// <summary>Go RetargetReuse (exp-299, default on): a toward tree retargeted to a new target board keeps its stored nodes (active graph reuse).</summary>
     public bool RetargetReuse = true;
     /// <summary>Bytes held by the lane's other trees (Go peerTracked): they count against BudgetBytes.</summary>
@@ -160,6 +170,7 @@ public sealed unsafe partial class FullSolver : IDisposable
         ComputeDistances();
         ComputeGoalDistances();
         ComputePackingOrder();
+        InitBitRows();
         PerturbInit(opt.Seed);
     }
 
@@ -270,7 +281,48 @@ public sealed unsafe partial class FullSolver : IDisposable
         return false;
     }
 
-    void SetOcc(int c, bool v) { occ[c] = v; blk[c] = (byte)(v ? 1 : 0); }
+    // ---- bit-row mirror of blk (boards up to 64 wide): frR[row] has a bit per free (non-wall, non-box) cell -------------------
+    bool fbits; int frRows;
+    ulong* frR, frRem, frReg;
+    byte* frRow, frCol;
+    short[]? goalIdxA; short* goalIdx; ulong[]? gOccA; ulong* gOcc; ulong[]? geMaskA; ulong* geMask; ulong[]? rdMaskA; ulong* rdMask; int nRounds;
+
+    void InitBitRows()
+    {
+        fbits = W <= 64 && cells / W <= 64 && cells % W == 0;
+        // goal occupancy bitset + per-round masks for PackedCount (valid for any board size)
+        int gwords = Math.Max(1, (goals.Length + 63) / 64);
+        nRounds = 0; foreach (int g in goals) nRounds = Math.Max(nRounds, round[g] + 1);
+        goalIdxA = GC.AllocateArray<short>(cells, pinned: true); gOccA = GC.AllocateArray<ulong>(gwords, pinned: true);
+        geMaskA = GC.AllocateArray<ulong>((nRounds + 1) * gwords, pinned: true); rdMaskA = GC.AllocateArray<ulong>((nRounds + 1) * gwords, pinned: true);
+        goalIdx = (short*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref goalIdxA[0]); gOcc = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref gOccA[0]);
+        geMask = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref geMaskA[0]); rdMask = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rdMaskA[0]);
+        for (int c = 0; c < cells; c++) goalIdx[c] = -1;
+        packWords = gwords;
+        for (int gi = 0; gi < goals.Length; gi++)
+        {
+            goalIdx[goals[gi]] = (short)gi;
+            int r = round[goals[gi]];
+            rdMask[r * gwords + (gi >> 6)] |= 1UL << (gi & 63);
+            for (int k = 0; k <= r; k++) geMask[k * gwords + (gi >> 6)] |= 1UL << (gi & 63); // goals with round >= k
+        }
+        if (!fbits) return;
+        frRows = cells / W;
+        var fa = frKeepA = GC.AllocateArray<ulong>(frRows * 3 + 8, pinned: true);
+        frR = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref fa[0]); frRem = frR + frRows + 2; frReg = frRem + frRows + 2;
+        var ra = frKeepB = GC.AllocateArray<byte>(2 * cells, pinned: true);
+        frRow = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref ra[0]); frCol = frRow + cells;
+        for (int c = 0; c < cells; c++) { frRow[c] = (byte)(c / W); frCol[c] = (byte)(c % W); if (!wall[c]) frR[c / W] |= 1UL << (c % W); }
+    }
+    int packWords; ulong[]? frKeepA; byte[]? frKeepB; // keep the pinned arrays alive
+
+    void SetOcc(int c, bool v)
+    {
+        occ[c] = v; blk[c] = (byte)(v ? 1 : 0);
+        if (fbits) { if (v) frR[frRow[c]] &= ~(1UL << frCol[c]); else frR[frRow[c]] |= 1UL << frCol[c]; }
+        int gi = goalIdx[c];
+        if (gi >= 0) { if (v) gOcc[gi >> 6] |= 1UL << (gi & 63); else gOcc[gi >> 6] &= ~(1UL << (gi & 63)); }
+    }
 
     /// <summary>Marks cells reachable from p (not crossing walls or boxes) in mk with a fresh stamp; returns the minimum cell.</summary>
     int Reach(int p, uint[] mk) => ReachP(p, ReferenceEquals(mk, mark) ? markP : mark2P);

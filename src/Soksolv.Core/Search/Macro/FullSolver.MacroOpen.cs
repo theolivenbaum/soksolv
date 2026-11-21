@@ -472,6 +472,7 @@ public sealed unsafe partial class FullSolver
                 default: r = ChildRegions(t); break;
             }
             Prof.Stop(4, tp);
+            if (tgtPocket != null && r > 1) r = RegionsRel(); // exp-460: regions relative to the target (occ holds the child)
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
             if (mCandN == mCands.Length) Array.Resize(ref mCands, mCandN * 2);
             tp = Prof.Start();
@@ -711,6 +712,7 @@ public sealed unsafe partial class FullSolver
         while (true)
         {
             if (MExpired()) return new SolveResult { Reason = "timeout", Nodes = expanded };
+            if (opt.PublishBest != null && pull && (expanded & 127) == 0) PublishPullBest();
             if (opt.Net != null && (expanded & 255) == 0 && (pull ? PullMeetCheckMail() : MeetCheckMail()) is { } met) return new SolveResult { Solved = true, Solution = met, Nodes = expanded };
             if (opt.StallFinish && opt.NodeBudget == 0 && mRows != null && mStallTries < 3 && mBest > 0)
             {
