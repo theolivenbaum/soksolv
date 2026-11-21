@@ -9,7 +9,7 @@ using Soksolv.Search.Reverse;
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
-bool portPull = true, portHubPull = true, portHubGen = true, portToward = true, portNovelty = true, portFa2 = true;
+bool portFull = true, portReverse = true, portPull = true, portHubPull = true, portHubGen = true, portToward = true, portNovelty = true, portFa2 = true;
 bool noMeet = false, pfOn = false, hubGenOnly = false; string? strataDump = null; bool retargetReuse = true; long hubSlices = 0;
 var hfSwitches = new Dictionary<string, bool>();
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
@@ -51,6 +51,8 @@ for (int i = 0; i < args.Length; i++)
         case "-no-hub-pull": portHubPull = false; break;
         case "-no-hub-gen": portHubGen = false; break;
         case "-no-toward": portToward = false; break;
+        case "-no-full": portFull = false; break;       // Go's portfolio has no full lane (fullLane = false)
+        case "-no-reverse": portReverse = false; break;
         case "-pull": portPull = true; break;
         case "-no-pull": portPull = false; break;           // add the pull lane to the portfolio (off by default: no backward perimeter yet)
         case "-no-novelty": portNovelty = false; break;
@@ -139,7 +141,7 @@ SolveResult Run(string[] r, double tl)
         return Soksolv.Search.Factor.FactorLane.Run(lvf, new Soksolv.Search.Factor.FactorOptions { NodeBudget = nodes, BudgetBytes = opt.BudgetBytes, Engine = eng, TimeLimitSec = tl, Solo = true }, tl);
     }
     if (strategy == "macro") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveMacroLane(r, opt, tl); } // main.go -stall-scale
-    return Portfolio.Solve(r, new PortfolioOptions { Meet = !noMeet, Pull = portPull, HubPull = portHubPull, HubGen = portHubGen, Toward = portToward, Novelty = portNovelty, Fa2 = portFa2, NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
+    return Portfolio.Solve(r, new PortfolioOptions { Full = portFull, Reverse = portReverse, Meet = !noMeet, Pull = portPull, HubPull = portHubPull, HubGen = portHubGen, Toward = portToward, Novelty = portNovelty, Fa2 = portFa2, NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
 }
 SolveResult res;
 {

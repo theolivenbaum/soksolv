@@ -134,6 +134,29 @@ record 16, table ~12, queues 5+6+4, supply values 1.
 * Remaining profile (default lane, testdata, instruction share): supply U 11%, macro graph DFS+labels 15%, pull children 14%,
   floods 8%, queues/store 12%. Per node roughly 55 B and ~2.3-3 us CPU.
 
+
+## fa2 / dive / factor
+
+Same method as above (CPU time, equal work `-nodes N`, `-parity`, Go from `.reference`). Totals over the 22 testdata levels (fa2 N=5000, dive N=8000) and 8 gated factor levels (N=4000):
+
+| lane | before (Go = 1.0) | after |
+|---|---|---|
+| fa2 | 0.97 (this session's baseline run; docs said 1.11) | 0.78-0.83 total; 0.4-0.6 on room/corridor levels (GrigrSpecial, Holland_43, SokEvo_107_55, Aymeric_282); 0.87-0.93 on Dive_Sven_1623_197 (100 boxes, per-candidate O(boxes) terms) and Sasquatch_IV (dead-zone proofs ~45%) |
+| dive | 0.74 total, Dive_Sven 0.66 | 0.67 total, Dive_Sven 0.50 (0.58 incl. noise), others 0.7-0.8 |
+| factor | 1.11 | 0.94 (time is the plan4 planner: CutQueryFill/Expand4/ComputeElim4/RadixSortKids on wide boards) |
+
+Parity: fa2 24/24 testdata @5000 and 42/42 LTS @20000; dive 24/24 and 42/42 @20000; factor 24/24 testdata @3000; `dotnet test` green (HubPull node-slice test is load-sensitive, passes alone).
+
+What helped
+* Allocation: 68-81 MB -> 9-11 MB per 5000 nodes (remaining ~0.9 KB/node is the stored node, edge and aux records). Root cause was `Span<int>.Sort()` (AOT allocates a delegate per call) in the cluster search plus per-pop `Array.Sort`; fa2/dive now use `SmallSort`/heapsort.
+* fa2 room score is incremental per child (`Fa2Rooms.cs`): per-room rows P_r of the parent, only rooms of b/t, rooms adjacent to either, and rooms touched by splitting/merging corridor components are re-evaluated; corridor relabel only when b or t is a corridor cell. Exact.
+* Child region counts: lazy articulation. A 256-entry ring LUT settles `pieces(t)` (0/1) for non-articulation cells, and the Tarjan pass over the board runs only when a candidate cannot be settled (`SOKSOLV_FA2CHECK=1` verifies every count against a flood).
+* Pointer kernels for explorer/mobility; cluster precheck before the player flood in `Fa2DeadLate`.
+* dive: Hungarian prime warm-started from the previous prime's column potentials (unique optimum, so exact; 186k -> few cold augment calls), 4-lane SIMD augment loop, A-term as a delta over the <=24 cells around b/t, child region reused from `DiveApply`, no per-expand `ToArray`.
+
+What did not work
+* Skipping repeated cluster/dead-zone proofs (memo of (state,t) results, and skipping the pop-time check for edges verified at expansion) saved 5-15% but is NOT parity-exact: the checkers are history dependent (Sven_1623#901 diverges, 1298 vs 1314 nodes). Kept behind `SOKSOLV_FA2MEMO=1`, off by default.
+* Remaining fa2 gap is the dead-zone prover (`DeadZoneChecker.Search/EscapeBits`, 45% on Sasquatch_IV) and the macro box search; both are outside these files. Factor needs plan4 (`CutScan`, `Expand4`) work.
 ## macro family (macro, novelty, pull, hf)
 
 Equal-work CPU time (child user+sys, `-parity`, AOT, same minute as Go; machine heavily loaded, +-10% noise; deterministic C# callgrind
