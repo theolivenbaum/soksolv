@@ -42,7 +42,7 @@ public sealed unsafe partial class FullSolver
         int parentConn = maux[id].Reg;
         mCmdMask = 0; mUnpinMask = 0;
         long tdl = Prof.Start();
-        if (Feat(2) && !pull && goals.Length <= 64) // Go: DisplacementLandmarksOn && !s.pull && len(goals) <= 64
+        if (Feat(2) && !pull && !hfRank && goals.Length <= 64) // Go: DisplacementLandmarksOn && !s.pull && len(goals) <= 64
         {
             if (!dlInit) { dlInit = true; dl = DisplacementLandmarks.Create(lv, dirs, goals); }
             if (dl != null)
@@ -61,6 +61,11 @@ public sealed unsafe partial class FullSolver
         int[]? counts = MacroStage >= 4 ? HotCounts(cur) : null;
         Prof.Stop(26, thc);
         int parentHot = counts != null ? HotspotCount(counts) : 0;
+        if (hfRank)
+        {
+            // Festival's forward HF order: connectivity, boxes on target, hotspots against the target, min-cost matching distance
+            parentOop = maux[id].Reg; parentRoom = HotRel(cur); parentHot = MatchDist(cur);
+        }
         int parentPhase = mPlan != null ? mPlan.Status(occ).phase : -1;
         long tc = Prof.Start();
         uint corral = 0;
@@ -386,6 +391,7 @@ public sealed unsafe partial class FullSolver
         long tp;
         for (int side = 0; side < 4; side++)
             if (m3[t - dirs[side]] == mpstamp) { canonical = side; break; }
+        if (t == cur[i] && hfRank && opt.HfNoReturn) return true; // exp-268: no macro returning its box to its square
         int endpoint = t * 4 + canonical;
         if (mtseen[endpoint] == mtst) return true;
         mtseen[endpoint] = mtst;
@@ -437,6 +443,13 @@ public sealed unsafe partial class FullSolver
                     }
                 }
             }
+            int hotOverride = -1;
+            if (hfRank)
+            {
+                cur.CopyTo(hfBoxes);
+                hfBoxes[i] = t;
+                oop = r; room = HotRel(hfBoxes); hotOverride = MatchDist(hfBoxes);
+            }
             bool cUndo = false, cInternal = false, cDeadChild = false, cGroupDup = false, cDistinct = false; ulong cExit = 0;
             if (Feat(6) && !mReopening)
             {
@@ -475,7 +488,7 @@ public sealed unsafe partial class FullSolver
                     if (mRevExits.Contains(cExit)) cGroupDup = true; else cDistinct = true;
                 }
             }
-            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
+            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
         }
         SetOcc(t, false);
         return true;
@@ -517,6 +530,8 @@ public sealed unsafe partial class FullSolver
             Prof.Stop(14, tq);
             if (dead) { stats.SideDead++; return 5; }
         }
+        if (hfRank && opt.HfFestIneff && FestInefficient(t)) return 8;
+        if (hfRank && dd != null && dd.Dead(occ, t, t - dirs[canonical])) return 9;
         if (Feat(7) && m3[t - dirs[canonical]] == mpstamp && PairSideDeadlock(t, t - dirs[canonical])) { stats.PairDead++; return 7; }
         if (Feat(3) && CorridorFlowDeadlock(t)) { stats.CorridorFlow++; return 6; }
         return 0;
@@ -657,6 +672,11 @@ public sealed unsafe partial class FullSolver
             if (meetPending.Count > 0) { if (pull) PullMeetPost(cur); else MeetPost(cur); }
             if (cid < 0) continue;
             MNoteBest(cid);
+            if (tgt != null && ch != 0 && OnTarget(child))
+            {
+                string? tsol = CompleteTarget(cid);
+                if (tsol != null) return new SolveResult { Solved = true, Solution = tsol, Nodes = expanded };
+            }
             if (ch == 0 && pull)
             {
                 // all boxes on start squares: solved if the real player is in this state's region too

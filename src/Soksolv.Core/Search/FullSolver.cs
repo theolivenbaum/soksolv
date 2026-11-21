@@ -49,6 +49,8 @@ public sealed class FullOptions
     public bool MacroAlt = true;
     /// <summary>fa2 lane settings (Go FA2* flags, defaults as in Go).</summary>
     public Fa2Options Fa2 = new();
+    /// <summary>Toward (hf) search switches, Go's -hf-festival bundle (default on) and -diag-dead=target.</summary>
+    public bool HfNoReturn = true, HfFestCorral = true, HfFrozenMatch = true, HfFestSched = true, HfUnweighted = true, HfMatchFirst = true, HfOneAdvisor = true, HfBestFest = true, HfFestIneff = true, HfDiagDead = true;
     public FullOptions Clone() => (FullOptions)MemberwiseClone();
     public double StallScale = 1.0;
 }

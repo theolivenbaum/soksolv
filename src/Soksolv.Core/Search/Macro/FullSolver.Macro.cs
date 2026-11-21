@@ -75,6 +75,7 @@ public sealed unsafe partial class FullSolver
             var bd = new ClusterBoard(wall, goal, deadSq, W, salt: true);
             cl = new ClusterChecker(bd) { Shared = opt.SharedClusters, SharedPen = null };
         }
+        if (hfRank && opt.HfDiagDead) dd = new DiagDeadChecker(wall, goal, W);
         if (Feat(1) && !pull)
         {
             var deadSq = new bool[cells];
@@ -86,7 +87,7 @@ public sealed unsafe partial class FullSolver
         if (MacroStage >= 2) { MComputeRooms(); if (!pull) MComputeBasin(); } // goal rooms and out-of-plan are push-mode features
         if (Prof.On) Console.Error.WriteLine($"rooms+basin done t={clock.ElapsedMilliseconds} ms");
         long tPlan0 = clock.ElapsedMilliseconds;
-        if (MacroStage >= 3 && !pull) // pull mode has no packing plan (as in Festival)
+        if (MacroStage >= 3 && !pull && !hfRank) // pull mode has no packing plan; the toward search uses none (Go noPlan) (as in Festival)
         {
             long planDeadline = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(250, timeLimitSec * 1000 / 10);
             if (prePlan != null) { mPlan = prePlan; stats.Plan4Complete = true; stats.Plan4Swap = prePlanAt; }   // a finished plan4 plan carried into a restarted solver
@@ -166,6 +167,7 @@ public sealed unsafe partial class FullSolver
             foreach (int fc in nodes.Fcell) if (occ[fc]) sp += spreadDist[fc];
             return (int)(sp / SpreadBucket);
         }
+        if (tgt != null) { int tc = 0; foreach (int g in tgtList) if (occ[g]) tc++; return tc; }
         if (mPlan != null) return mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.Packed(occ) : mPlan.Status(occ).packed;
         int c = 0;
         foreach (int g in goals) if (occ[g]) c++;
@@ -236,7 +238,8 @@ public sealed unsafe partial class FullSolver
         if (opt.Net != null) { if (pull) PullMeetAdd(id, boxes, player); else MeetAdd(id, boxes, player); }
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = Regions();
-        var cell = new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
+        var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
+                          : new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
         int bucket = Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
         if (nodes.NeedsGrow) nodes.Grow();

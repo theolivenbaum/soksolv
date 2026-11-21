@@ -11,6 +11,7 @@ string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
 bool portPull = false, portNovelty = true, portFa2 = true;
 bool noMeet = false;
+var hfSwitches = new Dictionary<string, bool>();
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
 var fa2o = new Fa2Options();
@@ -23,6 +24,12 @@ for (int i = 0; i < args.Length; i++)
         case "-mem": memMb = int.Parse(args[++i]); break;
         case "-nodes": nodes = long.Parse(args[++i]); break;
         case "-header": header = true; break;
+        case var f when f.StartsWith("-hf-") || f.StartsWith("-diag-dead"):
+        {
+            string name = f.TrimStart('-'); string val = "true";
+            int eq = name.IndexOf('='); if (eq >= 0) { val = name[(eq + 1)..]; name = name[..eq]; }
+            hfSwitches[name] = val != "false"; break;
+        }
         case "-no-meet": noMeet = true; break;
         case "-macro-alt": macroAlt = args[++i] != "0"; break;
         case "-macro-planalt": macroPlanAlt = true; break;
@@ -79,6 +86,7 @@ var rows = levels[idx - 1];
 
 var opt = new FullOptions
 {
+    
     NodeBudget = nodes,
     BudgetBytes = (ulong)memMb * 1024 * 1024 / 100 * 70,
     SharedClusters = new ClusterTable(16),
@@ -86,6 +94,13 @@ var opt = new FullOptions
     SharedDeadZone = new Soksolv.Search.DeadZone.DeadZoneTable(18),
     MacroStage = macroStage, MacroFeatures = macroFeat, PlanAlt = macroPlanAlt, MacroAlt = macroAlt, Fa2 = fa2o,
 };
+{
+    bool bundle = !hfSwitches.TryGetValue("hf-festival", out bool bv) || bv;
+    bool Sw(string k) => hfSwitches.TryGetValue(k, out bool v) ? v : bundle;
+    opt.HfNoReturn = Sw("hf-no-return"); opt.HfFestCorral = Sw("hf-fest-corral"); opt.HfFrozenMatch = Sw("hf-frozen-match"); opt.HfFestSched = Sw("hf-fest-sched");
+    opt.HfUnweighted = Sw("hf-unweighted"); opt.HfMatchFirst = Sw("hf-match-first"); opt.HfOneAdvisor = Sw("hf-one-advisor"); opt.HfBestFest = Sw("hf-best-fest"); opt.HfFestIneff = Sw("hf-fest-ineff");
+    opt.HfDiagDead = !hfSwitches.TryGetValue("diag-dead", out bool dd) || dd;
+}
 SolveResult Run(string[] r, double tl)
 {
     if (strategy == "reverse")
@@ -95,6 +110,7 @@ SolveResult Run(string[] r, double tl)
         return ReverseRunner.Solve(r, ro, tl);
     }
     if (strategy == "full") return FullSolver.Solve(r, opt, tl);
+    if (strategy == "hf") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveHf(r, opt, tl); }
     if (strategy == "pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolvePull(r, opt, tl); }
     if (strategy == "fa2") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveFa2(r, opt, tl); }
     if (strategy == "novelty") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveNovelty(r, opt, tl); }
@@ -119,6 +135,7 @@ sb.Append($"  \"moves\": {res.Solution.Length},\n  \"pushes\": {pushes},\n  \"no
 sb.Append(CultureInfo.InvariantCulture, $"  \"peak_memory_mb\": {res.PeakBytes / 1048576.0:F1},\n");
 sb.Append($"  \"stored\": {res.Stats.Stored},\n  \"generated\": {res.Stats.Generated},\n  \"duplicates\": {res.Stats.Duplicates},\n");
 sb.Append($"  \"reason\": \"{res.Reason}\",\n");
+if (res.Fingerprint != "") sb.Append($"  \"fingerprint\": \"{res.Fingerprint}\",\n");
 if (verr != null) sb.Append($"  \"verify_error\": \"{verr}\",\n");
 sb.Append($"  \"solution\": \"{res.Solution}\",\n  \"strategy\": \"{(res.Strategy != "" ? res.Strategy : strategy)}\"\n}}\n");
 Console.Out.Write(sb.ToString());
