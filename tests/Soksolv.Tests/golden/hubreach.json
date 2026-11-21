@@ -1,0 +1,353 @@
+{
+ "Aymeric_Du_Peloux_282_22.xsb": {
+  "cmSum": 8370,
+  "cnt": [
+   2,
+   3,
+   3
+  ],
+  "inU": 23,
+  "nCls": 3,
+  "need": [
+   2,
+   3,
+   3
+  ],
+  "okMoves": 9,
+  "pcRb": 80,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 1220722482089449204
+ },
+ "Aymeric_Du_Peloux_282_273.xsb": {
+  "cmSum": 0,
+  "cnt": [],
+  "inU": 32,
+  "nCls": 0,
+  "need": [],
+  "okMoves": 31,
+  "pcRb": 256,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 14757287364127990500
+ },
+ "CorridorFlow_synth.xsb": {
+  "cmSum": 0,
+  "cnt": [],
+  "inU": 21,
+  "nCls": 0,
+  "need": [],
+  "okMoves": 8,
+  "pcRb": 42,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 2043493792723501056
+ },
+ "Grigr2002_40_24.xsb": {
+  "cmSum": 0,
+  "cnt": [],
+  "inU": 50,
+  "nCls": 0,
+  "need": [],
+  "okMoves": 34,
+  "pcRb": 500,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 4999146803523159225
+ },
+ "GrigrSpecial_40_3.xsb": {
+  "cmSum": 2134,
+  "cnt": [
+   5
+  ],
+  "inU": 33,
+  "nCls": 1,
+  "need": [
+   5
+  ],
+  "okMoves": 17,
+  "pcRb": 188,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 17590710087317642991
+ },
+ "GrigrSpecial_40_39.xsb": {
+  "cmSum": 0,
+  "cnt": [],
+  "inU": 29,
+  "nCls": 0,
+  "need": [],
+  "okMoves": 26,
+  "pcRb": 203,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 5301411368071957362
+ },
+ "Holland_81_27.xsb": {
+  "cmSum": 119905,
+  "cnt": [
+   4,
+   6,
+   6,
+   5,
+   7
+  ],
+  "inU": 54,
+  "nCls": 5,
+  "need": [
+   3,
+   6,
+   5,
+   4,
+   6
+  ],
+  "okMoves": 36,
+  "pcRb": 375,
+  "probes": {
+   "goals": true,
+   "shifted": false,
+   "start": true
+  },
+  "sumRb": 14853119711525161660
+ },
+ "Holland_81_43.xsb": {
+  "cmSum": 114,
+  "cnt": [
+   1
+  ],
+  "inU": 35,
+  "nCls": 1,
+  "need": [
+   1
+  ],
+  "okMoves": 20,
+  "pcRb": 214,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 9663148431438609963
+ },
+ "Holland_81_57.xsb": {
+  "cmSum": 0,
+  "cnt": [],
+  "inU": 42,
+  "nCls": 0,
+  "need": [],
+  "okMoves": 28,
+  "pcRb": 378,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 8537280517739609520
+ },
+ "Microban_155_31.xsb": {
+  "cmSum": 0,
+  "cnt": [],
+  "inU": 18,
+  "nCls": 0,
+  "need": [],
+  "okMoves": 12,
+  "pcRb": 54,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 5817064213629108224
+ },
+ "Microban_155_65.xsb": {
+  "cmSum": 1838,
+  "cnt": [
+   2
+  ],
+  "inU": 32,
+  "nCls": 1,
+  "need": [
+   2
+  ],
+  "okMoves": 12,
+  "pcRb": 114,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 13307037965485448864
+ },
+ "Sasquatch_IV_50_42.xsb": {
+  "cmSum": 0,
+  "cnt": [],
+  "inU": 107,
+  "nCls": 0,
+  "need": [],
+  "okMoves": 39,
+  "pcRb": 1605,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 11075620201292558908
+ },
+ "Sasquatch_VI_50_24.xsb": {
+  "cmSum": 0,
+  "cnt": [],
+  "inU": 52,
+  "nCls": 0,
+  "need": [],
+  "okMoves": 60,
+  "pcRb": 832,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 15419644171175631880
+ },
+ "SokEvo_107_55.xsb": {
+  "cmSum": 1194,
+  "cnt": [
+   1,
+   1
+  ],
+  "inU": 27,
+  "nCls": 2,
+  "need": [
+   1,
+   1
+  ],
+  "okMoves": 21,
+  "pcRb": 147,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 11747847122510755129
+ },
+ "SokEvo_107_82.xsb": {
+  "cmSum": 0,
+  "cnt": [],
+  "inU": 28,
+  "nCls": 0,
+  "need": [],
+  "okMoves": 28,
+  "pcRb": 224,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 14065652687796738340
+ },
+ "SokHard_163_13.xsb": {
+  "cmSum": 609,
+  "cnt": [
+   1,
+   2
+  ],
+  "inU": 41,
+  "nCls": 2,
+  "need": [
+   1,
+   1
+  ],
+  "okMoves": 31,
+  "pcRb": 338,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 8161144377034191872
+ },
+ "SokHard_163_23.xsb": {
+  "cmSum": 58230,
+  "cnt": [
+   1,
+   6,
+   7,
+   7
+  ],
+  "inU": 48,
+  "nCls": 4,
+  "need": [
+   1,
+   6,
+   7,
+   7
+  ],
+  "okMoves": 24,
+  "pcRb": 330,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 11523401136367871424
+ },
+ "SokHard_163_36.xsb": {
+  "cmSum": 1512,
+  "cnt": [
+   1,
+   1
+  ],
+  "inU": 42,
+  "nCls": 2,
+  "need": [
+   1,
+   1
+  ],
+  "okMoves": 34,
+  "pcRb": 392,
+  "probes": {
+   "goals": true,
+   "shifted": false,
+   "start": true
+  },
+  "sumRb": 12091760239162546816
+ },
+ "Sven_1623_100.xsb": {
+  "cmSum": 3933,
+  "cnt": [
+   4,
+   2
+  ],
+  "inU": 36,
+  "nCls": 2,
+  "need": [
+   4,
+   2
+  ],
+  "okMoves": 21,
+  "pcRb": 114,
+  "probes": {
+   "goals": true,
+   "shifted": true,
+   "start": true
+  },
+  "sumRb": 9743537537604467336
+ }
+}

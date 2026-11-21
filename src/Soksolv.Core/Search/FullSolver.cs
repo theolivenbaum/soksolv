@@ -1,0 +1,601 @@
+using System.Diagnostics;
+using Soksolv.Model;
+
+namespace Soksolv.Search;
+
+public struct Push { public int From; public sbyte Dir; public Push(int f, sbyte d) { From = f; Dir = d; } }
+
+public sealed class SolveStats
+{
+    public int Plan4Exp, Plan4Swap; public bool Plan4Pending, Plan4Complete;
+    public long Generated, Duplicates, CorralDead, FrontierCorrals, DispAdvisor, CorridorFlow, PackingPrepQueries, PackingPrepPicks, PackingPrepClears, DeadSquare, Frozen2x2, GoalArea, Freeze, PairDead, ClusterDead, SideDead, Assignment, Macros, ConnAdvisor, Corrals, Penalized, PairsTried, PairsDead;
+    public int Stored; public int LeanAt;
+}
+
+public sealed class SolveResult
+{
+    public bool Solved; public string Reason = ""; public string Solution = ""; public long Nodes; public SolveStats Stats = new();
+    public double TimeMs; public long PeakBytes; public string Strategy = ""; public string Fingerprint = "";
+}
+
+/// <summary>Shared cancellation: set by the portfolio when one lane solved or the deadline passed.</summary>
+public sealed class CancelFlag { volatile bool stopped; public bool Stopped => stopped; public void Cancel() => stopped = true; }
+
+public sealed class FullOptions
+{
+    public bool SideDead = true, ClusterDead = true, Penalties = true, FreeGoal = true, CloseHoles = true;
+    public long NodeBudget;           // > 0: stop after this many expansions, ignore the clock
+    public ulong BudgetBytes;         // 0: unlimited (tracked data structures)
+    public int Seed;
+    public ClusterTable? SharedClusters, SharedPenalties;
+    public Search.DeadZone.DeadZoneTable? SharedDeadZone;
+    public volatile bool Stop;
+    public CancelFlag? Cancel;
+    /// <summary>Bidirectional meeting network (null: no meetings). Forward lanes add to Net.Fwd, probe Net.Back, read mailbox MeetOwner of Net.Fwd.</summary>
+    public Meet.MeetNet? Net;
+    public int MeetOwner;
+    /// <summary>Pull lanes: mailbox of Net.Back this search drains (Go PullLane 3, festb 4, festx 5).</summary>
+    public int BackOwner = 3;
+    /// <summary>Macro lane: highest ported feature stage (1..5) and the stage-6 default-on feature mask (bit0 move windows, ...).</summary>
+    public int MacroStage = 5, MacroFeatures = 255; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
+    /// <summary>Go StallFinish (timed runs only): when the best node stops improving, try a short private backward search toward it.
+    /// StallScale = timeLimit/600 s when the limit is below 600 s (main.go -stall-scale), scaling the 1 s cap/floor.</summary>
+    public bool StallFinish = true;
+    /// <summary>Pull mode (Go pull lane): the macro engine run backward on a pull view of the level (see Pull/FullSolver.Pull.cs).</summary>
+    public bool Pull;
+    /// <summary>Go solver.pfOn (hub-pull / hub-gen's backward solver): Festival-ordered pull search (Search/Hub/FullSolver.PfOn.cs); needs Pull.</summary>
+    public bool PfOn;
+    /// <summary>Initial state of the type-exploration generator (Go solver.rng; 0: the default seed).</summary>
+    public ulong RngSeed;
+    /// <summary>Hub lanes: &gt; 0 replaces the wall-clock slices (Go festbUnit 250 ms) by this many pull expansions (deterministic mode; opt.NodeBudget then caps the lane's total expansions).</summary>
+    public long HubNodeSlices;
+    /// <summary>The tried-strata table is shared with other hub lanes of the same run (portfolio): do not reset it at lane start.</summary>
+    public bool SharedRace;
+    /// <summary>Pull lane (Go publishPullBest): offers the frontier's best state (boxes, player, backward tail) as a forward target at most every 100 ms; the portfolio's toward lane reads it.</summary>
+    public Action<TowardTarget>? PublishBest;
+    /// <summary>pfOn: the spread key (Go pfStyle.spread, festXStyle D: hub-pull) replaces the matching distance in the scored tuple.</summary>
+    public bool PfSpread = true;
+    /// <summary>`-strategy hub-gen -hub-gen-only`: run the generator alone (harness).</summary>
+    public bool HubGenOnly;
+    /// <summary>Go RetargetReuse (exp-299, default on): a toward tree retargeted to a new target board keeps its stored nodes (active graph reuse).</summary>
+    public bool RetargetReuse = true;
+    /// <summary>Bytes held by the lane's other trees (Go peerTracked): they count against BudgetBytes.</summary>
+    public Func<ulong>? PeerBytes;
+    /// <summary>Novelty lane (Go solver.novelty = 100): at most this many novel moves per opened node cost nothing (0: off).</summary>
+    public int Novelty;
+    /// <summary>Macro alt engine (exp-769): plan4 with festsink + roomsep + keep-parks 1.</summary>
+    public bool PlanAlt;
+    /// <summary>Go -macro-alt-plan (default on): the macro lane runs a second engine on the alt plan4 config, alternating on a baton.</summary>
+    public bool MacroAlt = true;
+    /// <summary>fa2 lane settings (Go FA2* flags, defaults as in Go).</summary>
+    public Fa2Options Fa2 = new();
+    /// <summary>Toward (hf) search switches, Go's -hf-festival bundle (default on) and -diag-dead=target.</summary>
+    public bool HfNoReturn = true, HfFestCorral = true, HfFrozenMatch = true, HfFestSched = true, HfUnweighted = true, HfMatchFirst = true, HfOneAdvisor = true, HfBestFest = true, HfFestIneff = true, HfDiagDead = true;
+    public FullOptions Clone() => (FullOptions)MemberwiseClone();
+    public double StallScale = 1.0;
+    /// <summary>> 0: the packing planner may use at most this many ms (factor sub-solves, exp-645b).</summary>
+    public double PlanCapMs;
+}
+
+/// <summary>
+/// Best-first FESS search over push states (port of Go package full, default configuration).
+/// States: bitset of box floor-indices + normalized player. Records live in unmanaged chunked arenas.
+/// </summary>
+public sealed unsafe partial class FullSolver : IDisposable
+{
+    const string DirChars = "udlr";
+    const int MaxRegions = 16;
+    const uint MoveUsed = 1u << 31;
+    const int NoGoalCost = 4096;
+
+    readonly Level lv;
+    readonly FullOptions opt;
+    readonly int n, cells, W;
+    readonly int[] dirs;
+    readonly bool[] wall, goal;
+    int[] dist = [];
+    int[] goals = [];
+    int[] goalDist = []; // goalDist[g*cells+c]
+    readonly StateTable nodes;
+    readonly SolveStats stats = new();
+
+    // scratch
+    readonly bool[] occ;
+    readonly byte[] blkArr; readonly byte* blk; // wall | box, pinned, used by flood kernels
+    uint[] mark, mark2; readonly uint* markP, mark2P, rmarkP; readonly int* queueP, cqueueP;
+    uint stamp;
+    readonly int[] queue;
+    readonly bool[] fz;
+    readonly uint[] cmark; uint cstamp;
+    readonly int[] cqueue, barrier;
+    readonly ChunkList<uint> mv = new();
+    struct Opened { public int Start; public ushort Len, Next, Left; }
+    readonly ChunkList<Opened> opened = new();
+    KeyHeap heap = new();
+    KeyHeap?[]? buckets;
+    int turn, rr;
+    bool lean, memFull;
+    GoalArea? ga;
+    SideDead? sd;
+    ClusterChecker? cl;
+    readonly ulong* ckey; // scratch child key
+    readonly Dictionary<int, Push[]> macros = new();
+    readonly Dictionary<int, Push[][]> nodeMacros = new();
+    int[] round = [];
+    bool[] entrance = [];
+    uint[] mark3; uint pstamp, bstamp;
+    int[] bprev;
+    // hc memo
+    readonly int[] cc; readonly uint[] ccMark; uint ccStamp;
+    readonly List<int> freeG = new();
+    int[]? noise;
+    // regions()
+    readonly uint[] rmark; uint rstamp; int[] floorCells = [];
+    // feasible()
+    int[] matchOf = [];
+    // pair deadlocks
+    int[] poff = [], popp = [];
+    sbyte[] dpair = [];
+    // scratch for open()
+    struct Cand { public uint Code; public int Wd, Ch; }
+    struct Push1 { public int I, B, T; public sbyte Dir; public int R, Pen; }
+    Cand[] cands; Push1[] pushes1;
+    readonly Stopwatch clock = Stopwatch.StartNew();
+    // pull mode (Go solver.pull): front()/playerAfter()/supportCell() generalise push geometry
+    readonly bool pull, pfOn;
+    int Front(int b, int d) => pull ? b + d : b - d;
+    int PlayerAfter(int nc, int d) => pull ? nc + d : nc - d;
+    int SupportCell(int b, int c, int d) => pull ? c + d : b - d;
+
+    public FullSolver(Level level, FullOptions options)
+    {
+        pull = options.Pull; pfOn = options.Pull && options.PfOn; mRng = options.RngSeed;
+        lv = level; opt = options; n = lv.Boxes.Length; cells = lv.Cells; W = lv.W;
+        dirs = [-W, W, -1, 1]; wall = lv.Wall; goal = lv.Goal;
+        occ = new bool[cells];
+        mark = GC.AllocateArray<uint>(cells, pinned: true); mark2 = GC.AllocateArray<uint>(cells, pinned: true);
+        queue = GC.AllocateArray<int>(cells, pinned: true); cqueue = GC.AllocateArray<int>(cells, pinned: true);
+        rmark = GC.AllocateArray<uint>(cells, pinned: true); blkArr = GC.AllocateArray<byte>(cells, pinned: true);
+        markP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref mark[0]); mark2P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref mark2[0]);
+        queueP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref queue[0]); cqueueP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref cqueue[0]);
+        rmarkP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmark[0]); blk = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref blkArr[0]);
+        for (int i = 0; i < cells; i++) blkArr[i] = (byte)(wall[i] ? 1 : 0);
+        fz = new bool[cells]; cmark = new uint[cells]; barrier = new int[cells];
+        cc = new int[cells]; ccMark = new uint[cells];
+        mark3 = new uint[cells]; bprev = new int[4 * cells];
+        bseenStamp = new uint[4 * cells];
+        nodes = new StateTable(wall);
+        ckey = (ulong*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(Math.Max(1, nodes.Nw) * 8));
+        cands = new Cand[4 * n + 8]; pushes1 = new Push1[4 * n + 8];
+        ComputeDistances();
+        ComputeGoalDistances();
+        ComputePackingOrder();
+        InitBitRows();
+        PerturbInit(opt.Seed);
+    }
+
+    uint[] bseenStamp;
+
+    public void Dispose()
+    {
+        nodes.Dispose(); mv.Dispose(); opened.Dispose(); heap.Dispose();
+        if (buckets != null) foreach (var b in buckets) b?.Dispose();
+        System.Runtime.InteropServices.NativeMemory.Free(ckey);
+    }
+
+    // ---- static analysis ------------------------------------------------------------------------------------
+    void ComputeDistances()
+    {
+        dist = new int[cells]; Array.Fill(dist, -1);
+        var q = queue; int tail = 0;
+        for (int c = 0; c < cells; c++) if (goal[c]) { dist[c] = 0; q[tail++] = c; }
+        for (int i = 0; i < tail; i++)
+        {
+            int c = q[i];
+            foreach (int d in dirs)
+            {
+                int b = c - d;
+                if (!wall[b] && !wall[SupportCell(b, c, d)] && dist[b] < 0) { dist[b] = dist[c] + 1; q[tail++] = b; }
+            }
+        }
+    }
+
+    void ComputeGoalDistances()
+    {
+        var gl = new List<int>();
+        for (int c = 0; c < cells; c++) if (goal[c]) gl.Add(c);
+        goals = [.. gl];
+        goalDist = new int[goals.Length * cells]; Array.Fill(goalDist, -1);
+        for (int g = 0; g < goals.Length; g++)
+        {
+            var d = goalDist.AsSpan(g * cells, cells);
+            d[goals[g]] = 0;
+            int tail = 0; queue[tail++] = goals[g];
+            for (int i = 0; i < tail; i++)
+            {
+                int c = queue[i];
+                foreach (int dir in dirs)
+                {
+                    int b = c - dir;
+                    if (!wall[b] && !wall[SupportCell(b, c, dir)] && d[b] < 0) { d[b] = d[c] + 1; queue[tail++] = b; }
+                }
+            }
+        }
+    }
+
+    // Box->goal feasibility as bitsets: goalAdj[c*gw + w] bit g set iff a box on c can reach goal g (goalDist >= 0).
+    ulong[] goalAdj = [];
+    int gw;
+    ulong[] matchedMask = [], visitedMask = [];
+
+    void InitMatching()
+    {
+        gw = (goals.Length + 63) / 64;
+        goalAdj = new ulong[cells * gw];
+        for (int g = 0; g < goals.Length; g++)
+            for (int c = 0; c < cells; c++)
+                if (goalDist[g * cells + c] >= 0) goalAdj[c * gw + (g >> 6)] |= 1UL << (g & 63);
+        matchedMask = new ulong[gw]; visitedMask = new ulong[gw];
+        matchOf = new int[goals.Length];
+    }
+
+    /// <summary>Does every box have a distinct reachable goal (perfect bipartite matching)? Greedy bit-ops first, augmenting paths only on conflicts.</summary>
+    bool Feasible(ReadOnlySpan<int> boxes)
+    {
+        if (goalAdj.Length == 0) InitMatching();
+        Array.Fill(matchOf, -1);
+        Array.Clear(matchedMask);
+        for (int i = 0; i < boxes.Length; i++)
+        {
+            int b = boxes[i];
+            int baseW = b * gw;
+            int found = -1;
+            for (int w = 0; w < gw; w++)
+            {
+                ulong free = goalAdj[baseW + w] & ~matchedMask[w];
+                if (free != 0) { found = (w << 6) + System.Numerics.BitOperations.TrailingZeroCount(free); break; }
+            }
+            if (found >= 0) { matchOf[found] = i; matchedMask[found >> 6] |= 1UL << (found & 63); continue; }
+            Array.Clear(visitedMask);
+            if (!Augment(i, boxes)) return false;
+        }
+        return true;
+    }
+
+    bool Augment(int i, ReadOnlySpan<int> boxes)
+    {
+        int baseW = boxes[i] * gw;
+        for (int w = 0; w < gw; w++)
+        {
+            ulong cand = goalAdj[baseW + w] & ~visitedMask[w];
+            while (cand != 0)
+            {
+                int g = (w << 6) + System.Numerics.BitOperations.TrailingZeroCount(cand);
+                cand &= cand - 1;
+                if ((visitedMask[w] & (1UL << (g & 63))) != 0) continue;
+                visitedMask[w] |= 1UL << (g & 63);
+                if (matchOf[g] < 0 || Augment(matchOf[g], boxes)) { matchOf[g] = i; matchedMask[g >> 6] |= 1UL << (g & 63); return true; }
+                cand &= ~visitedMask[w]; // recursion may have visited more goals in this word
+            }
+        }
+        return false;
+    }
+
+    // ---- bit-row mirror of blk (boards up to 64 wide): frR[row] has a bit per free (non-wall, non-box) cell -------------------
+    bool fbits; int frRows;
+    ulong* frR, frRem, frReg;
+    byte* frRow, frCol;
+    short[]? goalIdxA; short* goalIdx; ulong[]? gOccA; ulong* gOcc; ulong[]? geMaskA; ulong* geMask; ulong[]? rdMaskA; ulong* rdMask; int nRounds;
+
+    void InitBitRows()
+    {
+        fbits = W <= 64 && cells / W <= 64 && cells % W == 0;
+        // goal occupancy bitset + per-round masks for PackedCount (valid for any board size)
+        int gwords = Math.Max(1, (goals.Length + 63) / 64);
+        nRounds = 0; foreach (int g in goals) nRounds = Math.Max(nRounds, round[g] + 1);
+        goalIdxA = GC.AllocateArray<short>(cells, pinned: true); gOccA = GC.AllocateArray<ulong>(gwords, pinned: true);
+        geMaskA = GC.AllocateArray<ulong>((nRounds + 1) * gwords, pinned: true); rdMaskA = GC.AllocateArray<ulong>((nRounds + 1) * gwords, pinned: true);
+        goalIdx = (short*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref goalIdxA[0]); gOcc = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref gOccA[0]);
+        geMask = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref geMaskA[0]); rdMask = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rdMaskA[0]);
+        for (int c = 0; c < cells; c++) goalIdx[c] = -1;
+        packWords = gwords;
+        for (int gi = 0; gi < goals.Length; gi++)
+        {
+            goalIdx[goals[gi]] = (short)gi;
+            int r = round[goals[gi]];
+            rdMask[r * gwords + (gi >> 6)] |= 1UL << (gi & 63);
+            for (int k = 0; k <= r; k++) geMask[k * gwords + (gi >> 6)] |= 1UL << (gi & 63); // goals with round >= k
+        }
+        if (!fbits) return;
+        frRows = cells / W;
+        var fa = frKeepA = GC.AllocateArray<ulong>(frRows * 3 + 8, pinned: true);
+        frR = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref fa[0]); frRem = frR + frRows + 2; frReg = frRem + frRows + 2;
+        var ra = frKeepB = GC.AllocateArray<byte>(2 * cells, pinned: true);
+        frRow = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref ra[0]); frCol = frRow + cells;
+        for (int c = 0; c < cells; c++) { frRow[c] = (byte)(c / W); frCol[c] = (byte)(c % W); if (!wall[c]) frR[c / W] |= 1UL << (c % W); }
+        frFloorA = GC.AllocateArray<ulong>(frRows + 2, pinned: true);
+        frFloor = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref frFloorA[0]);
+        for (int c = 0; c < cells; c++) if (!wall[c]) frFloor[c / W] |= 1UL << (c % W);
+    }
+    ulong[]? frFloorA; ulong* frFloor;   // static: floor (non-wall) cells per row
+
+    /// <summary>The 5x5 window around floor cell t as a bit set of box cells (bit (dy+2)*5+(dx+2), centre excluded); needs fbits, W &lt;= 62 and t at least 2 rows from the border rows.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    uint BoxWindow5(int t)
+    {
+        int r = frRow[t], c = frCol[t];
+        ulong* fr = frR; ulong* fl = frFloor;
+        uint win = 0;
+        win |= (uint)(((~fr[r - 2] & fl[r - 2]) << 2 >> c) & 31);
+        win |= (uint)(((~fr[r - 1] & fl[r - 1]) << 2 >> c) & 31) << 5;
+        win |= (uint)(((~fr[r] & fl[r]) << 2 >> c) & 31) << 10;
+        win |= (uint)(((~fr[r + 1] & fl[r + 1]) << 2 >> c) & 31) << 15;
+        win |= (uint)(((~fr[r + 2] & fl[r + 2]) << 2 >> c) & 31) << 20;
+        return win & ~(1u << 12);
+    }
+    bool WindowOk(int t) => fbits && W <= 62 && (uint)(frRow[t] - 2) < (uint)(frRows - 4);
+    int packWords; ulong[]? frKeepA; byte[]? frKeepB; // keep the pinned arrays alive
+
+    void SetOcc(int c, bool v)
+    {
+        occ[c] = v; blk[c] = (byte)(v ? 1 : 0);
+        if (fbits) { if (v) frR[frRow[c]] &= ~(1UL << frCol[c]); else frR[frRow[c]] |= 1UL << frCol[c]; }
+        int gi = goalIdx[c];
+        if (gi >= 0) { if (v) gOcc[gi >> 6] |= 1UL << (gi & 63); else gOcc[gi >> 6] &= ~(1UL << (gi & 63)); }
+    }
+
+    /// <summary>Marks cells reachable from p (not crossing walls or boxes) in mk with a fresh stamp; returns the minimum cell.</summary>
+    int Reach(int p, uint[] mk) => ReachP(p, ReferenceEquals(mk, mark) ? markP : mark2P);
+
+    int ReachP(int p, uint* mk)
+    {
+        if (stamp > uint.MaxValue - 4) { Array.Clear(mark); Array.Clear(mark2); stamp = 0; }
+        uint st = ++stamp;
+        int w = W;
+        if (fbits && !ReachRowsOff) return ReachRows(p, mk, st);
+        int* q = queueP; int tail = 0; q[tail++] = p; mk[p] = st; int minC = p;
+        for (int i = 0; i < tail; i++)
+        {
+            int c = q[i];
+            int y = c - w; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; if (y < minC) minC = y; }
+            y = c + w; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; }
+            y = c - 1; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; if (y < minC) minC = y; }
+            y = c + 1; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; }
+        }
+        return minC;
+    }
+
+    public static bool ReachRowsOff = Environment.GetEnvironmentVariable("SOKSOLV_REACHROWS_OFF") == "1";   // test hook: queue flood
+
+    /// <summary>ReachP over the free-row mirror (flood kernel v2); the region's cells are then stamped from the row words.</summary>
+    int ReachRows(int p, uint* mk, uint st)
+    {
+        int w = W;
+        ulong* fr = frR; ulong* rg = frReg;
+        int rp = frRow[p]; int cp = frCol[p];
+        ulong saved = fr[rp];
+        fr[rp] = saved | 1UL << cp;       // the start cell counts as reachable even if it is blocked
+        int lo = rp, hi = rp;
+        RowK.Flood(fr, rg, rp, 1UL << cp, ref lo, ref hi);
+        fr[rp] = saved;
+        int minC = lo * w + System.Numerics.BitOperations.TrailingZeroCount(rg[lo]);
+        for (int r = lo; r <= hi; r++)
+        {
+            ulong x = rg[r]; rg[r] = 0;
+            int baseC = r * w;
+            for (; x != 0; x &= x - 1) mk[baseC + System.Numerics.BitOperations.TrailingZeroCount(x)] = st;
+        }
+        return minC;
+    }
+
+    bool Blocked(int c) => wall[c] || occ[c];
+
+    bool Frozen2x2(int t)
+    {
+        int w = W;
+        Span<int> tls = [t, t - 1, t - w, t - w - 1];
+        foreach (int tl in tls)
+        {
+            int c0 = tl, c1 = tl + 1, c2 = tl + w, c3 = tl + w + 1;
+            if (Blocked(c0) && Blocked(c1) && Blocked(c2) && Blocked(c3))
+                if ((occ[c0] && !goal[c0]) || (occ[c1] && !goal[c1]) || (occ[c2] && !goal[c2]) || (occ[c3] && !goal[c3])) return true;
+        }
+        return false;
+    }
+
+    bool FreezeDeadlock(int t) { bool off = false; return Frozen(t, ref off) && off; }
+
+    bool Frozen(int c, ref bool offGoal)
+    {
+        fz[c] = true;
+        bool res = false;
+        if (BlockedAxis(c, 1, ref offGoal) && BlockedAxis(c, W, ref offGoal))
+        {
+            if (!goal[c]) offGoal = true;
+            res = true;
+        }
+        fz[c] = false;
+        return res;
+    }
+
+    bool BlockedAxis(int c, int d, ref bool offGoal)
+    {
+        int a = c - d, b = c + d;
+        if (wall[a] || wall[b] || fz[a] || fz[b]) return true;
+        if (dist[a] < 0 && dist[b] < 0) return true;
+        return (occ[a] && Frozen(a, ref offGoal)) || (occ[b] && Frozen(b, ref offGoal));
+    }
+
+    int Normalize(int b, int t, int minR, uint st)
+    {
+        foreach (int d in dirs)
+        {
+            int x = b + d;
+            if (x != t && !wall[x] && !occ[x] && mark[x] != st) return Reach(b, mark2);
+        }
+        if (mark[t] == st && (t == minR || !RingConnected(t))) return Reach(b, mark2);
+        return Math.Min(minR, b);
+    }
+
+    bool RingConnected(int c)
+    {
+        int w = W;
+        Span<int> ring = [c - w, c - w + 1, c + 1, c + w + 1, c + w, c + w - 1, c - 1, c - w - 1];
+        int start = -1;
+        for (int i = 0; i < 8; i++) if (wall[ring[i]] || occ[ring[i]]) { start = i; break; }
+        if (start < 0) return true;
+        int runs = 0; bool inRun = false, runHasOrth = false;
+        for (int k = 1; k <= 8; k++)
+        {
+            int i = (start + k) % 8;
+            int x = ring[i];
+            if (!wall[x] && !occ[x]) { inRun = true; runHasOrth = runHasOrth || i % 2 == 0; continue; }
+            if (inRun && runHasOrth) runs++;
+            inRun = false; runHasOrth = false;
+        }
+        return runs <= 1;
+    }
+
+    void ComputePackingOrder()
+    {
+        round = new int[cells]; entrance = new bool[cells];
+        var filled = (bool[])goal.Clone();
+        var left = new List<int>();
+        for (int c = 0; c < cells; c++)
+        {
+            if (goal[c]) { left.Add(c); continue; }
+            round[c] = -1;
+            if (!wall[c]) foreach (int d in dirs) if (goal[c + d]) entrance[c] = true;
+        }
+        var seen = new int[cells]; int stampL = 0;
+        for (int r = 0; left.Count > 0; r++)
+        {
+            var outL = new List<int>(); var keep = new List<int>();
+            foreach (int g in left)
+            {
+                stampL++;
+                if (Extractable(g, filled, seen, stampL)) outL.Add(g); else keep.Add(g);
+            }
+            if (outL.Count == 0) { outL = keep; keep = new List<int>(); }
+            foreach (int g in outL) { filled[g] = false; round[g] = r; }
+            left = keep;
+        }
+    }
+
+    bool Extractable(int g, bool[] filled, int[] seen, int stampL)
+    {
+        bool Free(int c) => !wall[c] && (!filled[c] || c == g);
+        var q = new List<int> { g };
+        seen[g] = stampL;
+        for (int i = 0; i < q.Count; i++)
+        {
+            int c = q[i];
+            foreach (int d in dirs)
+            {
+                int nc = c + d;
+                if (seen[nc] == stampL || !Free(nc) || !Free(nc + d)) continue;
+                if (!goal[nc]) return true;
+                seen[nc] = stampL;
+                q.Add(nc);
+            }
+        }
+        return false;
+    }
+
+    // ---- heuristics --------------------------------------------------------------------------------------------
+    void PerturbInit(int seed)
+    {
+        if (seed <= 0) return;
+        noise = new int[cells];
+        ulong x = (ulong)seed * 0x9E3779B97F4A7C15UL + 0x2545F4914F6CDD1DUL;
+        for (int c = 0; c < cells; c++)
+        {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            noise[c] = (int)(x % (ulong)(4 * seed));
+        }
+    }
+
+    int SetCosts(ReadOnlySpan<int> cur)
+    {
+        if (++ccStamp == 0) { Array.Clear(ccMark); ccStamp = 1; }
+        freeG.Clear();
+        for (int g = 0; g < goals.Length; g++) if (!occ[goals[g]]) freeG.Add(g);
+        int h = 0;
+        foreach (int b in cur) h += Hc(b);
+        return h;
+    }
+
+    int Hc(int c)
+    {
+        int b = HcBase(c);
+        if (noise != null && !goal[c]) return b * 4 + noise[c];
+        return b;
+    }
+
+    int HcBase(int c)
+    {
+        if (!opt.FreeGoal || goal[c]) return dist[c];
+        if (ccMark[c] == ccStamp) return cc[c];
+        int best = NoGoalCost;
+        foreach (int g in freeG)
+        {
+            int d = goalDist[g * cells + c];
+            if (d >= 0 && d < best) best = d;
+        }
+        ccMark[c] = ccStamp; cc[c] = best;
+        return best;
+    }
+
+    // ---- heaps --------------------------------------------------------------------------------------------------
+    static ulong MkKey(int major, int minor, int id) =>
+        (Math.Min((ulong)(uint)major, 0xFFFFUL) << 48) | (Math.Min((ulong)(uint)minor, 0xFFFFUL) << 32) | (uint)id;
+
+    void PushNode(int h, int w, int id, int bucket)
+    {
+        if (buckets == null) buckets = new KeyHeap?[(n + 1) * MaxRegions];
+        heap.Push(MkKey(h, w, id));
+        (buckets[bucket] ??= new KeyHeap()).Push(MkKey(w, h, id));
+    }
+
+    void PushTo(int src, int h, int w, int id)
+    {
+        if (src < 0) heap.Push(MkKey(h, w, id));
+        else buckets![src]!.Push(MkKey(w, h, id));
+    }
+
+    bool Exhausted(int id)
+    {
+        int m = nodes.MvIdx(id);
+        return m >= 0 && opened[m].Left == 0;
+    }
+
+    bool PopNode(out int id, out int src)
+    {
+        turn++;
+        if (turn % 2 == 0 && buckets != null)
+        {
+            for (int c = 0; c < buckets.Length; c++)
+            {
+                int s = rr;
+                var b = buckets[s];
+                rr = (rr + 1) % buckets.Length;
+                if (b == null) continue;
+                while (b.Count > 0)
+                {
+                    int cand = (int)(uint)b.Pop();
+                    if (!Exhausted(cand)) { id = cand; src = s; return true; }
+                }
+            }
+        }
+        while (heap.Count > 0)
+        {
+            int cand = (int)(uint)heap.Pop();
+            if (!Exhausted(cand)) { id = cand; src = -1; return true; }
+        }
+        id = 0; src = 0; return false;
+    }
+
+    public ulong TrackedBytes() =>
+        (ulong)(nodes.Bytes + mv.Bytes + opened.Bytes + heap.Bytes + BucketBytes() + dpair.Length + goalDist.Length * 4L);
+    long BucketBytes() { long t = 0; if (buckets != null) foreach (var b in buckets) if (b != null) t += b.Bytes; return t; }
+}

@@ -1,3 +1,6 @@
-/soksolv
-/checksol
+bin/
+obj/
+*.user
 /results-*.tsv
+/artifacts/
+/artifacts/

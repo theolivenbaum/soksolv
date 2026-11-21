@@ -1,0 +1,49 @@
+using Soksolv.Model;
+using Soksolv.Search;
+
+namespace Soksolv.Tests;
+
+public class PortfolioTests
+{
+    [Theory]
+    [InlineData("Microban_155_65")]
+    [InlineData("Holland_81_27")]
+    [InlineData("SokEvo_107_82")]
+    public void Portfolio_SolvesAndVerifies(string level)
+    {
+        var rows = TestData.Rows(level);
+        var r = Portfolio.Solve(rows, new PortfolioOptions { MemBytes = 2048UL << 20 }, 60);
+        Assert.True(r.Solved, r.Reason);
+        Assert.Contains(r.Strategy, new[] { "full", "reverse", "macro", "novelty", "fa2", "pull", "factor", "dive", "toward", "hub-gen", "hub-pull" });
+        Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+    }
+
+    [Fact]
+    public void Portfolio_HandlesStartsSolvedLevel()
+    {
+        string[] rows = ["######", "#@*  #", "#    #", "######"];
+        var r = Portfolio.Solve(rows, new PortfolioOptions { MemBytes = 1024UL << 20 }, 30);
+        Assert.True(r.Solved, r.Reason);
+        Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+    }
+
+    [Fact]
+    public void Portfolio_TimeoutReportsReasonsFromBothLanes()
+    {
+        var rows = TestData.Rows("Holland_81_57");
+        var r = Portfolio.Solve(rows, new PortfolioOptions { MemBytes = 2048UL << 20, NodeBudget = 200 }, 5);
+        Assert.False(r.Solved);
+        Assert.Contains("full", r.Reason);
+        Assert.Contains("reverse", r.Reason);
+    }
+
+    [Fact]
+    public void Portfolio_DiveGatedBoardRunsDiveInsteadOfReverse()
+    {
+        var rows = TestData.Rows("Dive_Sven_1623_197"); // solved-board peel depth >= 10
+        var r = Portfolio.Solve(rows, new PortfolioOptions { MemBytes = 2048UL << 20, NodeBudget = 50 }, 5);
+        Assert.False(r.Solved);
+        Assert.Contains("dive", r.Reason);
+        Assert.DoesNotContain("reverse", r.Reason);
+    }
+}
