@@ -278,3 +278,57 @@ What did not work / not worth it
 * Pair floods across the pair search cannot all be skipped: the memo only helps for repeated states; the remaining 50k floods are first visits.
 Remaining (not in this area): plan4/cut scan setup dominates the Sasquatch wide levels (12 s of 13 s on Sasquatch_IV#32); cluster/dead-zone proofs dominate the testdata macro/novelty
 profile (~35%); pull is now spread flat over MArtic 9%, MBoxSearch 8%, RoomBroken 7%, floods 7%, MVisit 6%, move access 6%.
+
+## planners (plan4, v1 sink planner, planner v2, CutScan, fa2 hot sides)
+
+Files: `Macro/FullSolver.MacroPlan4.cs` (Planner4: `Expand4`/`PullBox`, `ExpandV2`/`PullBoxV2`, matching, elimination SCC, kid order), `Macro/FullSolver.MacroPlan.cs` (v1 sink planner of the
+novelty lane, `PackingPlan`), `Macro/CutScan.cs` (low-link scan answering pull-state queries), `Macro/CellPieces.cs` (block-cut view used by fa2), `Fa2/Fa2HotSides.cs`,
+`Fa2/Fa2Oop.cs` (`SourcesOf`). Method as above (CPU time, same-minute Go, `-parity`, equal work); deterministic Ir from callgrind on the AOT binary guided every step
+(`P4EXP=n` env var caps plan4 expansions for profiling; `SOKSOLV_P4HASH=1` prints a hash of the planner's best path, the exactness oracle for planner-only changes;
+`SOKSOLV_CHECK_CUT=1` / `SOKSOLV_CHECK_HS=1` re-verify every cutscan answer / hot-side row / `SourcesOf` against the original flood).
+
+### Result (CPU, C# / Go, equal work, parity exact everywhere)
+
+| workload | before | after |
+|---|---|---|
+| plan4 setup, Sasquatch II_50#25 (200000 expansions, 50 boxes): C# s / Go s | 76 / 75 (1.0x) | 40 / 76 (0.52x); steady Ir per expansion 1.58M -> 0.80M |
+| macro, 12 wide levels (bench/wide-levels.tsv) | 0.92 | 0.55 |
+| fa2, 12 wide levels | 0.80 | 0.62-0.66 (Sasquatch_VI_50#48: 18.1 s Go, 10.9 s C#; 120 nodes 7.5 s -> 0.84 s) |
+| novelty, 12 wide levels | 0.70 | 0.6-0.65 |
+| macro / novelty / fa2, 22 testdata levels, 5000 nodes | 0.75 / 0.62 / 0.83 | 0.64 / 0.63 / 0.62 |
+
+Parity: `bench/lane-parity`-style full-statistics comparison (solved/nodes/pushes/stored/generated/duplicates/fingerprint/solution) of the new AOT binary against the pre-change AOT
+binary (itself Go-exact) on the 24 testdata levels for macro, novelty, fa2, factor, dive, hf, pull and on the 12 wide levels for macro/fa2/factor/novelty; identical. `dotnet test` green
+(except the known load-sensitive `HubPull_NodeSlicesMatchGo`, which passes alone).
+Allocation: plan4 growth storage (nodes, boxes, used sets, kids) is native chunked memory that never moves: alloc_mb at 30000 expansions 92 -> 58 MB, gen0/gen2 GCs 3 -> 1; no per-node garbage.
+
+### What won (largest first)
+1. **Pull-state queries through one DFS per node (CutScan), made cheap.** The scan was already there; the costs were in how it was used: (a) a per-`to` *lift-independent* record `G`
+   (separated child subtrees, piece of each neighbour, parent-side minimum, plain answer) is computed once per node and shared by every box (distinct `to` per node ~300 vs ~800 fills);
+   (b) a lift that touches at most one piece of `to` only lowers that piece's minimum (fast path, ~85% of fills); (c) labels in locals with unique negative sentinels for blocked
+   directions: sides/pieces become 12 compares, no loops, no stackalloc security cookie; (d) pointer kernel over POH arrays (kept referenced), `Q` record = one cache line.
+2. **Dedupe of (to, component) ends without hash/stamp arrays**: components of the neighbours of `to` are the `sides` groups, so a 4-bit `Emit` mask in the per-lift query record
+   replaces `NewEnd`'s (generation, count, value) arrays (plan4/v2) and the `HashSet<(int,int)>` of the v1 planner (which also allocated and cost 4% of setup).
+3. **Matching on bitsets.** `reach[t]` transposed once into `cellBases[cell]` (bases that reach a cell); free bases are one bitset; Kuhn augmentation, the one-removal
+   alternating-path searches (`MatchSkip`) iterate `cellBases[cell] & free & ~visited` with `tzcnt` instead of `List<int>` enumerators + `CanReach` per base (was 28% of plan4).
+4. **Kids in lazy stable order.** Only ~0.3% of the ~340 stored kids per node are ever consumed, so the full stable radix sort (~120k Ir/expansion) became: threshold selection of
+   the `Plan4Beam` smallest (compressed key, software run-compress since `Bmi2` is not enabled in the default AOT target) only when more than 512 kids exist, and an on-demand
+   "next smallest, rotate to the sorted prefix" (`EnsureSorted`; a node popped >12 times is sorted in one go). Exactness: the rotation keeps the relative order of the rest, so ties
+   resolve exactly as the stable sort; the Festival advisor is chosen over the unsorted beam with the tie rule (regions, -walk, key, index) = first best in sorted order.
+5. **Region components for free**: `CutAll` runs the DFS over every free cell at node start, so component ids = regions of the unlifted board (`baseR`, the player's region test,
+   lifted-box region counts): the player flood, `LabelRegions` and the per-box `Regions()` floods of planner v2 (2 per box!) disappeared.
+6. **`Separated`** (sink gating): the depth-5 BFS per candidate became a lazily built per-cell bitset ball (12% of Sasquatch_IV setup -> 1.6%).
+7. **fa2 hot sides / out-of-plan zones (Go hsZones, hsReachGoal, sourcesOf)** were 80% of fa2 on Sasquatch_VI_50#48 (O(cells^2) floods per blocker and per plan step). `CellPieces`
+   (one low-link DFS giving, for every cell, which neighbours stay connected without it) replaces the zone floods and the per-state flood of `SourcesOf`; the 50 per-goal reverse BFS per
+   blocker became one Tarjan condensation of the (cell, side) graph with goal bitmasks flowing once per edge. 46.5G -> 13.1G -> ~6G Ir on that level.
+8. v1 planner: the advisor's second pass re-filled a cutscan record per candidate in a new lift context; the piece count of the BFS state is the same number (stored); LINQ gone from `Run`.
+9. Smaller: pinned arrays + one `PullBox` method per box (register pressure: Expand4 as one method spilled ~40% of its instructions), merged candidate/beam pass, `FestPlan.Packed` on flat arrays.
+
+### What did not work / not done
+* Comparison-free full sort of every beam (even with compressed keys and 6-11 bit digits): ~170 Ir per kid because the generated loops spill; replaced by the lazy order.
+* `Bmi2.X64.ParallelBitExtract` is not usable in the default AOT target (`IsSupported` false), the software run-compress is used; a first version that only masked the shifted key had a
+  prefix bug that only showed on the AOT build (JIT used PEXT) - always test planner changes on the AOT binary.
+* Incremental reuse of a parent's per-box pull sets for the child (exactness would need a proof that the moved box cannot change a visited query's component/minimum): not attempted.
+* Bit-parallel push-graph SCC for `ComputeElim4` (6-10% of plan4 on open boards): designed (row-word closure with carry fill), not implemented; the pointer Tarjan is kept.
+* `PackingRoute.Flood` (per-state floods, 5% of v1 setup) must keep its visit counts (the 8M cap changes the plan), so it cannot use cutscan answers.
+* Remaining top costs, plan4 on Sasquatch II (0.80M Ir/expansion): PullBox 33%, CutQueryFill 23%, FillG 10%, CutDfs 7%, ComputeElim4 7%; on open boards CutDfs + ComputeElim4 reach 30%.
