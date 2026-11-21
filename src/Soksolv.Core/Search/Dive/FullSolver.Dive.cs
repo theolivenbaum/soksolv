@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Intrinsics;
 using Soksolv.Model;
 
 namespace Soksolv.Search;
@@ -274,6 +275,26 @@ public sealed unsafe partial class FullSolver
         return score;
     }
 
+    /// <summary>min over goals j = 1..n of (edge(box, j) - v[j]) with the box-major table row at eo (edges below 0 cost AssignmentInf); v starts at dual[vo].</summary>
+    int MinReducedRow(int[] dt, int eo, int[] dual, int vo)
+    {
+        int j = 0, best = int.MaxValue;
+        if (Vector128.IsHardwareAccelerated && n >= 8)
+        {
+            var vInf = Vector128.Create(AssignmentInf); var zero = Vector128<int>.Zero; var vb = Vector128.Create(int.MaxValue);
+            ref int rDt = ref dt[eo]; ref int rV = ref dual[vo];
+            for (; j + 3 < n; j += 4)
+            {
+                var e = Vector128.LoadUnsafe(ref rDt, (nuint)j);
+                e = Vector128.ConditionalSelect(Vector128.LessThan(e, zero), vInf, e);
+                vb = Vector128.Min(vb, e - Vector128.LoadUnsafe(ref rV, (nuint)j));
+            }
+            best = Math.Min(Math.Min(vb[0], vb[1]), Math.Min(vb[2], vb[3]));
+        }
+        for (; j < n; j++) { int e = dt[eo + j]; if (e < 0) e = AssignmentInf; best = Math.Min(best, e - dual[vo + j]); }
+        return best;
+    }
+
     /// <summary>The matching cost with boxes[moved] replaced (old was there).</summary>
     int MatchChild(ReadOnlySpan<int> boxes, int moved, int old, int[] dist, DiveDual dd)
     {
@@ -282,7 +303,8 @@ public sealed unsafe partial class FullSolver
         int goalCol = dd.Dual[3 * m + row];
         int box = boxes[moved];
         int u = int.MaxValue;
-        for (int j = 1; j < m; j++) u = Math.Min(u, AssignEdge(dist, box, j) - dd.Dual[m + j]);
+        if (dist.Length == n * cells) u = MinReducedRow(DistT(dist), box * n, dd.Dual, m + 1);
+        else for (int j = 1; j < m; j++) u = Math.Min(u, AssignEdge(dist, box, j) - dd.Dual[m + j]);
         int newCost = AssignEdge(dist, box, goalCol);
         if (u == newCost - dd.Dual[m + goalCol])
         {
@@ -325,22 +347,42 @@ public sealed unsafe partial class FullSolver
         }
         d.BestE = int.MaxValue;
         dv = d;
+        DiveBitsInit();
     }
 
     /// <summary>Child-only features of a stored node (occ holds its boxes): U, prefix and whether the real player is in its region.</summary>
     (int u, int prefix, bool home) DiveFeat(int id, ReadOnlySpan<int> boxes, bool reuse = false)
     {
         var d = dv!;
-        if (!reuse) Reach(nodes.Player(id), mark2);   // reuse: DiveApply just flooded this child's region into mark2 (stamp)
-        uint st = stamp;
-        int u = 0;
-        foreach (int b in boxes)
+        int u = 0; bool home;
+        if (reuse && fbits)
         {
-            bool touched = false;
-            foreach (int dir in dirs) if (mark2[b + dir] == st) { touched = true; break; }
-            if (!touched) u++;
+            // the child's region rows (DiveApply flooded them): a box is untouched when none of its 4 neighbours is in the region
+            ulong* reg = diveRegP, fl = diveFloorP, fr = frR;
+            int touched = 0;
+            for (int r = 1; r < frRows - 1; r++)
+            {
+                ulong boxRow = ~fr[r] & fl[r];
+                if (boxRow == 0) continue;
+                ulong g = reg[r];
+                ulong near = g << 1 | g >> 1 | reg[r - 1] | reg[r + 1];
+                touched += System.Numerics.BitOperations.PopCount(boxRow & near);
+            }
+            u = boxes.Length - touched;
+            home = (reg[frRow[realPlayer]] >> frCol[realPlayer] & 1) != 0;
         }
-        bool home = mark2[realPlayer] == st;
+        else
+        {
+            if (!reuse) Reach(nodes.Player(id), mark2);   // reuse: DiveApply just flooded this child's region into mark2 (stamp)
+            uint st = stamp;
+            foreach (int b in boxes)
+            {
+                bool touched = false;
+                foreach (int dir in dirs) if (mark2[b + dir] == st) { touched = true; break; }
+                if (!touched) u++;
+            }
+            home = mark2[realPlayer] == st;
+        }
         int prefix = 0;
         if (d.ChainLen > 0)
         {
@@ -348,6 +390,25 @@ public sealed unsafe partial class FullSolver
             foreach (int g in lv.Boxes) { int v = d.Chain[g]; if (v >= 1 && !occ[g] && v < prefix) prefix = v; }
         }
         return (u, prefix, home);
+    }
+
+    ulong[]? diveRegA, diveFloorA; ulong* diveRegP, diveFloorP;
+    void DiveBitsInit()
+    {
+        if (!fbits || diveRegA != null) return;
+        diveRegA = GC.AllocateArray<ulong>(frRows + 2, pinned: true); diveFloorA = GC.AllocateArray<ulong>(frRows + 2, pinned: true);
+        diveRegP = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref diveRegA[0]); diveFloorP = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref diveFloorA[0]);
+        for (int c = 0; c < cells; c++) if (!wall[c]) diveFloorP[c / W] |= 1UL << (c % W);
+    }
+
+    /// <summary>Player region of the child (frR holds it) as row bits in diveReg; returns the region's minimum cell.</summary>
+    int DiveFlood(int p)
+    {
+        int rp = frRow[p], cp = frCol[p];
+        FloodRowsDirty(frR, diveRegP, frRows, rp, cp);
+        int lo = rp;
+        while (diveRegP[lo - 1] != 0) lo--;
+        return lo * W + System.Numerics.BitOperations.TrailingZeroCount(diveRegP[lo]);
     }
 
     void DivePush(int id, int e, int u, int a, int dist, int onStart, int revh, int prefix, int depth)
@@ -428,7 +489,7 @@ public sealed unsafe partial class FullSolver
         for (int x = 0; x < nodes.Nw; x++) ckey[x] = pk[x];
         Flip(b); Flip(c.T);
         SetOcc(b, false); SetOcc(c.T, true);
-        int np = Reach(PlayerAfter(c.T, dirs[c.Side]), mark2);
+        int np = fbits ? DiveFlood(PlayerAfter(c.T, dirs[c.Side])) : Reach(PlayerAfter(c.T, dirs[c.Side]), mark2);
         ulong zh = parentHash ^ nodes.ZBox(b) ^ nodes.ZBox(c.T) ^ nodes.ZPlayer(nodes.Player(id)) ^ nodes.ZPlayer(np);
         int cid = DiveAdd(zh, np, id, b, (sbyte)c.Side, nodes.G(id) + c.Plen);
         SetOcc(c.T, false); SetOcc(b, true);
@@ -597,6 +658,7 @@ public sealed unsafe partial class FullSolver
             Reach(nodes.Player(id), mark);
             uint st = stamp;
             diveCands.Clear();
+            { ulong bh = 0; foreach (int bx in cur) bh ^= nodes.ZBox(bx); mBoxHash = bh; }
             for (int i = 0; i < n; i++)
             {
                 mtst++;
@@ -615,6 +677,13 @@ public sealed unsafe partial class FullSolver
                 {
                     var c = diveCands[ci];
                     int b = cur[c.I];
+                    int e = pE, on = pOn;
+                    if (d.Land[b]) e--;
+                    if (d.Land[c.T]) e++;
+                    if (d.Start[b]) on--;
+                    if (d.Start[c.T]) on++;
+                    int cid = DiveApply(id, c, cur, child, parentHash);
+                    if (cid < 0 || cid < d.Depth.Count) continue; // stored before (a reparent keeps its filing): its matching distances are not needed
                     cur[c.I] = c.T;
                     int dst = MatchChild(cur, c.I, b, pfDist!, d.DD);
                     int revh = 0;
@@ -624,13 +693,6 @@ public sealed unsafe partial class FullSolver
                         revh = MatchChild(cur, c.I, b, goalDist, d.DR);
                     }
                     cur[c.I] = b;
-                    int e = pE, on = pOn;
-                    if (d.Land[b]) e--;
-                    if (d.Land[c.T]) e++;
-                    if (d.Start[b]) on--;
-                    if (d.Start[c.T]) on++;
-                    int cid = DiveApply(id, c, cur, child, parentHash);
-                    if (cid < 0 || cid < d.Depth.Count) continue; // stored before (a reparent keeps its filing)
                     SetOcc(b, false); SetOcc(c.T, true);
                     var (u, pre, home) = DiveFeat(cid, child, reuse: true);
                     SetOcc(c.T, false); SetOcc(b, true); // in this order: a macro may end on its own square

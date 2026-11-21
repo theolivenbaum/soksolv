@@ -70,12 +70,18 @@ public sealed unsafe partial class FullSolver
         Array.Clear(dhU); Array.Clear(dhP);
         Array.Copy(prev, m, dhV, 0, m); dhV[0] = 0;
         var v = dhV; var u = dhU;
-        for (int row = 1; row <= n; row++)
+        if (dist.Length == n * cells)
         {
-            int box = boxes[row - 1], best = int.MaxValue;
-            for (int j = 1; j <= n; j++) { int r = AssignEdge(dist, box, j) - v[j]; if (r < best) best = r; }
-            u[row] = best;
+            var dt = DistT(dist);
+            for (int row = 1; row <= n; row++) u[row] = MinReducedRow(dt, boxes[row - 1] * n, v, 1);
         }
+        else
+            for (int row = 1; row <= n; row++)
+            {
+                int box = boxes[row - 1], best = int.MaxValue;
+                for (int j = 1; j <= n; j++) { int r = AssignEdge(dist, box, j) - v[j]; if (r < best) best = r; }
+                u[row] = best;
+            }
         for (int row = 1; row <= n; row++) AugmentAssignment(boxes, dist, row);
         long total = AssignmentCost(boxes, dist);
         return total < AssignmentInf ? (int)total : -1;
@@ -153,7 +159,22 @@ public sealed unsafe partial class FullSolver
                 }
                 // tie-break as the scalar scan: the last free column at the minimum, else the first column at the minimum
                 int first = 0, last0 = 0;
-                for (j = 1; j <= n; j++)
+                j = 1;
+                if (Vector128.IsHardwareAccelerated && n >= 8)
+                {
+                    var vMs = Vector128.Create(ms); var zero = Vector128<int>.Zero;
+                    ref int rUsed = ref used[0]; ref int rMinv = ref minv[0]; ref int rP = ref p[0];
+                    for (; j + 3 <= n; j += 4)
+                    {
+                        var eq = Vector128.Equals(Vector128.LoadUnsafe(ref rMinv, (nuint)j), vMs) & Vector128.Equals(Vector128.LoadUnsafe(ref rUsed, (nuint)j), zero);
+                        uint mk = eq.ExtractMostSignificantBits();
+                        if (mk == 0) continue;
+                        if (first == 0) first = j + System.Numerics.BitOperations.TrailingZeroCount(mk);
+                        uint mz = (eq & Vector128.Equals(Vector128.LoadUnsafe(ref rP, (nuint)j), zero)).ExtractMostSignificantBits();
+                        if (mz != 0) last0 = j + 31 - System.Numerics.BitOperations.LeadingZeroCount(mz);
+                    }
+                }
+                for (; j <= n; j++)
                     if (used[j] == 0 && minv[j] == ms) { if (first == 0) first = j; if (p[j] == 0) last0 = j; }
                 j1 = last0 != 0 ? last0 : first;
             }

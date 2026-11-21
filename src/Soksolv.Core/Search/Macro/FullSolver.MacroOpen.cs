@@ -55,7 +55,7 @@ public sealed unsafe partial class FullSolver
         Prof.Stop(24, tdl);
         mParentConn = parentConn; mParentPackedF = parentPacked;
         long trc = Prof.Start();
-        if (CandMemoOn) { ulong bh = 0; foreach (int bx in cur) bh ^= nodes.ZBox(bx); mBoxHash = bh; }
+        if (CandMemoOn || pull) { ulong bh = 0; foreach (int bx in cur) bh ^= nodes.ZBox(bx); mBoxHash = bh; }
         int parentRoom = pfOn ? 0 : MRoomConnParent();
         int parentOop = pfOn ? 0 : MOutOfPlan(cur);
         Prof.Stop(27, trc);
@@ -641,7 +641,7 @@ public sealed unsafe partial class FullSolver
     {
         if (pull) // the dead-square table (pull distance to a start square) already filtered t; the push deadlock family does not apply
         {
-            if (PullFreezeDead(t)) { stats.Freeze++; return 2; }
+            if (PullFreezeMemo(cur[i], t)) { stats.Freeze++; return 2; }
             if (pfOn && PfInefficient(t, cur[i])) return 10; // exp-696
             return 0;
         }
@@ -942,6 +942,21 @@ public sealed unsafe partial class FullSolver
         int h = HotAfterP(cur, i, t);
         if (h < 0xFFFF) cm->Hot = (ushort)h;
         return h;
+    }
+
+    // the freeze proof of a pulled box is a pure function of (child box set, t): remembered by the Zobrist hash of both (bit 0 = verdict)
+    ulong* fzMemo; const int FzMemoBits = 17;
+    bool PullFreezeMemo(int b, int t)
+    {
+        if (CandMemoOff) return PullFreezeDead(t);
+        if (fzMemo == null) fzMemo = (ulong*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(8 << FzMemoBits));
+        ulong key = (mBoxHash ^ nodes.ZBox(b) ^ nodes.ZBox(t) ^ ((ulong)t + 1) * 0x9E3779B97F4A7C15UL) | 2;   // bit 1 marks an entry
+        ulong* e = fzMemo + ((int)(key >> 41) & ((1 << FzMemoBits) - 1));
+        ulong v = *e;
+        if ((v ^ key) >> 1 == 0 && (v & 2) != 0) return (v & 1) != 0;
+        bool dead = PullFreezeDead(t);
+        *e = (key & ~1UL) | (dead ? 1UL : 0UL);
+        return dead;
     }
 
     // ---- candidate memo: region count, room connectivity and hotspot count of a child are pure functions of its box set (and the static level), keyed by the xor of the Zobrist box keys ----
