@@ -91,3 +91,5 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [ ] incremental room-pair score (fa2rooms.go) — ~17% of fa2 time on wide levels
 - [ ] fa2 anytime lane (second engine on the macro lane's plan4 list) for the portfolio
 - [ ] unported fa2 experiment flags: v2ng/old plan variants in portfolio, hall-sup, plan-file/replay/stream engines
+
+- [x] Macro wide-level speed: 1.22x -> 1.05x Go CPU on 12 wide levels (hot rows/columns, bit box search + moveAccessBits, plan4 radix sort, goal-area memo); remaining: CutQueryFill/Expand4 constants, displacement, region counts
