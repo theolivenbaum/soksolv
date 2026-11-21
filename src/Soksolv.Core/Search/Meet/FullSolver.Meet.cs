@@ -6,6 +6,9 @@ public sealed unsafe partial class FullSolver
 {
     readonly List<int> meetPending = new();
     int meetPosted;
+    bool meetMacro;   // the search is the macro solver (MReconstruct) rather than the plain full lane
+    int[]? meetBuf;
+    string MeetRecon(int id) => meetMacro ? MReconstruct(id) : Reconstruct(id);
 
     /// <summary>A new node: record it in the forward perimeter; if the backward perimeter holds it too, queue a meeting (port of the s.fwd block in Go add).</summary>
     void MeetAdd(int id, ReadOnlySpan<int> boxes, int player)
@@ -20,13 +23,14 @@ public sealed unsafe partial class FullSolver
     void MeetPost(Span<int> cur)
     {
         var net = opt.Net!;
+        if (cur.Length != n) { meetBuf ??= new int[n]; cur = meetBuf; }
         foreach (int id in meetPending)
         {
             if (meetPosted >= MeetNet.MaxMeetPosts) break;
             meetPosted++;
-            string prefix = Reconstruct(id);
+            string prefix = MeetRecon(id);
             nodes.Unpack(id, cur);
-            net.Back.Post(new Meeting { Boxes = cur.ToArray(), Player = nodes.Player(id), Prefix = prefix, At = MeetNet.EndCell(prefix, lv.Player, W), From = "full" });
+            net.Back.Post(new Meeting { Boxes = cur.ToArray(), Player = nodes.Player(id), Prefix = prefix, At = MeetNet.EndCell(prefix, lv.Player, W), From = meetMacro ? "macro" : "full" });
         }
         meetPending.Clear();
     }
@@ -46,7 +50,7 @@ public sealed unsafe partial class FullSolver
             int id = nodes.Find(ckey, m.Player, nodes.HashOf(m.Boxes, m.Player), out _, out _);
             if (id < 0) continue;
             net.Fwd.Confirm();
-            string prefix = Reconstruct(id);
+            string prefix = MeetRecon(id);
             int at = MeetNet.EndCell(prefix, lv.Player, W);
             string tail = MeetNet.Complete(wall, W, m.Boxes, at, m.Tail);
             if (tail != "" || m.Tail.Length == 0) return prefix + tail;

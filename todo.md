@@ -70,3 +70,9 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [x] novelty: exact parity 59/59, 0.96x Go time, -strategy novelty, Portfolio (default on)
 - [ ] toward/tfwd/hf: needs target-board ranking (hfRank/tgt*), festCorral, diagdead, festIneff, meet tables — see docs/lanes.md
 - [ ] pull: perimeter publishing/meetings, pfOn (Festival-order), revive restarts; wide-level word-parallel box search speed
+
+
+## Macro lane — final state (see docs/macro.md)
+- [x] stages 1-5, 6a-6g with exact parity (fingerprint + end-to-end vs unpatched Go on testdata; LTS-42 41/41 + 1 skip)
+- [ ] speed: per-candidate open() on wide levels (~2x Go), plan4 box loop on 50+-box levels (~2.5x Go): word-parallel goal-area/move-access/hot rows, LazyChild, incremental roomConnChild
+- [ ] memory-governed revive ring + elastic memory for the macro lane (portfolio)

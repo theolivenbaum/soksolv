@@ -306,3 +306,31 @@ default to `-macro-stage 5 -macro-features 31`. 141 tests pass.
 
 * **End to end vs unpatched Go** `soksolv -strategy macro -procs 1 -nodes N` (two engines + baton + all features; `bench/compare.py` with `GO_FLAGS`/`CS_FLAGS`, parity mode): **19/19 testdata levels identical in solved, pushes and
   nodes_expanded at N=40000**, time ratio 1.04 on the 12 solved ones; ten further level/cap pairs spot-checked (N=4000/40000) identical. Goldens in `MacroTests` (`Stage6f`, `Stage6g`, `MacroLane_EndToEnd`); 176 tests pass.
+
+
+## Final status (6f/6g done) — speed work and measurements
+
+**Parity summary (all with `-parity`, node-capped):** fingerprint parity vs the patched Go reference at the full default feature mask (FEAT=255) on testdata 19/19 (single engine, and `ALT=1` = the alt
+planner configuration) and on the 42-level LTS sample 41/41 identical + 1 skipped (`Sasquatch II_50#25`: 50 boxes, plan4 runs to its 200,000-expansion cap; Go 47 s, C# > 60 s per run), for both ALT=0 and ALT=1.
+End to end against **unpatched** Go `-strategy macro -procs 1 -nodes 40000`: 19/19 testdata levels identical in solved/pushes/nodes (two engines + baton + all features), time ratio 1.04.
+
+**Speed work done after parity** (each validated against the exact version it replaces, see the `*Check` hooks and tests):
+* plan4's `cutscan.go` low-link scan instead of one flood per query (`CheckCut`): plan4 setup on Sven_1623#21 362 ms → 31 ms.
+* `pairbits.go` word-parallel pair search for boards up to 64 wide, pinned rows (`PairBitsCheck`).
+* `matchSkip` (one maximum matching per planner expansion + alternating-path queries; `MatchCheck`): setup on a 198-box level (Sasquatch_VI_50#48) 19.2 s → 2.1 s.
+* pooled per-box scratch in the planner; allocation-free `PairDead`; wall|box byte maps and pinned flood kernels (earlier).
+
+**Timed comparison vs unpatched Go** (`bench/compare.py`, `GO_FLAGS="-strategy macro -procs 1" CS_FLAGS="-strategy macro"`, Native AOT, 4-vCPU shared VM, calib alu ≈ 497 Mop/s / mem-latency 8.0 Mop/s):
+
+| set | result |
+|---|---|
+| 28 hard levels (Go `full` lane failed them at 20 s), `-t 10` | solved: Go 7, C# 7; time on the 7 both solve: Go 25.6 s, C# 22.3 s (ratio 0.87) |
+| per-level node throughput on the 21 unsolved ones | SokHard_163: C# 85–145% of Go; wide Sasquatch levels: C# 45–100% (e.g. VI_50#48 1,045 vs 2,877 nodes in 10 s) |
+| tracked structure memory (C# `peak_memory_mb`: node store + move arenas) vs Go peak | C# 8–13 MB vs Go 14–200 MB (not strictly like-for-like: Go reports its heap) |
+
+The timed solves are non-deterministic in Go itself (Sasquatch_VII_50#13: 71–300 ms in Go, 16 ms in C#); `DIVERGED` flags in timed mode are expected (different time-driven interleavings), node-capped runs are the exact check.
+
+**Remaining gaps**
+* Per-candidate `open()` cost is still ~2x Go on very wide levels (hundreds of candidates per node): goal-area (≈1.3 µs/call), pair-table lookups, hotspot `after()` and move-access scans are not yet word-parallel; plan4's box loop is ~2.5x Go per expansion on 50+-box levels (96 s vs 37 s for the up-front phase of Sasquatch II_50#25).
+* `LazyChild` (incremental per-child packed/oop) and Go's incremental `roomConnChild` / tree-based hotspot rows are not ported (performance-only).
+* Unported experiment features: novelty/access-novelty (inert at the macro lane's default `noveltyBudget()==0`), the relay/hub/fa2 hooks, the elastic-memory pool and memory-governed `revive` ring.

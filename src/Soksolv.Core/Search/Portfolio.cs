@@ -46,7 +46,7 @@ public static class Portfolio
         var threads = new List<Thread>();
         // bidirectional meetings between forward lanes (full) and the backward reverse lane (Go: meet.Back/Fwd in `all` mode)
         Meet.MeetNet? net = null;
-        if (po.Meet && po.Reverse && po.Full)
+        if (po.Meet && po.Reverse && (po.Full || po.Macro || po.Novelty))
         {
             try { net = new Meet.MeetNet(Level.Parse(rows).Cells); } catch (InvalidDataException) { }
         }
@@ -83,13 +83,13 @@ public static class Portfolio
         if (po.Macro)
             Lane("macro", () => FullSolver.SolveMacroLane(rows, new FullOptions
             {
-                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared,
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, Net = net, MeetOwner = 1,
                 MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
             }, timeLimitSec));
         if (po.Novelty)
             Lane("novelty", () => FullSolver.SolveNovelty(rows, new FullOptions
             {
-                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedDeadZone = sharedDz,
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedDeadZone = sharedDz, Net = net, MeetOwner = 3,
                 MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
             }, timeLimitSec));
         if (po.Pull)
