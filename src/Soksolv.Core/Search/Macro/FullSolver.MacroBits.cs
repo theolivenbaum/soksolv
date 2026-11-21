@@ -54,6 +54,12 @@ public sealed unsafe partial class FullSolver
     /// <summary>Fills the node's free rows from the occupancy (free = floor and not occupied).</summary>
     void BbBuild()
     {
+        if (fbits && frRows == bbH)
+        {
+            // frR is kept by SetOcc: a bit per floor cell without a box = exactly the free row
+            for (int r = 0; r < bbH; r++) bbNFreeP[r + 1] = frR[r];
+            return;
+        }
         for (int r = 0; r < bbH; r++)
         {
             ulong m = 0;

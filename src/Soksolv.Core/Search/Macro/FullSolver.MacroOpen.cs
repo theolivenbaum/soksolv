@@ -294,7 +294,9 @@ public sealed unsafe partial class FullSolver
         }
         if (noveltyN > 0) MNoveltyBlock(id, cur, nm, noveltyN, parentConn);
         bool useTier = noveltyN > 0 && AccessNovelty;
-        if (!pfOn && TryPackedSort(nm, useTier)) { }
+        int kNeed = (int)Math.Min(maux[id].MvOff, (uint)nm);
+        { int w0 = nm - kNeed; if (MoveWindow > 0 && w0 > MoveWindow) w0 = MoveWindow; kNeed += w0; }   // only the first off+win places of the order are ever read in order
+        if (!pfOn && TryPackedSort(nm, useTier, kNeed)) { }
         else {
         for (int k = 0; k < nm; k++) mKeys[k] = new MKey { Tier = useTier ? mCands[k].Tier : 0, Bad = Feat(6) && mCands[k].RevBad ? 1 : 0, W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = pfOn ? mCands[k].B : mCands[k].Plen, Y = pfOn ? mCands[k].T : 0, Idx = k };
         MSortKeys(nm);
@@ -458,14 +460,14 @@ public sealed unsafe partial class FullSolver
     }
 
     struct PKey { public ulong Hi, Lo; public int Idx; }
-    PKey[] mPKey = new PKey[64], mPKeyTmp = new PKey[64];
+    PKey[] mPKey = new PKey[64], mPKeyTmp = new PKey[64]; uint[] mPSeen = new uint[64]; uint mPStamp;
 
     /// <summary>
     /// The move order of MKeyCmp on two packed words (high: bad, weight, tier, oop, -packed, conn; low: room, hot, -mobility, path length) with the
     /// candidate index as the last tie-break. Only when every field fits its 14/16-bit lane; false = use the general comparator.
     /// Result: mKeys[0..nm).Idx in sorted order.
     /// </summary>
-    bool TryPackedSort(int nm, bool useTier)
+    bool TryPackedSort(int nm, bool useTier, int kNeed)
     {
         if (mPKey.Length < nm) { mPKey = new PKey[nm * 2]; mPKeyTmp = new PKey[nm * 2]; }
         var a = mPKey; bool f6 = Feat(6);
@@ -478,6 +480,24 @@ public sealed unsafe partial class FullSolver
             a[k].Hi = (f6 && m.RevBad ? 1UL << 50 : 0UL) | (ulong)w << 48 | (ulong)tier << 46 | (ulong)m.Oop << 32 | (ulong)(0xFFFF - m.Packed) << 16 | (ulong)m.R;
             a[k].Lo = (ulong)m.Room << 48 | (ulong)m.Hot << 32 | (ulong)(0xFFFF - m.Mobility) << 16 | (ulong)m.Plen;
             a[k].Idx = k;
+        }
+        if (kNeed * 3 <= nm && kNeed <= 64)
+        {
+            // partial selection: the kNeed smallest in order; the remaining candidates follow in index order (only their number of unused moves is read)
+            var top = mPKeyTmp; int cnt = 0;
+            for (int k = 0; k < nm; k++)
+            {
+                if (cnt == kNeed && !PLess(a[k], top[kNeed - 1])) continue;
+                var x = a[k]; int j = cnt < kNeed ? cnt++ : kNeed - 1;
+                while (j > 0 && PLess(x, top[j - 1])) { top[j] = top[j - 1]; j--; }
+                top[j] = x;
+            }
+            if (mPSeen.Length < nm) mPSeen = new uint[nm * 2];
+            uint stp = ++mPStamp; if (stp == 0) { Array.Clear(mPSeen); stp = mPStamp = 1; }
+            for (int j = 0; j < kNeed; j++) { mKeys[j].Idx = top[j].Idx; mPSeen[top[j].Idx] = stp; }
+            int o = kNeed;
+            for (int k = 0; k < nm; k++) if (mPSeen[k] != stp) mKeys[o++].Idx = k;
+            return true;
         }
         var src = a; var dst = mPKeyTmp;
         for (int i = 0; i < nm; i += 8)
