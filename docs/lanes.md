@@ -203,8 +203,10 @@ Code: `Search/Factor/FactorLane.cs` (lane, scheduler), `Search/Factor/FullSolver
   thread with the lane's `Baton` (yield added at the 1024-expansion mark, `Fa2Runner.RunTo`).
 * **Parity** (`bench/lane-parity.py factor "" 20000`, unpatched Go, `-parity` cluster mode): **12/12 gated levels identical** (solved, nodes,
   pushes), incl. Sasquatch_50 #29 (596 nodes) and unsolved 20000-node pools; goldens in `tests/Soksolv.Tests/FactorTests.cs`.
-* **Speed** (AOT, equal work, `-nodes 20000`, gated levels): 1.12–1.17x Go's time (Sasquatch_50 #29: 3.9 s vs 3.4 s; #46: 16.4 s vs 14.0 s) —
-  the time is the sub-engines (macro/fa2 box search on wide boards), whose speed work is tracked in `docs/macro.md`.
+* **Speed** (AOT, equal work, `-nodes 20000`, 8 gated levels): **1.26x Go's total time** (C# 114.9 s vs Go 91.1 s); per level 0.74x–1.34x
+  (Microban_155 #80 0.74x, Sasquatch_50 #29 1.13x, Sasquatch_50 #46 1.17x, Sasquatch_IV_50 #47 1.34x: 73.1 s vs 54.6 s). The time is the
+  sub-engines (macro/fa2 box search on wide boards), whose speed work is tracked in `docs/macro.md`. Go's peak memory on these levels is
+  37-950 MB; the C# column printed 0 MB at measurement time (PeakBytes was not filled; fixed afterwards, not re-measured).
 * Portfolio: lane `factor` (not solo) joins gated boards (`PortfolioOptions.Factor`). Not ported: `-factor-alt` (off by default).
 
 ## dive lane (`-strategy dive`) — Go dive.go (exp-691/693)
