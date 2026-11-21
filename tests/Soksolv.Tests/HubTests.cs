@@ -215,16 +215,22 @@ public class PfFestTests
     [InlineData("Sasquatch_IV_50_42", false, 0, "pull=1328 base=20480 trials=2 fwd=8192 strata=64 added=180 reached=0 ext=0 retries=0 shared=1 baseRuns=2")]
     public void HubPull_NodeSlicesMatchGo(string level, bool solved, int pushes, string fingerprint)
     {
-        var rows = TestData.Rows(level);
-        var o = new FullOptions { NodeBudget = 30000, HubNodeSlices = 512, SharedClusters = new ClusterTable(16), SharedPenalties = new ClusterTable(16) };
-        var r = FullSolver.SolveHubPull(rows, o, 0);
-        Assert.Equal(solved, r.Solved);
-        Assert.Equal(fingerprint, r.Fingerprint);
-        if (solved)
+        bool a = ClusterChecker.AStar, k = ClusterChecker.SkipCapped;
+        ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; // Go-exact cluster proofs
+        try
         {
-            Assert.Equal(pushes, r.Solution.Count(char.IsUpper));
-            Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+            var rows = TestData.Rows(level);
+            var o = new FullOptions { NodeBudget = 30000, HubNodeSlices = 512, SharedClusters = new ClusterTable(16), SharedPenalties = new ClusterTable(16) };
+            var r = FullSolver.SolveHubPull(rows, o, 0);
+            Assert.Equal(solved, r.Solved);
+            Assert.Equal(fingerprint, r.Fingerprint);
+            if (solved)
+            {
+                Assert.Equal(pushes, r.Solution.Count(char.IsUpper));
+                Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+            }
         }
+        finally { ClusterChecker.AStar = a; ClusterChecker.SkipCapped = k; }
     }
 
     // Wall-clock slicing (the default): the lane solves and every solution replays.
