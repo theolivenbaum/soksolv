@@ -78,6 +78,8 @@ public sealed unsafe partial class FullSolver
         public bool Full;
         public HubReach? Reach;
         readonly int[] dirs; readonly bool[] wall; readonly bool[] occ; readonly int[] dist;
+        // wall-or-box bytes, padded by two rows on both sides so that mobility probes need no bounds tests
+        readonly byte[] blkKeep; readonly byte* blkP; readonly int bw;
         // bit-row view (boards <= 64 wide, <= 62 tall, walled ring): occupied / player-region / scratch rows, rows indexed y+1
         readonly bool bitsOk; readonly int wd, hh, nRows; readonly ulong rmask;
         readonly ulong[] wallR = [], occR = [], remR = [], r1R = [], tmpR = [];
@@ -120,6 +122,11 @@ public sealed unsafe partial class FullSolver
             }
             for (int c = 0; c < cells; c++) { z[c] = Next(); zp[c] = Next(); }
             mark = new uint[cells]; lab = new int[cells]; vis = new uint[cells * 4]; dd = new uint[cells];
+            bw = ps.W;
+            blkKeep = GC.AllocateArray<byte>(cells + 4 * bw, pinned: true);
+            blkP = (byte*)Unsafe.AsPointer(ref blkKeep[0]) + 2 * bw;
+            for (int c = 0; c < cells; c++) if (wall[c]) blkP[c] = 1;
+            for (int i = 0; i < 2 * bw; i++) { blkKeep[i] = 1; blkKeep[cells + 2 * bw + i] = 1; }
             if (pf.Bits != null)
             {
                 bitsOk = true; wd = ps.W; hh = cells / wd; nRows = hh + 2; rmask = wd == 64 ? ~0UL : (1UL << wd) - 1;
@@ -165,8 +172,8 @@ public sealed unsafe partial class FullSolver
 
         void Load(ReadOnlySpan<ushort> bs)
         {
-            if (curId != -2) for (int i = 0; i < n; i++) occ[cur[i]] = false;
-            for (int i = 0; i < n; i++) { cur[i] = bs[i]; occ[bs[i]] = true; }
+            if (curId != -2) for (int i = 0; i < n; i++) { occ[cur[i]] = false; blkP[cur[i]] = 0; }
+            for (int i = 0; i < n; i++) { cur[i] = bs[i]; occ[bs[i]] = true; blkP[bs[i]] = 1; }
             curId = -1;
         }
 
@@ -297,54 +304,47 @@ public sealed unsafe partial class FullSolver
 
         int MobOf(int x)
         {
-            int m = 0;
-            for (int k = 0; k < 4; k++)
-            {
-                int d = dirs[k], a = x + d;
-                if (wall[a] || occ[a]) continue;
-                int b = a + d;
-                if (!wall[b] && !occ[b]) m++;
-            }
-            return m;
+            byte* b = blkP + x; int w = bw;
+            return ((b[-w] | b[-2 * w]) == 0 ? 1 : 0) + ((b[w] | b[2 * w]) == 0 ? 1 : 0) + ((b[-1] | b[-2]) == 0 ? 1 : 0) + ((b[1] | b[2]) == 0 ? 1 : 0);
         }
 
         readonly int[] csBuf = new int[18];
         void Local(int a, int b, out int trapB, out int mobB, out int trapA, out int mobA)
         {
             var cs = csBuf;
-            int nc = 0;
             ddStamp++;
             uint s = ddStamp;
             trapB = mobB = trapA = mobA = 0;
-            void Add(int c) { if (dd[c] != s) { dd[c] = s; cs[nc++] = c; } }
-            Add(a); Add(b);
-            for (int k = 0; k < 4; k++)
+            int nc = 0;
+            cs[nc++] = a; dd[a] = s;
+            if (dd[b] != s) { dd[b] = s; cs[nc++] = b; }
+            for (int j = 0; j < 2; j++)
             {
-                int d = dirs[k];
-                for (int j = 0; j < 2; j++)
+                int c = j == 0 ? a : b;
+                for (int k = 0; k < 4; k++)
                 {
-                    int c = j == 0 ? a : b;
+                    int d = dirs[k];
                     int c1 = c - d;
-                    if (!wall[c1])
-                    {
-                        Add(c1);
-                        int c2 = c1 - d;
-                        if (!wall[c2]) Add(c2);
-                    }
+                    if (wall[c1]) continue;
+                    if (dd[c1] != s) { dd[c1] = s; cs[nc++] = c1; }
+                    int c2 = c1 - d;
+                    if (wall[c2]) continue;
+                    if (dd[c2] != s) { dd[c2] = s; cs[nc++] = c2; }
                 }
             }
+            byte* bp = blkP;
             for (int i = 0; i < nc; i++)
             {
                 int c = cs[i];
-                if (occ[c]) { int m = MobOf(c); mobB += m; if (m == 0) trapB++; }
+                if (bp[c] != 0) { int m = MobOf(c); mobB += m; if (m == 0) trapB++; }
             }
-            occ[a] = false; occ[b] = true;
+            occ[a] = false; occ[b] = true; bp[a] = 0; bp[b] = 1;
             for (int i = 0; i < nc; i++)
             {
                 int c = cs[i];
-                if (occ[c]) { int m = MobOf(c); mobA += m; if (m == 0) trapA++; }
+                if (bp[c] != 0) { int m = MobOf(c); mobA += m; if (m == 0) trapA++; }
             }
-            occ[a] = true; occ[b] = false;
+            occ[a] = true; occ[b] = false; bp[a] = 1; bp[b] = 0;
         }
 
         void FullEval(ref GenNode nd, ReadOnlySpan<ushort> bs)
@@ -514,7 +514,7 @@ public sealed unsafe partial class FullSolver
             if (pf.IsGoal(from)) nd.G--;
             if (pf.IsGoal(to)) nd.G++;
             nd.Hash = pn.Hash ^ z[from] ^ z[to];
-            occ[from] = false; occ[to] = true;
+            occ[from] = false; occ[to] = true; blkP[from] = 0; blkP[to] = 1;
             cur[i] = to;
             curId = -1;
             int minC = Flood(to + dirs[k], out int regs);
@@ -536,7 +536,7 @@ public sealed unsafe partial class FullSolver
             visStamp++;
             uint vs = visStamp;
             int cnt = 0;
-            occ[c] = false;
+            occ[c] = false; blkP[c] = 0;
             for (int k = 0; k < 4; k++)
             {
                 int d = dirs[k], p = c + d;
@@ -572,7 +572,7 @@ public sealed unsafe partial class FullSolver
                     if (Free(x + dk + d2) && Free(x + d2) && Free(x + 2 * d2)) Try(x + d2, k2);
                 }
             }
-            occ[c] = true;
+            occ[c] = true; blkP[c] = 1;
             return cnt;
         }
 
@@ -670,7 +670,7 @@ public sealed unsafe partial class FullSolver
 
         public void Invalidate()
         {
-            if (curId != -2) { for (int i = 0; i < n; i++) occ[cur[i]] = false; curId = -2; }
+            if (curId != -2) { for (int i = 0; i < n; i++) { occ[cur[i]] = false; blkP[cur[i]] = 0; } curId = -2; }
         }
     }
 }

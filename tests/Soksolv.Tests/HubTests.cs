@@ -79,6 +79,35 @@ public class PfFestTests
         return Path.Combine(d!.FullName, "golden", name);
     }
 
+    /// <summary>The word-parallel (planar dual) biconnectivity count equals the DFS on random box sets, including dense ones.</summary>
+    [Fact]
+    public void BiconBits_MatchesDfs_OnRandomBoards()
+    {
+        var rng = new Random(12345);
+        int levels = 0, samples = 0;
+        foreach (var f in Directory.GetFiles(TestData.Dir, "*.xsb").OrderBy(x => x))
+        {
+            var lv = Soksolv.Model.Level.Parse(TestData.Rows(Path.GetFileNameWithoutExtension(f)));
+            if (lv.Cells > 1500) continue;
+            var goals = Enumerable.Range(0, lv.Cells).Where(c => lv.Goal[c]).ToArray();
+            var pf = new PfFest(lv.Wall, lv.W, goals, false);
+            if (pf.Bits == null) continue;
+            var floor = Enumerable.Range(0, lv.Cells).Where(c => !lv.Wall[c]).ToArray();
+            var occ = new bool[lv.Cells];
+            for (int t = 0; t < 60; t++)
+            {
+                Array.Clear(occ);
+                int k = t < 20 ? rng.Next(0, 12) : rng.Next(0, floor.Length * (t < 40 ? 2 : 3) / 5 + 1);
+                var blocked = new List<int>();
+                for (int i = 0; i < k; i++) { int c = floor[rng.Next(floor.Length)]; if (!occ[c]) { occ[c] = true; blocked.Add(c); } }
+                Assert.Equal(pf.Bicon(occ), pf.Bits.Count(blocked.ToArray()));
+                samples++;
+            }
+            levels++;
+        }
+        Assert.True(levels >= 10 && samples >= 600);
+    }
+
     /// <summary>Golden values from Go (pfdump_test.go in a scratch copy): pfDist checksum, and pfHot/pfBicon/pfSpreadSum on 8 pseudo-random box sets per level.</summary>
     [Fact]
     public void PullFest_LeafFunctions_MatchGo()

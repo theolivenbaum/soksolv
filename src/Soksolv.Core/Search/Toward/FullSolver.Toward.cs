@@ -58,6 +58,7 @@ public sealed unsafe partial class FullSolver
         }
         hfBoxes = new int[n];
         HungarianInit();
+        MatchCacheInit();
     }
 
     bool[]? tgtPocket;   // exp-460/480 (hub contexts): floor cells the target board seals off from its player and holds no target box (null: off)
@@ -135,11 +136,11 @@ public sealed unsafe partial class FullSolver
     int Edge(int box, int j) => tgtDistT[box * hP + j];
 
     /// <summary>One augmenting path for row (1-based) of the Hungarian algorithm over the current duals hu/hv/hp (e-maxx formulation, as Go augmentAssignment).</summary>
-    void AugmentRow(ReadOnlySpan<int> boxes, int row)
+    int AugmentRow(ReadOnlySpan<int> boxes, int row)
     {
-        if (Vector128.IsHardwareAccelerated) { AugmentRowV(boxes, row); return; }
+        if (Vector128.IsHardwareAccelerated) return AugmentRowV(boxes, row);
         int m = n; var u = hu; var v = hv; var p = hp; var way = hway; var minv = hminv; var used = hused;
-        p[0] = row; int j0 = 0;
+        p[0] = row; int j0 = 0, dsum = 0;
         Array.Fill(minv, int.MaxValue); Array.Clear(used);
         do
         {
@@ -156,9 +157,11 @@ public sealed unsafe partial class FullSolver
             }
             for (int j = 0; j <= m; j++)
                 if (used[j]) { u[p[j]] += delta; v[j] -= delta; } else minv[j] -= delta;
+            dsum += delta;
             j0 = j1;
         } while (p[j0] != 0);
         do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
+        return dsum;
     }
 
     /// <summary>
@@ -166,7 +169,7 @@ public sealed unsafe partial class FullSolver
     /// column wins ties, but the dual updates are lazy: with D the sum of the deltas so far, minv is kept as minv+D, and a column that became used at
     /// D_j ends up with v -= D - D_j (and its row u += D - D_j), applied once at the end of the path search.
     /// </summary>
-    void AugmentRowV(ReadOnlySpan<int> boxes, int row)
+    int AugmentRowV(ReadOnlySpan<int> boxes, int row)
     {
         int m = n, P = hP;
         var u = hu; var p = hp;
@@ -223,6 +226,7 @@ public sealed unsafe partial class FullSolver
             }
             do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
         }
+        return D;
     }
 
     long AssignmentCost(ReadOnlySpan<int> boxes)
@@ -232,8 +236,53 @@ public sealed unsafe partial class FullSolver
         return total;
     }
 
+    // The matching distance only depends on the box set (and the target), so it is memoised by the Zobrist hash of the set: duplicate children and
+    // revisited parents skip the Hungarian solve, and a parent's duals are only computed when a child misses (lazily, from the child's boxes).
+    const int MatchCacheBits = 16;
+    ulong[] hmZ = [], hmKey = []; int[] hmVal = []; int[] hmTmp = [];
+    ulong hmParentHash; bool hmDualsOk;
+    public static long MatchHit, MatchMiss;
+
+    void MatchCacheInit()
+    {
+        hmZ = new ulong[cells];
+        ulong x = 0x2545F4914F6CDD1DUL;
+        for (int c = 0; c < cells; c++) { x += 0x9E3779B97F4A7C15UL; ulong z = x; z = (z ^ z >> 30) * 0xBF58476D1CE4E5B9UL; z = (z ^ z >> 27) * 0x94D049BB133111EBUL; hmZ[c] = z ^ z >> 31; }
+        hmKey = new ulong[1 << MatchCacheBits]; hmVal = new int[1 << MatchCacheBits]; hmTmp = new int[n];
+        hmDualsOk = false;
+    }
+
+    ulong MatchSetHash(ReadOnlySpan<int> boxes)
+    {
+        ulong h = 0;
+        foreach (int b in boxes) h ^= hmZ[b];
+        return h | 1;
+    }
+
+    bool MatchGet(ulong h, out int v)
+    {
+        int i = (int)((h * 0x9E3779B97F4A7C15UL) >> (64 - MatchCacheBits));
+        if (hmKey[i] == h) { v = hmVal[i]; return true; }
+        v = 0; return false;
+    }
+
+    void MatchPut(ulong h, int v)
+    {
+        int i = (int)((h * 0x9E3779B97F4A7C15UL) >> (64 - MatchCacheBits));
+        hmKey[i] = h; hmVal[i] = v;
+    }
+
     /// <summary>Go matchDist: min-cost matching of boxes to target squares by push distances (assignmentInf if none).</summary>
     int MatchDist(ReadOnlySpan<int> boxes)
+    {
+        ulong h = MatchSetHash(boxes);
+        if (MatchGet(h, out int v)) return v;
+        v = MatchSolve(boxes);
+        MatchPut(h, v);
+        return v;
+    }
+
+    int MatchSolve(ReadOnlySpan<int> boxes)
     {
         Array.Clear(hu); Array.Clear(hv); Array.Clear(hp); Array.Clear(hway);
         for (int row = 1; row <= n; row++) AugmentRow(boxes, row);
@@ -241,23 +290,53 @@ public sealed unsafe partial class FullSolver
         return total < AssignmentInf ? (int)total : AssignmentInf;
     }
 
+    static readonly bool CheckMatch = Environment.GetEnvironmentVariable("SOKSOLV_CHECK_MATCH") == "1";
     int[] hfDualU = [], hfDualV = [], hfDualP = [], hfInv = []; long hfCost;
 
-    /// <summary>Go hfMatchParent: matchDist, keeping the exact duals/assignment of the expanded node for hfMatchChild.</summary>
+    /// <summary>Go hfMatchParent: matchDist for the expanded node; its exact duals/assignment (for hfMatchChild) are kept lazily.</summary>
     int MatchParent(ReadOnlySpan<int> boxes)
     {
-        int score = MatchDist(boxes);
+        ulong h = MatchSetHash(boxes);
+        hmParentHash = h; hmDualsOk = false;
+        if (MatchGet(h, out int v)) return v;
+        v = MatchParentSolve(boxes);
+        MatchPut(h, v);
+        return v;
+    }
+
+    int MatchParentSolve(ReadOnlySpan<int> boxes)
+    {
+        int score = MatchSolve(boxes);
         int m = n + 1;
         if (hfDualU.Length != m) { hfDualU = new int[m]; hfDualV = new int[m]; hfDualP = new int[m]; hfInv = new int[m]; }
         Array.Copy(hu, hfDualU, m); Array.Copy(hv, hfDualV, m); Array.Copy(hp, hfDualP, m);
         for (int g = 1; g < m; g++) hfInv[hp[g]] = g;
         hfCost = score == AssignmentInf ? AssignmentCost(boxes) : score;
+        hmDualsOk = true;
         return score;
     }
 
     /// <summary>Go hfMatchChild: the child with box `moved` (index in boxes, now at boxes[moved], previously at old) repaired from the parent's saved solution.</summary>
     int MatchChild(ReadOnlySpan<int> boxes, int moved, int old)
     {
+        ulong h = hmParentHash ^ hmZ[old] ^ hmZ[boxes[moved]];
+        if (MatchGet(h, out int cached))
+        {
+            if (CheckMatch) { MatchChildSolve(boxes, moved, old, true); }
+            return cached;
+        }
+        int v = MatchChildSolve(boxes, moved, old, false);
+        MatchPut(h, v);
+        return v;
+    }
+
+    int MatchChildSolve(ReadOnlySpan<int> boxes, int moved, int old, bool verify)
+    {
+        if (!hmDualsOk)
+        {
+            boxes.CopyTo(hmTmp); hmTmp[moved] = old;
+            MatchParentSolve(hmTmp);
+        }
         int m = n + 1;
         int row = moved + 1;
         int goalCol = hfInv[row];
@@ -265,15 +344,28 @@ public sealed unsafe partial class FullSolver
         int u = int.MaxValue;
         for (int j = 1; j < m; j++) u = Math.Min(u, Edge(box, j) - hfDualV[j]);
         int newCost = Edge(box, goalCol);
+        int res;
         if (u == newCost - hfDualV[goalCol])
         {
             int oldCost = Edge(old, goalCol);
-            return (int)Math.Min(AssignmentInf, hfCost + newCost - oldCost);
+            res = (int)Math.Min(AssignmentInf, hfCost + newCost - oldCost);
         }
-        Array.Copy(hfDualU, hu, m); Array.Copy(hfDualV, hv, m); Array.Copy(hfDualP, hp, m);
-        hu[row] = u; hp[goalCol] = 0; hv[0] = 0;
-        AugmentRow(boxes, row);
-        return (int)Math.Min(AssignmentInf, AssignmentCost(boxes));
+        else
+        {
+            Array.Copy(hfDualU, hu, m); Array.Copy(hfDualV, hv, m); Array.Copy(hfDualP, hp, m);
+            hu[row] = u; hp[goalCol] = 0; hv[0] = 0;
+            int dsum = AugmentRow(boxes, row);
+            // dual objective: the partial assignment costs hfCost - old edge; adding row (u) and the freed column (v) and the path's net delta gives the new optimum
+            long cost = hfCost - Edge(old, goalCol) + u + hfDualV[goalCol] + dsum;
+            if (CheckMatch && cost != AssignmentCost(boxes)) throw new InvalidOperationException($"MatchChild closed form {cost} != {AssignmentCost(boxes)}");
+            res = (int)Math.Min(AssignmentInf, cost);
+        }
+        if (verify)
+        {
+            int want = MatchSolve(boxes);
+            if (want != res) throw new InvalidOperationException($"MatchChild {res} != matchDist {want}");
+        }
+        return res;
     }
 
     /// <summary>

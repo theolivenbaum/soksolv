@@ -194,8 +194,9 @@ public sealed unsafe partial class FullSolver
         }
         if (packingK < 0 && packPrepared)
         {
-            int pk = -1;
-            bool clearing = PackingObligationAdvice(k => MChoose(ref pk, k));
+            mPackPick = -1;
+            bool clearing = PackingObligationAdvice(mPackPickCb ??= k => MChoose(ref mPackPick, k));   // cached delegate: no closure per open
+            int pk = mPackPick;
             if (pk >= 0) { packingK = pk; stats.PackingPrepPicks++; if (clearing) stats.PackingPrepClears++; }
         }
         if (mWeights.Length < nm) { mWeights = new int[nm * 2]; mKeys = new MKey[nm * 2]; }
@@ -464,6 +465,7 @@ public sealed unsafe partial class FullSolver
         if (!ReferenceEquals(src, mKeys)) Array.Copy(src, mKeys, n);
     }
 
+    int mPackPick; Action<int>? mPackPickCb;
     void MChoose(ref int slot, int k)
     {
         if (Feat(6) && mCands[k].RevBad) return;
@@ -504,7 +506,7 @@ public sealed unsafe partial class FullSolver
             var (mob, expl, accS, accL) = MacroStage >= 5 && !pfOn ? MMoveAccess(cur, i, t) : (0, false, 0, 0);
             Prof.Stop(3, tp);
             tp = Prof.Start();
-            int room = pfOn ? 0 : t == cur[i] ? mParentRoom : MRoomConnChild(cur[i], t), packed, oop, progress = -2;
+            int room = pfOn || hfRank ? 0 : t == cur[i] ? mParentRoom : MRoomConnChild(cur[i], t), packed, oop, progress = -2;
             Prof.Stop(1, tp);
             if (mPlan != null)
             {

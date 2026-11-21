@@ -27,6 +27,7 @@ public sealed unsafe partial class FullSolver
         hfBoxes = new int[n];
         tgtDist = pff.PfDist; // matchingDistances(): the pull lane's matching to the real goals
         HungarianInit();
+        MatchCacheInit();
     }
 
     ulong Rnd()
