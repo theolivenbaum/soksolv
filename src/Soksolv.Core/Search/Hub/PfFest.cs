@@ -17,6 +17,10 @@ public sealed class PfFest
     public readonly int NGoals;
     public bool IsGoal(int c) => isGoal[c];
     int[]? scored;
+    readonly BiconBits? bits;
+    public BiconBits? Bits => bits;
+    /// <summary><see cref="Bicon(bool[])"/> for the board whose blocked (non-wall) cells are exactly <paramref name="blocked"/>, word-parallel when the board allows.</summary>
+    public int Bicon(bool[] occ, ReadOnlySpan<int> blocked) => bits != null ? bits.Count(blocked) : Bicon(occ);
     // bicon scratch
     readonly int[] disc, low; readonly uint[] bcOn; uint bcStamp; int[] bcStack = new int[0];
 
@@ -27,6 +31,7 @@ public sealed class PfFest
         isGoal = new bool[cells];
         foreach (int g in goalsSorted) isGoal[g] = true;
         disc = new int[cells]; low = new int[cells]; bcOn = new uint[cells];
+        if (BiconBits.Supported(wall, w)) bits = new BiconBits(wall, w, isGoal, this);
         PfDist = new int[NGoals * cells];
         Array.Fill(PfDist, -1);
         if (exactDist)
