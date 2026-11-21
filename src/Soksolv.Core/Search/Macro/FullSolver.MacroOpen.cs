@@ -480,7 +480,7 @@ public sealed unsafe partial class FullSolver
         int canonical = 0;
         long tp;
         for (int side = 0; side < 4; side++)
-            if (m3[t - dirs[side]] == mpstamp) { canonical = side; break; }
+            if (InPR(t - dirs[side])) { canonical = side; break; }
         if (t == cur[i] && hfRank && opt.HfNoReturn) return true; // exp-268: no macro returning its box to its square
         int endpoint = t * 4 + canonical;
         if (mtseen[endpoint] == mtst) return true;
@@ -638,7 +638,7 @@ public sealed unsafe partial class FullSolver
             tq = Prof.Start();
             int p = t - dirs[canonical];
             bool dead = false;
-            if (m3[p] == mpstamp)
+            if (InPR(p))
                 for (int j = 0; j < cur.Length; j++)
                 {
                     int c = j == i ? t : cur[j];
@@ -649,7 +649,7 @@ public sealed unsafe partial class FullSolver
         }
         if (hfRank && opt.HfFestIneff && FestInefficient(t)) return 8;
         if (hfRank && dd != null && dd.Dead(occ, t, t - dirs[canonical])) return 9;
-        if (Feat(7) && m3[t - dirs[canonical]] == mpstamp && PairSideDeadlock(t, t - dirs[canonical])) { stats.PairDead++; return 7; }
+        if (Feat(7) && InPR(t - dirs[canonical]) && PairSideDeadlock(t, t - dirs[canonical])) { stats.PairDead++; return 7; }
         if (Feat(3) && CorridorFlowDeadlock(t)) { stats.CorridorFlow++; return 6; }
         return 0;
     }

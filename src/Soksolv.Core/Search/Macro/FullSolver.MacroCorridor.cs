@@ -83,7 +83,7 @@ public sealed unsafe partial class FullSolver
             {
                 bool playerBetween = false;
                 for (int j = firstBox + 1; j < lastBox; j++)
-                    if (m3[corr.Cells[j]] == mpstamp) { playerBetween = true; break; }
+                    if (InPR(corr.Cells[j])) { playerBetween = true; break; }
                 if (!playerBetween) return true;
             }
             // 2. exactly one box on a non-goal in a goal-less cut corridor
@@ -93,7 +93,7 @@ public sealed unsafe partial class FullSolver
                 int bCell = corr.Cells[bIdx];
                 if (!goal[bCell])
                 {
-                    bool playerAtA = m3[corr.EndA] == mpstamp, playerAtB = m3[corr.EndB] == mpstamp;
+                    bool playerAtA = InPR(corr.EndA), playerAtB = InPR(corr.EndB);
                     if (playerAtA && !playerAtB)
                     {
                         int nxt = bIdx + 1 < corr.Cells.Length ? corr.Cells[bIdx + 1] : corr.EndB;
