@@ -48,5 +48,15 @@ rep('\t\t\t\tfwdT += time.Since(t0)\n\t\t\t\tnodes += int(used)\n','\t\t\t\tif n
 rep('\n\t\tfwdT += time.Since(t0)\n\t\tnodes += int(used)\n\t\tif sol != "" {\n\t\t\treport()','\n\t\tif nsl > 0 {\n\t\t\tfwdT += time.Duration(used)\n\t\t} else {\n\t\t\tfwdT += time.Since(t0)\n\t\t}\n\t\tnodes += int(used)\n\t\tif sol != "" {\n\t\t\treport()')
 open(p,'w').write(s)
 PY
+python3 - "$D/fess_search.go" <<'PY'
+import sys
+p=sys.argv[1]; s=open(p).read()
+old='\t\ts.recordEdge(id, s.lastAdded)\n\t\tif DebugApplied != nil {'
+assert old in s
+s=s.replace(old,'\t\tif s1Trace {\n\t\t\tfmt.Fprintf(os.Stderr, "S1 %d node=%d move=%d child=%d w=%d stored=%d\\n", expanded, id, e.move-s.mvStart[id], cid, s.w[id], len(s.player))\n\t\t}\n'+old,1)
+s=s.replace('import (','import (\n\t"os"',1) if '"os"' not in s else s
+s+='\nvar s1Trace = os.Getenv("SOKSOLV_S1TRACE") == "1"\n'
+open(p,'w').write(s)
+PY
 (cd "$D" && go build -o "$S/soksolv-hub" .)
 echo "built $S/soksolv-hub"

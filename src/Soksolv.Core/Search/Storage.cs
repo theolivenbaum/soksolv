@@ -25,6 +25,8 @@ public sealed unsafe class ChunkList<T> : IDisposable where T : unmanaged
         ((T*)chunks[id >> Shift])[id & Mask] = v;
         return id;
     }
+    /// <summary>Forgets every element but keeps the allocated chunks (Go s.x = s.x[:0]).</summary>
+    public void Clear() => Count = 0;
     public void Dispose() { for (int i = 0; i < nChunks; i++) NativeMemory.Free((void*)chunks[i]); nChunks = 0; Count = 0; }
     ~ChunkList() => Dispose();
 }

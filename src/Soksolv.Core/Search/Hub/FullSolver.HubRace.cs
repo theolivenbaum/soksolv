@@ -155,8 +155,16 @@ public sealed unsafe partial class FullSolver
                 if (tgt != null && (cur == null || !SameTarget(tgt, cur)))
                 {
                     cur = tgt; baseDone = false; S.BaseRuns++;
-                    baseF?.Dispose();
-                    baseF = NewTowardReal(rows, lv, opt, tgt, 0, nodeMode, () => ps.RaceBytes + (trialF?.RaceBytes ?? 0));
+                    if (opt.RetargetReuse && baseF != null && !baseF.mMemFull && baseF.nodes.Count > 0 && baseF.nodes.Count <= 16384)
+                    {
+                        string? rsol = baseF.RetargetTo(tgt); // exp-299: keep the base tree's stored nodes
+                        if (rsol != null) return Done(new SolveResult { Solved = true, Solution = rsol });
+                    }
+                    else
+                    {
+                        baseF?.Dispose();
+                        baseF = NewTowardReal(rows, lv, opt, tgt, 0, nodeMode, () => ps.RaceBytes + (trialF?.RaceBytes ?? 0));
+                    }
                 }
                 if (baseF != null && !baseDone)
                 {

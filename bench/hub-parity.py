@@ -10,6 +10,7 @@ go = os.environ.get("GO_HUB", f"{S}/soksolv-hub")
 sl, nodes = sys.argv[1], sys.argv[2]
 src = sys.argv[3] if len(sys.argv) > 3 else "testdata"
 strat = os.environ.get("HUB_STRATEGY", "hub-pull")
+rr = "-retarget-reuse=false" if os.environ.get("RETARGET_REUSE") == "0" else ""   # default: retarget reuse on (as Go)
 if src == "testdata": specs = [(f, 1) for f in sorted(glob.glob(f"{root}/../soksolv/testdata/*.xsb"))]
 else: specs = [(l.split("\t")[0], int(l.split("\t")[1])) for l in open(src) if l.strip()]
 env = dict(os.environ, PATH=os.environ["PATH"] + ":/root/.dotnet", DOTNET_ROOT="/root/.dotnet", SOKSOLV_NODESLICES=sl)
@@ -25,8 +26,8 @@ def run(c, key):
     except Exception: return ("ERR", r.stderr[-150:].replace("\n", " "), "")
 bad = n = 0
 for f, i in specs:
-    g = run(f"nice -n 10 {go} -strategy {strat} -procs 1 -nodes {nodes} -no-meet -retarget-reuse=false -lane-revive=false -t 1000000 '{f}' {i}", "go")
-    c = run(f"nice -n 10 dotnet {cs} -strategy {strat} -hub-node-slices {sl} -nodes {nodes} -no-meet -t 1000000 '{f}' {i}", "cs")
+    g = run(f"nice -n 10 {go} -strategy {strat} -procs 1 -nodes {nodes} -no-meet -lane-revive=false {rr} -t 1000000 '{f}' {i}", "go")
+    c = run(f"nice -n 10 dotnet {cs} -strategy {strat} -hub-node-slices {sl} -nodes {nodes} -no-meet {rr} -t 1000000 '{f}' {i}", "cs")
     n += 1
     if g != c: bad += 1; print(f"DIFF {os.path.basename(f)}#{i}: go {g} cs {c}", flush=True)
 print(f"{strat} slice={sl} nodes={nodes}: {n - bad}/{n} identical")

@@ -110,4 +110,5 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [x] pfOn Festival-order pull (`-strategy pull -pf-on`): exact vs patched Go (testdata 22/22 at N=1..20000, LTS 296/296 at N=1, 42/42 at 10..20000)
 - [x] hubstrata (`-strategy hub-strata -hub-strata-dump`): byte-identical dumps
 - [x] `-strategy hub-pull` (raceAlternate; wall clock default, `-hub-node-slices K` deterministic): exact vs node-slice Go reference (bench/hub-ref)
-- [ ] hub-gen / hub (hubgen.go 1037, hub.go 1112, festbAlternate, retargetTo, toward meet hooks, hfsched in Portfolio), Portfolio `hub-pull` lane, retarget reuse
+- [x] retarget reuse (RetargetTo, reuse branch of add/open), deferReopen/resumeWindow in the macro engine; Portfolio `-hub-pull` lane (opt-in)
+- [ ] hub-gen / hub (hubgen.go 1037, hub.go 1112, festbAlternate/prevTrees, toward meet hooks + Back/Fwd owners 4/5, regRel pockets)

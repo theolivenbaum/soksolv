@@ -314,11 +314,13 @@ public sealed unsafe partial class FullSolver
             int k = mKeys[j].Idx;
             ref var m = ref mCands[k];
             ulong word = (ulong)m.I | (ulong)m.T << 15 | (ulong)mWeights[k] << 30 | (ulong)m.Side << 31 | (ulong)m.R << 33;
-            mmv.Add(word);
+            mmv.Add(m.AlreadyUsed ? word | MMoveUsed : word);
             mmvScore.Add(new MoveScore { Oop = (ushort)m.Oop, Packed = (ushort)m.Packed, Conn = (ushort)m.R, Hot = (ushort)Math.Min(m.Hot, 65535), Room = (uint)m.Room, Mobility = (uint)m.Mobility });
         }
         ref var a = ref maux[id];
-        a.MvLen = (uint)win; a.MvNext = 0; a.MvTotal = (uint)nm; a.MvLeft = (uint)(nm - off);
+        int left = 0;
+        for (int j = off; j < nm; j++) if (!mCands[mKeys[j].Idx].AlreadyUsed) left++;
+        a.MvLen = (uint)win; a.MvNext = 0; a.MvTotal = (uint)nm; a.MvLeft = (uint)left;
     }
 
     /// <summary>Go open(): novelty advisor with stable windows (StableWindows, exp-192/194/289): novel moves cost nothing; tiers order them.</summary>
@@ -518,11 +520,12 @@ public sealed unsafe partial class FullSolver
                 if (opt.HfFrozenMatch && (mParentFrozen || HfFrozenOff(hfBoxes.AsSpan(i, 1)))) hotOverride = Math.Max(hotOverride, 1 << 20);
                 if (opt.HfMatchFirst && hotOverride >= 1 << 20) oop += HfNoMatch;
             }
-            bool cUndo = false, cInternal = false, cDeadChild = false, cGroupDup = false, cDistinct = false, cStored = false; ulong cExit = 0;
-            if (Feat(6) && !mReopening)
+            bool cUndo = false, cInternal = false, cDeadChild = false, cGroupDup = false, cDistinct = false, cStored = false, cAlready = false; ulong cExit = 0;
+            bool reuse = opt.RetargetReuse && mRetargetNodes > 0;
+            if (Feat(6) && (!mReopening || reuse))
             {
                 int b = cur[i], p = mRevP;
-                if (mPB0 >= 0 && b == mPT0 && t == mPB0 && mCandNP == mPPlayer) { MUnionRevGroup(p, mOpenId); mGid = MFindRevGroup(mOpenId); cUndo = true; }
+                if (!mReopening && mPB0 >= 0 && b == mPT0 && t == mPB0 && mCandNP == mPPlayer) { MUnionRevGroup(p, mOpenId); mGid = MFindRevGroup(mOpenId); cUndo = true; }
                 int fb = nodes.Fidx[b], ft = nodes.Fidx[t];
                 ulong zh = mRevParentHash ^ nodes.ZPlayer(nodes.Player(mOpenId)) ^ nodes.ZPlayer(mCandNP);
                 if (b != t)
@@ -532,8 +535,18 @@ public sealed unsafe partial class FullSolver
                 }
                 int existing = nodes.Find(mRevKey, mCandNP, zh, out _, out uint fpx);
                 cStored = existing >= 0;
+                if (reuse && existing >= 0 && existing < mRetargetNodes)
+                {
+                    bool improves = hfRank && opt.HfFestSched && mOpenId < hfBest.Count && existing < hfBest.Count && HfBetter(hfBest[mOpenId], hfBest[existing]);
+                    if (maux[existing].Dead != 0 || (!improves && nodes.G(mOpenId) + plen >= nodes.G(existing)))
+                    {
+                        cAlready = true;
+                        if (!mReopening && maux[existing].Dead == 0 && nodes.Parent(existing) != mOpenId) RecordEdge(mOpenId, existing);
+                    }
+                }
                 if (b != t) { mRevKey[ft >> 6] &= ~(1UL << (ft & 63)); mRevKey[fb >> 6] |= 1UL << (fb & 63); }
-                if (existing >= 0)
+                if (mReopening) { }
+                else if (existing >= 0)
                 {
                     if (maux[existing].Dead != 0) cDeadChild = true;
                     else if (maux[existing].Bucket == maux[mOpenId].Bucket && nodes.W(mOpenId) >= nodes.W(existing))
@@ -557,7 +570,7 @@ public sealed unsafe partial class FullSolver
                     if (mRevExits.Contains(cExit)) cGroupDup = true; else cDistinct = true;
                 }
             }
-            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
+            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, AlreadyUsed = cAlready, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
         }
         SetOcc(t, false);
         return true;

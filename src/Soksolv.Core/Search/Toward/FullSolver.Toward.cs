@@ -171,6 +171,58 @@ public sealed unsafe partial class FullSolver
         return (int)Math.Min(AssignmentInf, AssignmentCost(boxes));
     }
 
+    /// <summary>
+    /// Go retargetTo (exp-299): re-key the live search graph toward a new target board without restarting from the root. Every stored node
+    /// gets its HF cell/tuple against the new target and a fresh unopened frontier entry; nodes already on the new target complete the solution.
+    /// </summary>
+    internal string? RetargetTo(TowardTarget target)
+    {
+        SetTarget(target.Boxes); tgtFull = target;
+        mCancelled = false; mReopen = -1; mLastImproveMs = clock.ElapsedMilliseconds; mStallTries = 0;
+        meetPending.Clear();
+        mBest = -1; mNext = 0; mTurn = 0;
+        mcells.Clear(); mcellIDs.Clear(); mqueues.Clear();
+        mmv.Clear(); mmvScore.Clear(); medges.Clear(); mNovWords.Clear(); mNovT0.Clear(); mNovT1.Clear(); mRevWords.Clear();
+        hfOwn.Clear(); hfBest.Clear();
+        int nNodes = nodes.Count;
+        var boxes = new int[n];
+        for (int id = 0; id < nNodes; id++)
+        {
+            nodes.Unpack(id, boxes);
+            if (OnTarget(boxes))
+            {
+                string? sol = CompleteTarget(id);
+                if (sol != null) return sol;
+            }
+            ref var a = ref maux[id];
+            a.Dead = 0; a.Version++; nodes.W(id) = 0; a.EdgeHead = -1; a.LiveChildren = 0;
+            a.MvStart = -1; a.MvLen = 0; a.MvNext = 0; a.MvLeft = 0; a.MvOff = 0; a.MvTotal = 0; a.NovOffset = 0; a.RevOffset = 0; a.RevBestExit = -1;
+            foreach (int b in boxes) SetOcc(b, true);
+            int reg = a.Reg;
+            int onGoal = MPacked(), hot = HotRel(boxes), dist = MatchDist(boxes);
+            foreach (int b in boxes) SetOcc(b, false);
+            var cell = new FeatureCell(onGoal, hot, 0, reg + (opt.HfMatchFirst && (dist >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0));
+            a.Actual = cell;
+            hfAddDist = Math.Min(dist, 65535);
+            int parent = nodes.Parent(id);
+            int p = parent >= id || parent >= hfBest.Count ? -1 : parent;
+            a.Bucket = (uint)HfSchedAdd(boxes, cell, p, reg);
+            hfAddDist = -1;
+            if (a.Dead == 0)
+            {
+                MNoteBest(id);
+                mqueues[(int)a.Bucket].Push(new FessEntry { Node = id, Move = -1, Weight = 0, Version = a.Version, Score = LazyScore(id) });
+            }
+        }
+        for (int id = 1; id < nNodes; id++)
+        {
+            int p = nodes.Parent(id);
+            if (p >= 0 && p < nNodes && maux[id].Dead == 0) RecordEdge(p, id);
+        }
+        mRetargetNodes = nNodes;
+        return null;
+    }
+
     /// <summary>Go completeTarget: the prefix (to the child that reached the target board) plus the backward tail; verified on the real level.</summary>
     string? CompleteTarget(int id)
     {

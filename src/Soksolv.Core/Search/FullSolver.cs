@@ -47,6 +47,8 @@ public sealed class FullOptions
     public ulong RngSeed;
     /// <summary>Hub lanes: &gt; 0 replaces the wall-clock slices (Go festbUnit 250 ms) by this many pull expansions (deterministic mode; opt.NodeBudget then caps the lane's total expansions).</summary>
     public long HubNodeSlices;
+    /// <summary>Go RetargetReuse (exp-299, default on): a toward tree retargeted to a new target board keeps its stored nodes (active graph reuse).</summary>
+    public bool RetargetReuse = true;
     /// <summary>Bytes held by the lane's other trees (Go peerTracked): they count against BudgetBytes.</summary>
     public Func<ulong>? PeerBytes;
     /// <summary>Novelty lane (Go solver.novelty = 100): at most this many novel moves per opened node cost nothing (0: off).</summary>

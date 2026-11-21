@@ -10,7 +10,7 @@ ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster p
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
 bool portPull = true, portHubPull = false, portNovelty = true, portFa2 = true;
-bool noMeet = false, pfOn = false; string? strataDump = null; long hubSlices = 0;
+bool noMeet = false, pfOn = false; string? strataDump = null; bool retargetReuse = true; long hubSlices = 0;
 var hfSwitches = new Dictionary<string, bool>();
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
@@ -33,6 +33,7 @@ for (int i = 0; i < args.Length; i++)
         case "-no-meet": noMeet = true; break;
         case "-hub-strata-dump": strataDump = args[++i]; break;
         case "-hub-node-slices": hubSlices = long.Parse(args[++i]); break; // hub lanes: expansion-count slices instead of wall-clock ones (deterministic; -nodes caps the lane)
+        case "-retarget-reuse=false": retargetReuse = false; break;
         case "-pf-on": pfOn = true; break; // pull: Festival-ordered pull (hub lanes' backward solver)
         case "-macro-alt": macroAlt = args[++i] != "0"; break;
         case "-macro-planalt": macroPlanAlt = true; break;
@@ -97,7 +98,7 @@ var opt = new FullOptions
     SharedClusters = new ClusterTable(16),
     SharedPenalties = new ClusterTable(16),
     SharedDeadZone = new Soksolv.Search.DeadZone.DeadZoneTable(18),
-    PfOn = pfOn, HubNodeSlices = hubSlices, MacroStage = macroStage, MacroFeatures = macroFeat, PlanAlt = macroPlanAlt, MacroAlt = macroAlt, Fa2 = fa2o,
+    PfOn = pfOn, RetargetReuse = retargetReuse, HubNodeSlices = hubSlices, MacroStage = macroStage, MacroFeatures = macroFeat, PlanAlt = macroPlanAlt, MacroAlt = macroAlt, Fa2 = fa2o,
 };
 {
     bool bundle = !hfSwitches.TryGetValue("hf-festival", out bool bv) || bv;

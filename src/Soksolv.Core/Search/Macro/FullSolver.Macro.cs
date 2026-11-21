@@ -23,7 +23,7 @@ public sealed unsafe partial class FullSolver
     readonly List<FeatureCell> mcells = new();
     readonly List<FessHeap> mqueues = new();
     readonly Dictionary<FeatureCell, int> mcellIDs = new();
-    int mNext, mTurn, mBest = -1, mLastAdded = -1, mReopen = -1;
+    int mNext, mTurn, mBest = -1, mLastAdded = -1, mReopen = -1, mRetargetNodes;
     bool mCancelled, mSetupDone, mStarted;
     long mExpandedN, mNodeLimit;
     uint[] m3 = [], mpost = [], mseen = [], mtseen = []; int[] mbprev = [], mbq = [];
@@ -36,7 +36,7 @@ public sealed unsafe partial class FullSolver
     {
         public int I, B, T, R, Packed, Plen, Side, Room, Oop, Progress, Hot, Mobility; public bool Explorer;
         public ulong ScoreKey;
-        public bool Undo, Internal, DeadChild, GroupDupExit, DistinctExit, Stored; public ulong ExitKey; public int AccStart, AccLen, Tier;
+        public bool Undo, Internal, DeadChild, GroupDupExit, DistinctExit, Stored, AlreadyUsed; public ulong ExitKey; public int AccStart, AccLen, Tier;
         public readonly bool RevBad => Undo || Internal || DeadChild;
     }
     struct MKey { public int Bad, W, Tier, Oop, Packed, R, Room, Hot, Mobility, Plen, Y, Idx; }
@@ -222,6 +222,36 @@ public sealed unsafe partial class FullSolver
             mLastAdded = id;
             ref var a = ref maux[id];
             if (a.Dead != 0) return -1;
+            if (opt.RetargetReuse && id < mRetargetNodes)
+            {
+                // exp-299: a node of the previous target's graph: a better path or a better cell reparents it without a weight comparison
+                bool improvesCell = false, worsensCell = false;
+                if (hfRank && opt.HfFestSched && parent >= 0 && parent < hfBest.Count && id < hfBest.Count)
+                {
+                    improvesCell = HfBetter(hfBest[parent], hfBest[id]);
+                    worsensCell = HfBetter(hfBest[id], hfBest[parent]) && HfBetter(hfBest[id], hfOwn[id]);
+                }
+                bool shorterPath = g < nodes.G(id) && !worsensCell;
+                if (improvesCell || shorterPath)
+                {
+                    bool cyclic = false; int limit = nodes.Count, depth = 0;
+                    for (int p = parent; p >= 0 && depth <= limit; p = nodes.Parent(p))
+                    {
+                        if (p == id) { cyclic = true; break; }
+                        depth++;
+                    }
+                    if (!cyclic && depth <= limit)
+                    {
+                        nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; a.PushTo = (ushort)to;
+                        uint nb = (uint)(pfOn ? PfReparent(id, parent) : hfRank && opt.HfFestSched ? HfSchedReparent(id, parent) : Project(a.Actual, parent));
+                        a.Bucket = nb;
+                        a.Version++;
+                        if (a.MvStart < 0) mqueues[(int)nb].Push(new FessEntry { Node = id, Move = -1, Weight = w, Version = a.Version, Score = LazyScore(id) });
+                        else { MEnqueue(id); DeferReopen(id); }
+                    }
+                }
+                return -1;
+            }
             if (w > nodes.W(id) || w == nodes.W(id) && g >= nodes.G(id)) return -1;
             bool lowerWeight = w < nodes.W(id);
             if (MCreatesCycle(id, parent)) return -1;
@@ -366,10 +396,10 @@ public sealed unsafe partial class FullSolver
     {
         int id = e.Node;
         ref var a = ref maux[id];
-        if (e.Move == -2 && a.Dead == 0 && a.MvStart >= 0 && a.MvLeft != 0)
+        bool resume = e.Move == -2 && a.Dead == 0 && a.MvStart >= 0 && a.MvLeft != 0;
+        if (resume || e.Move != -2 && a.MvStart < 0 && a.Dead == 0)
         {
-            a.MvOff += a.MvLen;
-            a.MvStart = -1;
+            if (resume) { a.MvOff += a.MvLen; a.MvStart = -1; }
             var boxes = mCur;
             nodes.Unpack(id, boxes);
             foreach (int b in boxes) SetOcc(b, true);
