@@ -113,7 +113,7 @@ public sealed unsafe partial class FullSolver
         int[]? dt = dist.Length == n * cells ? DistT(dist) : null;
         p[0] = row;
         int j0 = 0;
-        for (int j = 0; j < minv.Length; j++) { minv[j] = int.MaxValue; used[j] = 0; }
+        minv.AsSpan().Fill(int.MaxValue); used.AsSpan().Clear();
         // Lazy duals: minv holds each unused column's true value plus D, the sum of the deltas so far
         int D = 0;
         dhN = 0;
