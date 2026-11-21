@@ -6,12 +6,14 @@ public sealed unsafe partial class FullSolver
     // row(y): floor-index bitset of box squares whose reachable-goal set shrinks if y becomes a permanent wall
     // (union over goals g of T_g \ T'_g(y) \ {y}, T_g = push-reachability tree of g, T' with y walled as cell and as support).
     readonly Dictionary<int, ulong[]> hotRows = new();
+    bool hotSides;      // fa2: the player-side relation (Go -hot-sides)
     bool hotGoalFree;   // fa2: goals are neither blockers nor victims (Festival's relation); set before the first row is built
     uint[]? hotSeen; uint hotStamp; int[]? hotQ;
 
     ulong[] HotRow(int blocker)
     {
         if (hotRows.TryGetValue(blocker, out var cached)) return cached;
+        if (hotSides) { var rs = HotRowSides(blocker); hotRows[blocker] = rs; return rs; }
         var row = new ulong[Math.Max(1, nodes.Nw)];
         hotSeen ??= new uint[cells]; hotQ ??= new int[cells];
         for (int g = 0; g < goals.Length; g++)

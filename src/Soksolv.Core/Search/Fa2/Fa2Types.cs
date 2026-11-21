@@ -6,7 +6,8 @@ namespace Soksolv.Search;
 public sealed class Fa2Options
 {
     public bool SmallFree = true, Opener = true, NoReturn = true, VerifyAdv = true, OopTail = true, Explorer = true,
-        Rooms = true, GoalHot = true, Dist = true, Corral = true, Hall = true, HotSides = true, Mobility = true;
+        Rooms = true, GoalHot = true, Dist = true, Corral = true, Hall = true, HotSides = true, Mobility = true,
+        HallSide = true, HallSink = true;
     public int OopAdv = 2, PlanExp = 4096, EdgeWin = 15;
     public string Plan = "v2";   // v2 (exp-411 planner), v2ng, old (macro sink planner as event list)
     public bool Debug;

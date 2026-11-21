@@ -6,9 +6,22 @@ namespace Soksolv.Search;
 public sealed unsafe partial class FullSolver
 {
     // ---- step stubs (filled in by later fa2 steps) ----------------------------------------------------------------------------------
-    void Fa2HallParent(int[] cur, int id) { }
-    void Fa2HallChild(int[] cur, ref Fa2Cand c, int i, int b, int np) { }
-    void Fa2HallRoot(int[] cur, ref int pk, int np) { }
+    void Fa2HallParent(int[] cur, int id)
+    {
+        if (fa2Hall != null) fa2Hall.Parent(cur, Fa2PackedNow(), nodes.Player(id));
+    }
+    void Fa2HallChild(int[] cur, ref Fa2Cand c, int i, int b, int np)
+    {
+        if (fa2Hall == null) return;
+        int cpk = fa2Hall.Child(cur, c.Packed, i, b, np);
+        if (opt.Fa2.Hall) c.Packed = cpk;
+    }
+    void Fa2HallRoot(int[] cur, ref int pk, int np)
+    {
+        if (fa2Hall == null) return;
+        int cpk = fa2Hall.Child(cur, pk, -1, -1, np);
+        if (opt.Fa2.Hall) pk = cpk;
+    }
 
     static ulong Splitmix(ref ulong x)
     {
@@ -41,7 +54,7 @@ public sealed unsafe partial class FullSolver
         if (opt.ClusterDead) cl = new ClusterChecker(new ClusterBoard(wall, goal, deadSq, W, salt: true)) { Shared = opt.SharedClusters, SharedPen = null };
         dz = new Search.DeadZone.DeadZoneChecker(new Search.DeadZone.DeadZoneBoard(wall, goal, deadSq, W), 200) { Shared = opt.SharedDeadZone };
         mNodeLimit = opt.NodeBudget;
-        hotGoalFree = opt.Fa2.GoalHot;
+        hotGoalFree = opt.Fa2.GoalHot; hotSides = opt.Fa2.HotSides;
         double limitMs = timeLimitSec > 0 && opt.NodeBudget == 0 ? timeLimitSec * 1000 : 0;
         bool Expired() => (mNodeLimit > 0 && fa2ExpandedN >= mNodeLimit) || opt.Stop || (opt.Cancel?.Stopped ?? false) || (limitMs > 0 && sw.ElapsedMilliseconds > limitMs);
 
@@ -207,6 +220,7 @@ public sealed unsafe partial class FullSolver
             mPlan.Fest = fa2Fp;
         }
         if (opt.Fa2.Debug && fa2Fp != null) { Console.Error.Write(" "); foreach (var e in fa2Fp.E) Console.Error.Write($" {e.From}->{e.To}/{e.Until}"); Console.Error.WriteLine($" plan init {fa2Fp.InitNum}"); }
+        if (fa2Fp != null && opt.Fa2.Hall) fa2Hall = new Fa2Hall(this, fa2Fp);
         Fa2SetupRooms();
         return null;
     }
