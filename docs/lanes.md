@@ -366,3 +366,15 @@ shared-table skips, base runs).
 Not ported in this step (all Go-side behaviours the C# hub-pull lacks): `retargetTo` reuse of the base forward tree, meetings between hub-pull and the other lanes
 (the forward toward search has no `meet` hooks; `Back`/`Fwd` owners 4/5 do not exist), `relayBack` (off by default in Go anyway), the memory elastic budget
 (`budgetP` shares: forward trees only count against `BudgetBytes` via `PeerBytes`), Portfolio wiring.
+
+**Engine fix found by the node-slice parity (affects every macro-engine lane run in slices / with a cancelled window):** Go's `deferReopen`/`resumeWindow`
+(`ResumeWindowFix`, default on): when a slice (or a node limit) ends in the middle of reopening a node's next move window, the exhausted window survives as a
+frontier entry (`move = -2`, weight `w`, `lazyScore`) that reopens it on resume. The C# macro engine dropped such windows (it only mattered for
+resumed searches: pull slices, hub trials/base trees; `-nodes` single runs never resume). Ported: `DeferReopen`, `LazyScore`, `OpenFrontierEntry`
+(`Macro/FullSolver.Macro.cs`), also in the type-exploration pick. Before the fix hub-pull diverged by +-1 stratum at some slice boundaries; after it matches.
+
+**Wall-clock mode (the default) — what is mirrored from Go:** `festbUnit` = 250 ms pull slices, a forward slice is 2 pull slices (here: forward time >= 2 x the
+pull slice before the pull tree runs again; `pullSlice = max(festbUnit, fwdT/2)`), `roundEnd(slice, deadline)` clipping, trial/base budgets in expansions
+(these are not wall-clock in Go either), `StallScale = t/600` (set by the CLI/Portfolio for `-t < 600`; stall finishing runs only in toward trees and never
+in node-slice mode), memory: every tree counts the lane's other trees (`FullOptions.PeerBytes`) against `BudgetBytes`, lane revive ring (`memory` / `festb ended`
+-> fresh pull tree, `RngSeed = RevSeed(k)`).

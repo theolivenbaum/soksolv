@@ -197,4 +197,27 @@ public class PfFestTests
             Assert.Null(Verifier.CheckSolution(rows, r.Solution));
         }
     }
+
+    // Wall-clock slicing (the default): the lane solves and every solution replays.
+    [Theory]
+    [InlineData("Microban_155_31")]
+    [InlineData("Microban_155_65")]
+    [InlineData("Sven_1623_100")]
+    public void HubPull_WallClockSolvesAndVerifies(string level)
+    {
+        var rows = TestData.Rows(level);
+        var o = new FullOptions { SharedClusters = new ClusterTable(16), SharedPenalties = new ClusterTable(16) };
+        var r = FullSolver.SolveHubPull(rows, o, 30);
+        Assert.True(r.Solved, r.Reason);
+        Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+    }
+
+    [Fact]
+    public void Portfolio_WithHubPullLaneSolves()
+    {
+        var rows = TestData.Rows("Microban_155_65");
+        var r = Portfolio.Solve(rows, new PortfolioOptions { MemBytes = 2048UL << 20, HubPull = true }, 60);
+        Assert.True(r.Solved, r.Reason);
+        Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+    }
 }

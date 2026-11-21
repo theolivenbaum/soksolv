@@ -9,7 +9,7 @@ using Soksolv.Search.Reverse;
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
-bool portPull = false, portNovelty = true, portFa2 = true;
+bool portPull = false, portHubPull = false, portNovelty = true, portFa2 = true;
 bool noMeet = false, pfOn = false; string? strataDump = null; long hubSlices = 0;
 var hfSwitches = new Dictionary<string, bool>();
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
@@ -45,6 +45,7 @@ for (int i = 0; i < args.Length; i++)
         case "-cluster-cap": ClusterChecker.StateCap = int.Parse(args[++i]); break;
         case "-procs": i++; break; // accepted for CLI compatibility (single lane for now)
         case "-strategy": strategy = args[++i]; break;
+        case "-hub-pull": portHubPull = true; break;     // add the hub-pull lane to the portfolio (opt-in)
         case "-pull": portPull = true; break;           // add the pull lane to the portfolio (off by default: no backward perimeter yet)
         case "-no-novelty": portNovelty = false; break;
         case "-no-fa2": portFa2 = false; break;
@@ -115,6 +116,7 @@ SolveResult Run(string[] r, double tl)
     if (strategy == "full") return FullSolver.Solve(r, opt, tl);
     if (strategy == "hf") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveHf(r, opt, tl); }
     if (strategy == "hub-pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveHubPull(r, opt, tl); }
+    if (strategy is "hub-gen" or "hub") return new SolveResult { Reason = "hub-gen/hub lanes are not ported yet (docs/lanes.md: hub lane family)" };
     if (strategy == "hub-strata") { opt.StallScale = 1.0; return FullSolver.SolveHubStrata(r, opt, tl, strataDump ?? "hub-strata.txt"); }
     if (strategy == "pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolvePull(r, opt, tl); }
     if (strategy == "fa2") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveFa2(r, opt, tl); }
@@ -127,7 +129,7 @@ SolveResult Run(string[] r, double tl)
         return Soksolv.Search.Factor.FactorLane.Run(lvf, new Soksolv.Search.Factor.FactorOptions { NodeBudget = nodes, BudgetBytes = opt.BudgetBytes, Engine = eng, TimeLimitSec = tl, Solo = true }, tl);
     }
     if (strategy == "macro") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveMacroLane(r, opt, tl); } // main.go -stall-scale
-    return Portfolio.Solve(r, new PortfolioOptions { Meet = !noMeet, Pull = portPull, Novelty = portNovelty, Fa2 = portFa2, NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
+    return Portfolio.Solve(r, new PortfolioOptions { Meet = !noMeet, Pull = portPull, HubPull = portHubPull, Novelty = portNovelty, Fa2 = portFa2, NodeBudget = nodes, MemBytes = (ulong)memMb << 20, RevSupply = revSupply }, tl);
 }
 SolveResult res;
 {

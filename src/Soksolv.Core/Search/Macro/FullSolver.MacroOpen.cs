@@ -686,7 +686,7 @@ public sealed unsafe partial class FullSolver
             for (int x = 0; x < nodes.Nw; x++) ckey[x] = 0;
             foreach (int b in start) Flip(b);
             int root = MAdd(nodes.HashOf(start, p0), p0, -1, -1, -1, -1, 0, h0, 0, -1, start);
-            if (root >= 0) { MOpen(root, start, h0, st0); PropagateDead(root); MEnqueue(root); }
+            if (root >= 0) { MOpen(root, start, h0, st0); PropagateDead(root); MEnqueue(root); DeferReopen(root); }
         }
         mBest = 0;
         mSearchStartMs = mLastImproveMs = clock.ElapsedMilliseconds;
@@ -751,6 +751,7 @@ public sealed unsafe partial class FullSolver
                 mReopen = -1;
                 MEnqueue(id);
             }
+            DeferReopen(id);
             foreach (int b in cur) SetOcc(b, false);
             if (meetPending.Count > 0) { if (pull) PullMeetPost(cur); else MeetPost(cur); }
             if (cid < 0) continue;
@@ -790,6 +791,7 @@ public sealed unsafe partial class FullSolver
                 foreach (int b in child) SetOcc(b, false);
             }
             MEnqueue(cid);
+            DeferReopen(cid);
         }
     }
 

@@ -251,7 +251,7 @@ public sealed unsafe partial class FullSolver
         if (opt.Net != null) { if (pull) PullMeetAdd(id, boxes, player); else MeetAdd(id, boxes, player); }
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = Regions();
-        var cell = pfOn ? default : hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
+        var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
                           : new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
         int bucket = pfOn ? PfAdd(boxes, parent, reg) : hfRank && opt.HfFestSched ? HfSchedAdd(boxes, cell, parent, reg) : Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
@@ -339,10 +339,69 @@ public sealed unsafe partial class FullSolver
         mqueues[(int)a.Bucket].Push(new FessEntry { Node = id, Move = (int)k, Weight = nodes.W(id) + wd, Version = a.Version, Score = mmvScore[(int)k] });
     }
 
+    /// <summary>Go deferReopen (ResumeWindowFix): an exhausted window survives a cancelled slice as a frontier entry (move -2) that reopens the node's next window.</summary>
+    void DeferReopen(int id)
+    {
+        if (mReopen != id || maux[id].Dead != 0) return;
+        mqueues[(int)maux[id].Bucket].Push(new FessEntry { Node = id, Move = -2, Weight = nodes.W(id), Version = maux[id].Version, Score = LazyScore(id) });
+        mReopen = -1;
+    }
+
+    /// <summary>Go lazyScore: the score of a frontier entry that stands for a node's whole next window.</summary>
+    MoveScore LazyScore(int id)
+    {
+        int oop, packed, conn, room, hot;
+        if (hfRank && opt.HfFestSched && id < hfOwn.Count)
+        {
+            var own = hfOwn[id];
+            oop = own.Reg; if (opt.HfMatchFirst && own.Inf) oop += HfNoMatch;
+            packed = own.On; conn = own.Reg; room = own.Hot; hot = own.Dist;
+        }
+        else { var c = maux[id].Actual; oop = c.Oop; packed = c.Packed; conn = maux[id].Reg; room = c.Connectivity; hot = 0; }
+        return new MoveScore { Oop = (ushort)oop, Packed = (ushort)packed, Conn = (ushort)conn, Hot = (ushort)Math.Min(hot, 65535), Room = (uint)room, Mobility = 0 };
+    }
+
+    /// <summary>Go resumeWindow + lazyOpenNode: regenerate the node's next window from its current state.</summary>
+    bool OpenFrontierEntry(FessEntry e)
+    {
+        int id = e.Node;
+        ref var a = ref maux[id];
+        if (e.Move == -2 && a.Dead == 0 && a.MvStart >= 0 && a.MvLeft != 0)
+        {
+            a.MvOff += a.MvLen;
+            a.MvStart = -1;
+            var boxes = mCur;
+            nodes.Unpack(id, boxes);
+            foreach (int b in boxes) SetOcc(b, true);
+            int ch = 0; foreach (int b in boxes) ch += dist[b];
+            Reach(nodes.Player(id), mark);
+            MOpen(id, boxes, ch, stamp);
+            PropagateDead(id);
+            MEnqueue(id);
+            while (mReopen == id && maux[id].Dead == 0 && !MExpired())
+            {
+                mReopen = -1;
+                maux[id].MvOff += maux[id].MvLen;
+                Reach(nodes.Player(id), mark);
+                MOpen(id, boxes, ch, stamp);
+                PropagateDead(id);
+                MEnqueue(id);
+            }
+            DeferReopen(id);
+            foreach (int b in boxes) SetOcc(b, false);
+        }
+        return MExpired();
+    }
+
     bool MSelect(out FessEntry result)
     {
         mTurn++;
-        if (pfOn && mTurn % PfTypes == 1 && mqueues.Count > 0 && MSelectType(out result)) return true; // exp-279: type-based exploration
+        if (pfOn && mTurn % PfTypes == 1 && mqueues.Count > 0) // exp-279: type-based exploration
+        {
+            int ts = MSelectType(out result);
+            if (ts > 0) return true;
+            if (ts < 0) return false;
+        }
         if (mTurn % 2 == 0 && mBest >= 0)
         {
             int cell = (int)maux[mBest].Bucket;
@@ -352,7 +411,11 @@ public sealed unsafe partial class FullSolver
                 while (q.Count > 0)
                 {
                     var e = q.Pop();
-                    if (e.Version == maux[e.Node].Version && (uint)cell == maux[e.Node].Bucket && (mmv[e.Move] & MMoveUsed) == 0) { result = e; return true; }
+                    if (e.Version == maux[e.Node].Version && (uint)cell == maux[e.Node].Bucket)
+                    {
+                        if (e.Move < 0) { if (OpenFrontierEntry(e)) { result = default; return false; } continue; }
+                        if ((mmv[e.Move] & MMoveUsed) == 0) { result = e; return true; }
+                    }
                 }
             }
         }
@@ -364,7 +427,11 @@ public sealed unsafe partial class FullSolver
             while (q.Count > 0)
             {
                 var e = q.Pop();
-                if (e.Version == maux[e.Node].Version && (uint)cell == maux[e.Node].Bucket && (mmv[e.Move] & MMoveUsed) == 0) { result = e; return true; }
+                if (e.Version == maux[e.Node].Version && (uint)cell == maux[e.Node].Bucket)
+                {
+                    if (e.Move < 0) { if (OpenFrontierEntry(e)) { result = default; return false; } continue; }
+                    if ((mmv[e.Move] & MMoveUsed) == 0) { result = e; return true; }
+                }
             }
         }
         result = default; return false;

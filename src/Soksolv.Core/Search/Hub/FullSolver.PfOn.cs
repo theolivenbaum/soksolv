@@ -155,8 +155,8 @@ public sealed unsafe partial class FullSolver
     /// <summary>Go heap.Remove on a fessHeap (random removal for type exploration).</summary>
     // (implemented in FessHeap.Remove)
 
-    /// <summary>Go selectMove's type exploration (exp-279, pfOn only): every PfTypes-th selection takes a random move of a random non-empty cell.</summary>
-    bool MSelectType(out FessEntry result)
+    /// <summary>Go selectMove's type exploration (exp-279, pfOn only): every PfTypes-th selection takes a random move of a random non-empty cell. Returns 1 (found), 0 (none), -1 (slice expired while reopening a window).</summary>
+    int MSelectType(out FessEntry result)
     {
         for (int rep = 0; rep < 8; rep++)
         {
@@ -164,8 +164,12 @@ public sealed unsafe partial class FullSolver
             var q = mqueues[cell];
             if (q.Count == 0) continue;
             var e = q.Remove((int)(Rnd() % (ulong)q.Count));
-            if (e.Version == maux[e.Node].Version && (uint)cell == maux[e.Node].Bucket && (mmv[e.Move] & MMoveUsed) == 0) { result = e; return true; }
+            if (e.Version == maux[e.Node].Version && (uint)cell == maux[e.Node].Bucket)
+            {
+                if (e.Move < 0) { if (OpenFrontierEntry(e)) { result = default; return -1; } continue; }
+                if ((mmv[e.Move] & MMoveUsed) == 0) { result = e; return 1; }
+            }
         }
-        result = default; return false;
+        result = default; return 0;
     }
 }
