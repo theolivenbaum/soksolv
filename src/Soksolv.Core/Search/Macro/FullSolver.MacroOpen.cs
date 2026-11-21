@@ -96,6 +96,7 @@ public sealed unsafe partial class FullSolver
         packPrepared = false;
         if (Feat(4)) PreparePackingObligations();
         mPlan?.NodeSetup(cur);
+        if (mPlan?.Fest != null) mPlan.FestMiss = mPlan.Fest.PermMissing(occ);
         Prof.Stop(5, tc);
         mAccN = 0;
         if (pull) { long sp = 0; foreach (int bx in cur) sp += spreadDist[bx]; mParentSpread = sp; }
@@ -483,8 +484,8 @@ public sealed unsafe partial class FullSolver
             if (mPlan != null)
             {
                 var (cphase, cpacked) = mPlan.ChildStatus(cur[i], t);
-                packed = mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.Packed(occ) : cpacked; progress = cphase;
-                oop = MOutOfPlan(cur, cphase, i, t);
+                packed = mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.PackedChild(occ, cur[i], t, mPlan.FestMiss) : cpacked; progress = cphase;
+                oop = MOutOfPlanChild(cur, cphase, i, t);
             }
             else { packed = pull ? (int)((mParentSpread - spreadDist[cur[i]] + spreadDist[t]) / SpreadBucket) : MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
             if (mCmdMask != 0 && dl != null && r <= mParentConn)

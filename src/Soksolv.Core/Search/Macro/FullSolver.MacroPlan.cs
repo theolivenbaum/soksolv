@@ -18,7 +18,8 @@ public sealed unsafe partial class FullSolver
         public int InW;
         public bool Complete; public int Expanded, Parkings, Remaining;
         public FestPlan? Fest; public bool FestPacked; // plan4: Festival-prefix packed feature (Go plan.fest / plan.festPacked)
-        public ulong[] OccBits = []; public int[] Miss = [];
+        public ulong[] OccBits = []; public int[] Miss = []; public int[] Cand = []; public int CandN;   // phases (best first) with at most one missing cell
+        public int[] OopCache = []; public int FestMiss;
 
         public void Prepare()
         {
@@ -65,14 +66,22 @@ public sealed unsafe partial class FullSolver
                 for (int w = 0; w < InW; w++) m += BitOperations.PopCount(In[i * InW + w] & ~OccBits[w]);
                 Miss[i] = m;
             }
+            if (Cand.Length != Required.Length) Cand = new int[Required.Length];
+            CandN = 0;
+            for (int i = Required.Length - 1; i >= 0; i--) if (Miss[i] <= 1) Cand[CandN++] = i;
+            if (OopCache.Length != Required.Length + 1) OopCache = new int[Required.Length + 1];
+            Array.Fill(OopCache, -1);
         }
 
         int InBit(int i, int c) { int w = c >> 6; return w < InW ? (int)(In[i * InW + w] >> (c & 63) & 1) : 0; }
 
         public (int phase, int packed) ChildStatus(int b, int t)
         {
-            for (int i = Required.Length - 1; i >= 0; i--)
+            for (int ci = 0; ci < CandN; ci++)
+            {
+                int i = Cand[ci];
                 if (Miss[i] + InBit(i, b) - InBit(i, t) == 0) return (i, Required[i].Length);
+            }
             if (Required.Length > 0) return (-1, Required[0].Length - (Miss[0] + InBit(0, b) - InBit(0, t)));
             return (-1, 0);
         }

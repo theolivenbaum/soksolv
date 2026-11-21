@@ -423,6 +423,23 @@ public sealed unsafe partial class FullSolver
         return n2;
     }
 
+    /// <summary>MOutOfPlan(cur, phase, i, t) for a plan child: the parent's count for this phase (cached per opened node) corrected for the moved box.</summary>
+    int MOutOfPlanChild(ReadOnlySpan<int> cur, int phase, int i, int t)
+    {
+        if (basinInside == null) return 0;
+        var plan = mPlan!;
+        int slot = phase + 1;
+        int baseCount = plan.OopCache[slot];
+        if (baseCount < 0)
+        {
+            baseCount = 0;
+            for (int j = 0; j < cur.Length; j++) baseCount += OopContrib(plan, phase, cur[j]);
+            plan.OopCache[slot] = baseCount;
+        }
+        return baseCount - OopContrib(plan, phase, cur[i]) + OopContrib(plan, phase, t);
+    }
+    int OopContrib(PackingPlan plan, int phase, int b) => basinInside![b] || goal[b] || plan.PlacedRow(phase, b) ? 0 : 1;
+
     // walking distance (walls only) from a source, cached per source (opener and out-of-plan advisors use fixed sources per node)
     readonly Dictionary<int, int[]> mWalkCache = new();
     int MWalk(int from, int to)

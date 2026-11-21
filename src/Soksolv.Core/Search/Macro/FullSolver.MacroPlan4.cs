@@ -76,6 +76,29 @@ public sealed unsafe partial class FullSolver
             return idx.Select(i => a[i]).ToList();
         }
 
+        int[]? permCnt; int permN, permE = -1;
+        void PermPrepare(int cells)
+        {
+            if (permCnt == null || permCnt.Length != cells) permCnt = new int[cells];
+            Array.Clear(permCnt); permN = 0;
+            for (int i = 0; i < InitNum; i++) if (E[i].Until == -1) { permCnt[E[i].To]++; permN++; }
+            permE = E.Count;
+        }
+        /// <summary>Permanent initial entries whose cell is empty in occ.</summary>
+        public int PermMissing(bool[] occ)
+        {
+            if (permE != E.Count || permCnt == null || permCnt.Length != occ.Length) PermPrepare(occ.Length);
+            int m = 0;
+            for (int i = 0; i < InitNum; i++) if (E[i].Until == -1 && !occ[E[i].To]) m++;
+            return m;
+        }
+        /// <summary><see cref="Packed"/> of the child (occ holds it) of a parent with <paramref name="parentMissing"/> empty permanent cells, after the box on b moved to t.</summary>
+        public int PackedChild(bool[] occ, int b, int t, int parentMissing)
+        {
+            int m = parentMissing + permCnt![b] - permCnt[t];
+            return m > 0 ? permN - m : Packed(occ);
+        }
+
         public int Packed(bool[] occ)
         {
             int n = E.Count;
