@@ -987,8 +987,11 @@ public sealed unsafe partial class FullSolver
                 }
                 for (int m = sides; m != 0; m &= m - 1)
                 {
-                    int k2 = to * 4 + BitOperations.TrailingZeroCount(m);
-                    if (seenKp[k2] != g) { seenKp[k2] = g; q[qc++] = k2; }
+                    int di2 = BitOperations.TrailingZeroCount(m), k2 = to * 4 + di2;
+                    if (seenKp[k2] == g) continue;
+                    seenKp[k2] = g;
+                    int d2 = dr[di2];
+                    if (bk[to + d2] == 0 && bk[to + 2 * d2] == 0) q[qc++] = k2;   // a state whose next cells are blocked would be dropped on pop
                 }
                 int t = bAt[to];
                 if (t >= 0 && sinks && !sunk && (used[t >> 6] >> (t & 63) & 1) == 0 && pElim[t])
