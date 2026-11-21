@@ -149,6 +149,7 @@ sb.Append($"  \"solved\": {(res.Solved && verr == null ? "true" : "false")},\n")
 sb.Append(CultureInfo.InvariantCulture, $"  \"time_ms\": {res.TimeMs:F1},\n");
 sb.Append($"  \"moves\": {res.Solution.Length},\n  \"pushes\": {pushes},\n  \"nodes_expanded\": {res.Nodes},\n");
 sb.Append(CultureInfo.InvariantCulture, $"  \"peak_memory_mb\": {res.PeakBytes / 1048576.0:F1},\n");
+sb.Append(CultureInfo.InvariantCulture, $"  \"alloc_mb\": {GC.GetTotalAllocatedBytes(false) / 1048576.0:F1},\n  \"gc_gen0\": {GC.CollectionCount(0)},\n  \"gc_gen2\": {GC.CollectionCount(2)},\n");
 sb.Append($"  \"stored\": {res.Stats.Stored},\n  \"generated\": {res.Stats.Generated},\n  \"duplicates\": {res.Stats.Duplicates},\n");
 sb.Append($"  \"reason\": \"{res.Reason}\",\n");
 if (res.Fingerprint != "") sb.Append($"  \"fingerprint\": \"{res.Fingerprint}\",\n");
