@@ -84,7 +84,7 @@ Instruction counts at 10k nodes (before -> after): Holland_81_27 689M -> 236M, F
 Dive_Sven_1623_197 1612M -> 311M, SokHard_163_13 282M -> 138M, Sasquatch_IV_50_42 273M -> 126M.
 
 Parity (all exact, identical solved / nodes_expanded / pushes vs the unpatched Go binary, `bench/lane-parity.py reverse`):
-@PARITY@
+testdata 24/24 at `-nodes 200000` (default lane and `-rev-lanes 1`) and 24/24 `-rev-supply 0` at 100000; LTS sample 297/297 at 100000 (default lane) and 297/297 at 50000 (`-rev-lanes 1`); `dotnet test` green (261 + new capped-run / allocation tests).
 
 ### Allocation / memory
 
