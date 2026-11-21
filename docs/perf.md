@@ -297,7 +297,7 @@ novelty lane, `PackingPlan`), `Macro/CutScan.cs` (low-link scan answering pull-s
 | novelty, 12 wide levels | 0.70 | 0.70 (setup is small there; the rest is outside the planners: move access, FloodRows, novelty hash) |
 | macro / novelty / fa2, 22 testdata levels, 5000 nodes | 0.75 / 0.62 / 0.83 | 0.64 / 0.63 / 0.62 |
 
-Parity: `bench/lane-parity`-style full-statistics comparison (solved/nodes/pushes/stored/generated/duplicates/fingerprint/solution) of the new AOT binary against the pre-change AOT
+Parity (`bench/bin-parity.py BASE NEW lane nodes [list]`, 43/43 on every 7th level of the LTS sample for macro/fa2/novelty/factor as well): full-statistics comparison (solved/nodes/pushes/stored/generated/duplicates/fingerprint/solution) of the new AOT binary against the pre-change AOT
 binary (itself Go-exact) on the 24 testdata levels for macro, novelty, fa2, factor, dive, hf, pull and on the 12 wide levels for macro/fa2/factor/novelty; identical. `dotnet test` green
 (except the known load-sensitive `HubPull_NodeSlicesMatchGo`, which passes alone).
 Allocation: plan4 growth storage (nodes, boxes, used sets, kids) is native chunked memory that never moves: alloc_mb at 30000 expansions 92 -> 58 MB, gen0/gen2 GCs 3 -> 1; no per-node garbage.
