@@ -334,3 +334,38 @@ The timed solves are non-deterministic in Go itself (Sasquatch_VII_50#13: 71–3
 * Per-candidate `open()` cost is still ~2x Go on very wide levels (hundreds of candidates per node): goal-area (≈1.3 µs/call), pair-table lookups, hotspot `after()` and move-access scans are not yet word-parallel; plan4's box loop is ~2.5x Go per expansion on 50+-box levels (96 s vs 37 s for the up-front phase of Sasquatch II_50#25).
 * `LazyChild` (incremental per-child packed/oop) and Go's incremental `roomConnChild` / tree-based hotspot rows are not ported (performance-only).
 * Unported experiment features: novelty/access-novelty (inert at the macro lane's default `noveltyBudget()==0`), the relay/hub/fa2 hooks, the elastic-memory pool and memory-governed `revive` ring.
+
+## Speed work on wide levels (equal-work CPU time vs Go, AOT build)
+
+Harness: `bench/wide-timing.py macro bench/wide-levels.tsv` — same `-nodes` cap on both sides, child **CPU time**
+(user+sys, robust to the loaded shared VM), `-parity` mode, every row also checks identical solved/nodes/pushes.
+Profiling: `SOKSOLV_PROF=1` section counters (+ `bench/ss-top.py` over `dotnet-trace --format Speedscope` for JIT builds)
+against `go tool pprof` of the same run.
+
+| level (nodes) | before | after | what changed |
+|---|---|---|---|
+| Sven_1623#21 (3000) | 1.99x | 1.13x | hotspot columns, goal-area memo, bit box search |
+| Sven_1623#10 / #50 | 1.29 / 1.18 | 1.06 / 1.10 | idem |
+| Sasquatch_VI_50#48 (1500, 50 boxes, plan4) | 1.65x | 1.16x | tree hotspot rows, plan4 radix sort |
+| Sasquatch_VI_50#34 | 1.26x | 1.1-1.2x | bit flood + moveAccessBits |
+| Sasquatch_50#19 | 0.97x | 0.99x | |
+| Sasquatch_IV_50#32 (plan4-bound, 13 s) | 1.17x | 1.01x | plan4 radix sort / in-place beam |
+| SokHard_163#36 / #96 | 0.89 / 0.71 | 0.84 / 0.82 | |
+| Sasquatch_VII_50#27 / Holland_81#14 / III_50#11 | 1.18 / 1.08 / 1.02 | 0.98 / 0.99 / 1.07 | |
+| **total, 12 levels** | **1.22x** | **1.05x** | parity 12/12 identical at every step |
+
+Changes (each verified fingerprint-identical with `bench/lane-parity.py macro` on the 19 testdata levels at 5000 nodes
+and the 12 wide levels at 800 nodes, plus the unit suites):
+* `FullSolver.MacroHot.cs`: hotspot rows cached in an array (was a `Dictionary` lookup per box per candidate), Go-style
+  per-node column bitsets (`HotCounts`/`HotAfter` = word ops per candidate), and tree-based rows (per-goal pull trees with
+  Euler tour; only the subtrees a blocker cuts are re-searched). The definition-based builder stays as the reference
+  (`SOKSOLV_CHECK_HOT=1` compares every row).
+* `FullSolver.MacroBits.cs`: node-mode `bitBoard` (row-bitset flood inside `MBoxSearch`, `boxBitAfter` rule for non-node
+  searches) and `moveAccessBits` (mobility / explorer / access facts as row expressions); the scan version remains as the
+  fallback for boards wider than 64 and as the reference (`SOKSOLV_CHECK_BITS=1` compares every call, incl. the novelty facts).
+* `FullSolver.MacroPlan4.cs`: stable LSD radix sort of plan4 children (Go `sortKids`), in-place beam fill, `ref` node access.
+* `GoalArea.cs`: exact-key survivors memo (Go `GoalAreaMemo`), pure cache.
+
+Remaining gap (>1.0x): per-candidate constant factors on the widest levels (Sasquatch_VI_50#34/#48, Sven_1623#21) —
+`CutQueryFill` (35% of plan4 in both languages) and `Expand4` bounds checks, displacement matching, region counts.
+Fixed start-up costs are equal (0.19-0.20 s for Sven_1623#21 in both).

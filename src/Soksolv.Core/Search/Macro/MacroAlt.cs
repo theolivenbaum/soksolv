@@ -24,6 +24,10 @@ public sealed class Baton
     }
 
     public void Wait(int me) => ch[me].Wait();
+    /// <summary>Passes the token to slot (the Go lane's `bat.ch[slot] &lt;- struct{}{}`).</summary>
+    public void Release(int slot) => ch[slot].Release();
+    public bool IsAlive(int slot) { lock (mu) return alive[slot]; }
+    public void RequestStop() { lock (mu) stop = true; }
     public int Live() { lock (mu) { int n = 0; foreach (bool a in alive) if (a) n++; return Math.Max(n, 1); } }
     public bool Stopped { get { lock (mu) return stop; } }
 

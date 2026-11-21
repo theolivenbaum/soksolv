@@ -10,12 +10,30 @@ public sealed unsafe partial class FullSolver
     bool hotGoalFree;   // fa2: goals are neither blockers nor victims (Festival's relation); set before the first row is built
     uint[]? hotSeen; uint hotStamp; int[]? hotQ;
 
+    public static bool HotRowsDefinition = Environment.GetEnvironmentVariable("SOKSOLV_HOT_DEF") == "1";   // reference builder (tests)
+    public static bool CheckHotRows = Environment.GetEnvironmentVariable("SOKSOLV_CHECK_HOT") == "1";
+
     ulong[] HotRow(int blocker)
     {
         hotRowArr ??= new ulong[]?[nodes.Fcell.Length];
         int hidx = nodes.Fidx[blocker];
         if (hotRowArr[hidx] is { } cached) return cached;
         if (hotSides) { var rs = HotRowSides(blocker); hotRowArr[hidx] = rs; return rs; }
+        if (!HotRowsDefinition)
+        {
+            var tr = HotRowTree(blocker);
+            if (CheckHotRows) { var df = HotRowDef(blocker); if (!tr.AsSpan().SequenceEqual(df)) throw new InvalidOperationException($"hot row tree != definition for blocker {blocker}"); }
+            hotRowArr[hidx] = tr;
+            return tr;
+        }
+        var rowD = HotRowDef(blocker);
+        hotRowArr[hidx] = rowD;
+        return rowD;
+    }
+
+    /// <summary>Definition-based row (reference): union over goals of T_g \ T'_g(y) \ {y}.</summary>
+    ulong[] HotRowDef(int blocker)
+    {
         var row = new ulong[Math.Max(1, nodes.Nw)];
         hotSeen ??= new uint[cells]; hotQ ??= new int[cells];
         for (int g = 0; g < goals.Length; g++)
@@ -48,7 +66,138 @@ public sealed unsafe partial class FullSolver
             if (goal[blocker]) Array.Clear(row);
             else foreach (int g in goals) { int fi = nodes.Fidx[g]; row[fi >> 6] &= ~(1UL << (fi & 63)); }
         }
-        hotRowArr[hidx] = row;
+        return row;
+    }
+
+
+    // ---- tree-based rows (Go hotspots.go: buildTrees / row) -----------------------------------------------------------------------
+    // Per goal: BFS tree of the pull reachability (box squares from which the goal is reachable) with an Euler tour, so a
+    // blocker's effect is found by re-searching only the subtrees it cuts.
+    bool hotTrees;
+    int[]? hPar, hTin, hSize, hByT, hRs, hRq; uint hRstamp;
+    readonly int[] hRgLo = new int[10], hRgHi = new int[10];
+
+    void HotBuildTrees()
+    {
+        hotTrees = true;
+        int nf = nodes.Fcell.Length, ng = goals.Length;
+        hPar = new int[ng * nf]; hTin = new int[ng * nf]; hSize = new int[ng * nf]; hByT = new int[ng * nf]; hRs = new int[nf]; hRq = new int[cells];
+        Array.Fill(hTin, -1);
+        var fidx = nodes.Fidx; var fcell = nodes.Fcell;
+        hotSeen ??= new uint[cells]; hotQ ??= new int[cells];
+        var next = new int[nf];
+        for (int g = 0; g < ng; g++)
+        {
+            int baseG = g * nf, goalCell = goals[g];
+            uint st = ++hotStamp;
+            int tail = 0; hotQ![tail++] = goalCell; hotSeen![goalCell] = st;
+            hPar[baseG + fidx[goalCell]] = -1;
+            for (int i = 0; i < tail; i++)
+                foreach (int d in dirs)
+                {
+                    int q = hotQ[i], b = q - d;
+                    if (wall[b] || hotSeen[b] == st || wall[SupportCell(b, q, d)] || goalDist[g * cells + b] < 0) continue;
+                    hotSeen[b] = st; hPar[baseG + fidx[b]] = q; hotQ[tail++] = b;
+                }
+            for (int i = tail - 1; i >= 0; i--)
+            {
+                int fi = fidx[hotQ[i]];
+                hSize[baseG + fi]++;
+                int p = hPar[baseG + fi];
+                if (p >= 0 && i > 0) hSize[baseG + fidx[p]] += hSize[baseG + fi];
+            }
+            int gf = fidx[goalCell];
+            hTin[baseG + gf] = 0; hByT[baseG] = gf; next[gf] = 1;
+            for (int i = 1; i < tail; i++)
+            {
+                int c = hotQ[i];
+                int fi = fidx[c], pf = fidx[hPar[baseG + fi]];
+                hTin[baseG + fi] = next[pf];
+                next[pf] += hSize[baseG + fi];
+                next[fi] = hTin[baseG + fi] + 1;
+                hByT[baseG + hTin[baseG + fi]] = fi;
+            }
+        }
+    }
+
+    ulong[] HotRowTree(int blocker)
+    {
+        if (!hotTrees) HotBuildTrees();
+        var fidx = nodes.Fidx; var fcell = nodes.Fcell;
+        int idx = fidx[blocker], nf = fcell.Length;
+        var row = new ulong[Math.Max(1, nodes.Nw)];
+        int[] rgLo = hRgLo, rgHi = hRgHi;
+        for (int g = 0; g < goals.Length; g++)
+        {
+            int baseG = g * nf, goalCell = goals[g];
+            int nr = 0;
+            if (goalCell == blocker)
+            {
+                int sz = hSize[baseG + fidx[goalCell]];
+                for (int t = 1; t < sz; t++) { int fi = hByT[baseG + t]; row[fi >> 6] |= 1UL << (fi & 63); }
+                continue;
+            }
+            if (hTin[baseG + idx] >= 0) { rgLo[nr] = hTin[baseG + idx]; rgHi[nr] = hTin[baseG + idx] + hSize[baseG + idx]; nr++; }
+            // tree edges whose support square is the blocker are cut too
+            foreach (int d in dirs)
+                for (int v = 0; v < 2; v++)
+                {
+                    int b = v == 0 ? blocker + d : blocker - 2 * d;
+                    if ((uint)b >= (uint)cells) continue;
+                    int fi = fidx[b];
+                    if (fi < 0 || hTin[baseG + fi] < 0 || hPar[baseG + fi] < 0) continue;
+                    int q = hPar[baseG + fi];
+                    if (SupportCell(b, q, q - b) == blocker) { rgLo[nr] = hTin[baseG + fi]; rgHi[nr] = hTin[baseG + fi] + hSize[baseG + fi]; nr++; }
+                }
+            if (nr == 0) continue;
+            for (int i = 1; i < nr; i++)
+                for (int j = i; j > 0 && rgLo[j] < rgLo[j - 1]; j--)
+                {
+                    (rgLo[j], rgLo[j - 1]) = (rgLo[j - 1], rgLo[j]); (rgHi[j], rgHi[j - 1]) = (rgHi[j - 1], rgHi[j]);
+                }
+            int m = 0;
+            for (int i = 0; i < nr; i++)
+            {
+                if (m > 0 && rgLo[i] < rgHi[m - 1]) rgHi[m - 1] = Math.Max(rgHi[m - 1], rgHi[i]);
+                else { rgLo[m] = rgLo[i]; rgHi[m] = rgHi[i]; m++; }
+            }
+            uint rs = ++hRstamp;
+            int qn = 0;
+            var rq = hRq!;
+            // in S: DFS-entry time within a cut subtree
+            bool InS(int fi) { int t = hTin[baseG + fi]; for (int i = 0; i < m; i++) if (t >= rgLo[i] && t < rgHi[i]) return true; return false; }
+            bool Reach(int b, int from, int d) { int sup = SupportCell(b, from, d); return b != blocker && sup != blocker && !wall[b] && !wall[sup]; }
+            for (int i = 0; i < m; i++)
+                for (int t = rgLo[i]; t < rgHi[i]; t++)
+                {
+                    int fi = hByT[baseG + t], b = fcell[fi];
+                    if (b == blocker) continue;
+                    foreach (int d in dirs)
+                    {
+                        int from = b + d;
+                        int ff = fidx[from];
+                        if (ff >= 0 && hTin[baseG + ff] >= 0 && !InS(ff) && Reach(b, from, d)) { hRs![fi] = (int)rs; rq[qn++] = b; break; }
+                    }
+                }
+            for (int k = 0; k < qn; k++)
+                foreach (int d in dirs)
+                {
+                    int b = rq[k] - d;
+                    int fb = fidx[b];
+                    if (fb >= 0 && hTin[baseG + fb] >= 0 && hRs![fb] != (int)rs && InS(fb) && Reach(b, rq[k], d)) { hRs[fb] = (int)rs; rq[qn++] = b; }
+                }
+            for (int i = 0; i < m; i++)
+                for (int t = rgLo[i]; t < rgHi[i]; t++)
+                {
+                    int fi = hByT[baseG + t];
+                    if (hRs![fi] != (int)rs && fcell[fi] != blocker) row[fi >> 6] |= 1UL << (fi & 63);
+                }
+        }
+        if (hotGoalFree)
+        {
+            if (goal[blocker]) Array.Clear(row);
+            else foreach (int g in goals) { int fi = fidx[g]; row[fi >> 6] &= ~(1UL << (fi & 63)); }
+        }
         return row;
     }
 

@@ -16,6 +16,7 @@ public sealed class RevOptions
     public int Supply = 4;        // supply-aware ordering weight (0 = off); Go default 4
     public bool SupplyInherit, NoMacros;
     public long NodeBudget;       // > 0: stop after this many expansions, ignore the clock (deterministic screening)
+    public long MaxNodes;         // > 0: stop after this many expansions (a bounded probe, Go Lane.MaxNodes; clock still applies)
     public ulong BudgetBytes;     // 0 = unlimited
     public ulong MemLimitBytes;   // process backstop (0 = off)
     public bool CloseHoles = true;
@@ -493,7 +494,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
                 bestId = id; bestH = h; lastImpExp = expandedTotal;
             }
             expandedTotal++;
-            if ((opt.NodeBudget > 0 && expandedTotal >= opt.NodeBudget))
+            if ((opt.NodeBudget > 0 && expandedTotal >= opt.NodeBudget) || (opt.MaxNodes > 0 && expandedTotal >= opt.MaxNodes))
                 return new SolveResult { Reason = "timeout", Nodes = expanded };
             if ((expanded & 255) == 0)
             {

@@ -1033,14 +1033,17 @@ public sealed unsafe partial class FullSolver
         {
             ref var nd = ref nodes[id];
             beamN = 0;
-            foreach (var c in cands)
+            var cspan = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cands);
+            for (int ci = 0; ci < cspan.Length; ci++)
             {
+                ref readonly var c = ref cspan[ci];
                 int b = boxes[c.Box];
                 int regions = region0[c.Box] - 1 + c.Pieces;
                 int goals = nd.Goals; if (goal[b]) goals--; if (goal[c.To]) goals++;
                 int dist = nd.Dist - distance[b] + distance[c.To];
                 if (beamN == beam.Length) Array.Resize(ref beam, beamN * 2);
-                beam[beamN++] = new P2Child { Key = Key(nd.Nb, regions, goals, dist, 0), From = b, To = c.To, Player = c.Player, Base = -1 };
+                ref var ch = ref beam[beamN++];
+                ch.Key = Key(nd.Nb, regions, goals, dist, 0); ch.Hash = 0; ch.From = b; ch.To = c.To; ch.Player = c.Player; ch.Base = -1;
             }
             SortKids(beam, beamN);
         }
@@ -1103,7 +1106,34 @@ public sealed unsafe partial class FullSolver
                 return;
             }
             if (sortTmp.Length < cnt) sortTmp = new P2Child[Math.Max(cnt, sortTmp.Length * 2)];
-            MergeSort(a, sortTmp, 0, cnt);
+            RadixSortKids(a, cnt);
+        }
+
+        int[] sortCnt = new int[8 * 256];
+        /// <summary>Stable LSD radix sort on the 64-bit key, skipping bytes every child shares (Go sortKids).</summary>
+        void RadixSortKids(P2Child[] a, int n)
+        {
+            var cnt = sortCnt; Array.Clear(cnt);
+            for (int i = 0; i < n; i++)
+            {
+                ulong k = a[i].Key;
+                for (int b = 0; b < 8; b++) cnt[b * 256 + (int)(k >> (8 * b) & 255)]++;
+            }
+            P2Child[] src = a, dst = sortTmp;
+            for (int b = 0; b < 8; b++)
+            {
+                int off = b * 256;
+                if (cnt[off + (int)(a[0].Key >> (8 * b) & 255)] == n) continue; // every key has this byte
+                int sum = 0;
+                for (int v = 0; v < 256; v++) { int c = cnt[off + v]; cnt[off + v] = sum; sum += c; }
+                for (int i = 0; i < n; i++)
+                {
+                    int v = (int)(src[i].Key >> (8 * b) & 255);
+                    dst[cnt[off + v]++] = src[i];
+                }
+                (src, dst) = (dst, src);
+            }
+            if (!ReferenceEquals(src, a)) Array.Copy(src, a, n);
         }
         static void MergeSort(P2Child[] a, P2Child[] t, int lo, int hi)
         {
@@ -1121,7 +1151,7 @@ public sealed unsafe partial class FullSolver
         int AddNode(int parent, in P2Child c)
         {
             if (!SeenInsert(c.Hash)) return -1;
-            var pn = nodes[parent];
+            ref var pn = ref nodes[parent];
             int off = boxN;
             bool removed = c.Base >= 0;
             EnsureBoxes(pn.Nb);
