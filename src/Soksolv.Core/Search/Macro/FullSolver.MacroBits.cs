@@ -17,7 +17,7 @@ public sealed unsafe partial class FullSolver
 
     ulong[]? bbWallA, bbNFreeA, bbNRegA, bbParA, bbAliveA;
     ulong* bbWallP, bbNFreeP, bbNRegP, bbParP, bbAliveP;
-    int bbH; ulong bbAll;
+    int bbH; ulong bbAll; int bbRegLo, bbRegHi;   // rows (1-based) of the last flooded region
     bool bbInit, bbOn, bbNode, bbNodeBuilt, bbParentBuilt;
     // per direction access geometry (Go accessGeo)
     int[] gSupR = new int[4], gSupX = new int[4], gLandR = new int[4], gLandX = new int[4], gFreeR = new int[4], gFreeX = new int[4];
@@ -73,11 +73,13 @@ public sealed unsafe partial class FullSolver
         bbNFreeP[rp] |= 1UL << cp;
         FloodRows(bbNFreeP, bbNRegP, bbH + 2, rp, cp);
         bbNFreeP[rp] = s2; bbNFreeP[rn] = s1;
-        int minC = -1;
+        int minC = -1; bbRegLo = bbH + 2; bbRegHi = -1;
         for (int r = 1; r <= bbH; r++)
         {
             ulong x = bbNRegP[r];
             if (x == 0) continue;
+            if (minC < 0) bbRegLo = r;
+            bbRegHi = r;
             int baseC = (r - 1) * w;
             if (minC < 0) minC = baseC + BitOperations.TrailingZeroCount(x);
             for (; x != 0; x &= x - 1) m3P[baseC + BitOperations.TrailingZeroCount(x)] = ps;
@@ -116,7 +118,8 @@ public sealed unsafe partial class FullSolver
         int w = W;
         int tr = target / w; ulong tbit = 1UL << (target % w);
         ulong* free = bbNFreeP, wallR = bbWallP, reg = bbNRegP, par = bbParP, alive = bbAliveP;
-        for (int r = 0; r < bbH; r++)
+        // only box rows next to the region's rows can have a supporting cell in it
+        for (int r = Math.Max(0, bbRegLo - 2), rEnd = Math.Min(bbH - 1, bbRegHi); r <= rEnd; r++)
         {
             ulong boxes = bbAll & ~free[r + 1] & ~wallR[r + 1];
             ulong tm = 0;

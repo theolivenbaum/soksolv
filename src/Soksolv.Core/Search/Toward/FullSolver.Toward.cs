@@ -34,7 +34,7 @@ public sealed unsafe partial class FullSolver
     {
         tgt = new bool[cells];
         tgtList = (int[])boxes.Clone();
-        Array.Sort(tgtList);
+        SortUtil.Insertion(tgtList);
         tgtDist = new int[tgtList.Length * cells];
         Array.Fill(tgtDist, -1);
         var q = new int[cells];

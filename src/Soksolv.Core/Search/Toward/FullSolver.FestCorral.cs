@@ -92,7 +92,7 @@ public sealed unsafe partial class FullSolver
                     if (fcCand[i] || fcCand[j]) pairs.Add((ulong)i << 32 | (uint)j);
                 }
         }
-        pairs.Sort();
+        SortUtil.Insertion(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(pairs));
         for (int k = 0; k < pairs.Count; k++)
         {
             if (k > 0 && pairs[k] == pairs[k - 1]) continue;

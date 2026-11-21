@@ -403,7 +403,7 @@ public sealed unsafe partial class FullSolver
                 var boxes = (int[])n.Boxes.Clone();
                 int i = Array.BinarySearch(boxes, m.From);
                 if (m.Remove) boxes = boxes.Where((_, j) => j != i).ToArray();
-                else { boxes[i] = m.To; Array.Sort(boxes); }
+                else { boxes[i] = m.To; SortUtil.Insertion(boxes); }
                 int weight = n.Weight + m.Weight;
                 expanded++;
                 Add(boxes, m.Player, e.Node, m, weight);

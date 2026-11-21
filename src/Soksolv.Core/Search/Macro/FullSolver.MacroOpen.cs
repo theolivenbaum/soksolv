@@ -292,21 +292,7 @@ public sealed unsafe partial class FullSolver
         if (noveltyN > 0) MNoveltyBlock(id, cur, nm, noveltyN, parentConn);
         bool useTier = noveltyN > 0 && AccessNovelty;
         for (int k = 0; k < nm; k++) mKeys[k] = new MKey { Tier = useTier ? mCands[k].Tier : 0, Bad = Feat(6) && mCands[k].RevBad ? 1 : 0, W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = pfOn ? mCands[k].B : mCands[k].Plen, Y = pfOn ? mCands[k].T : 0, Idx = k };
-        mKeys.AsSpan(0, nm).Sort(static (x, y) =>
-        {
-            if (x.Bad != y.Bad) return x.Bad < y.Bad ? -1 : 1;
-            if (x.W != y.W) return x.W < y.W ? -1 : 1;
-            if (x.Tier != y.Tier) return x.Tier < y.Tier ? -1 : 1;
-            if (x.Oop != y.Oop) return x.Oop < y.Oop ? -1 : 1;
-            if (x.Packed != y.Packed) return x.Packed > y.Packed ? -1 : 1; // -packed
-            if (x.R != y.R) return x.R < y.R ? -1 : 1;
-            if (x.Room != y.Room) return x.Room < y.Room ? -1 : 1;
-            if (x.Hot != y.Hot) return x.Hot < y.Hot ? -1 : 1;
-            if (x.Mobility != y.Mobility) return x.Mobility > y.Mobility ? -1 : 1;
-            if (x.Plen != y.Plen) return x.Plen < y.Plen ? -1 : 1;
-            if (x.Y != y.Y) return x.Y < y.Y ? -1 : 1;
-            return x.Idx < y.Idx ? -1 : 1;
-        });
+        MSortKeys(nm);
         int off = (int)Math.Min(maux[id].MvOff, (uint)nm);
         int win = nm - off;
         if (MoveWindow > 0 && win > MoveWindow) win = MoveWindow;
@@ -431,6 +417,52 @@ public sealed unsafe partial class FullSolver
 
     static int MScoreCmp(ref MCand m, ref MCand o) =>
         m.Oop != o.Oop ? (m.Oop < o.Oop ? -1 : 1) : m.Packed != o.Packed ? (m.Packed > o.Packed ? -1 : 1) : m.R != o.R ? (m.R < o.R ? -1 : 1) : m.Room != o.Room ? (m.Room < o.Room ? -1 : 1) : m.Hot != o.Hot ? (m.Hot < o.Hot ? -1 : 1) : m.Mobility != o.Mobility ? (m.Mobility > o.Mobility ? -1 : 1) : 0;
+
+    static int MKeyCmp(in MKey x, in MKey y)
+    {
+        if (x.Bad != y.Bad) return x.Bad < y.Bad ? -1 : 1;
+        if (x.W != y.W) return x.W < y.W ? -1 : 1;
+        if (x.Tier != y.Tier) return x.Tier < y.Tier ? -1 : 1;
+        if (x.Oop != y.Oop) return x.Oop < y.Oop ? -1 : 1;
+        if (x.Packed != y.Packed) return x.Packed > y.Packed ? -1 : 1; // -packed
+        if (x.R != y.R) return x.R < y.R ? -1 : 1;
+        if (x.Room != y.Room) return x.Room < y.Room ? -1 : 1;
+        if (x.Hot != y.Hot) return x.Hot < y.Hot ? -1 : 1;
+        if (x.Mobility != y.Mobility) return x.Mobility > y.Mobility ? -1 : 1;
+        if (x.Plen != y.Plen) return x.Plen < y.Plen ? -1 : 1;
+        if (x.Y != y.Y) return x.Y < y.Y ? -1 : 1;
+        return x.Idx < y.Idx ? -1 : 1;
+    }
+
+    MKey[] mKeyTmp = [];
+    /// <summary>Bottom-up merge sort of mKeys[0..n) (a total order: Idx breaks ties), no delegate.</summary>
+    void MSortKeys(int n)
+    {
+        if (mKeyTmp.Length < mKeys.Length) mKeyTmp = new MKey[mKeys.Length];
+        var src = mKeys; var dst = mKeyTmp;
+        for (int i = 0; i < n; i += 8)
+        {
+            int e = Math.Min(i + 8, n);
+            for (int j = i + 1; j < e; j++)
+            {
+                var x = src[j]; int k = j - 1;
+                while (k >= i && MKeyCmp(src[k], x) > 0) { src[k + 1] = src[k]; k--; }
+                src[k + 1] = x;
+            }
+        }
+        for (int w = 8; w < n; w <<= 1)
+        {
+            for (int lo = 0; lo < n; lo += 2 * w)
+            {
+                int mid = Math.Min(lo + w, n), hi = Math.Min(lo + 2 * w, n), a = lo, b = mid, o = lo;
+                while (a < mid && b < hi) dst[o++] = MKeyCmp(src[b], src[a]) < 0 ? src[b++] : src[a++];
+                while (a < mid) dst[o++] = src[a++];
+                while (b < hi) dst[o++] = src[b++];
+            }
+            (src, dst) = (dst, src);
+        }
+        if (!ReferenceEquals(src, mKeys)) Array.Copy(src, mKeys, n);
+    }
 
     void MChoose(ref int slot, int k)
     {
@@ -633,7 +665,7 @@ public sealed unsafe partial class FullSolver
         var last = seq[^1];
         cur.AsSpan().CopyTo(child);
         child[i] = t;
-        Array.Sort(child);
+        SortUtil.Insertion(child);
         SetOcc(b, false); SetOcc(t, true);
         int sideC = PlayerAfter(t, dirs[last.Dir]);
         int np = Reach(sideC, mark2);

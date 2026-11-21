@@ -781,7 +781,7 @@ public sealed unsafe partial class FullSolver
                 }
                 if (sinkTo.Count > 0)
                 {
-                    sinkTo.Sort();
+                    SortUtil.Insertion(sinkTo);
                     foreach (int to in sinkTo) if (TrySink(id, boxes, b, bi, to, baseAt[to], rb)) break;
                     sinkTo.Clear();
                 }
