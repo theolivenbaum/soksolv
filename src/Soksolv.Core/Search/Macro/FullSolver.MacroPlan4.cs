@@ -176,36 +176,42 @@ public sealed unsafe partial class FullSolver
     struct P2Kid { public ulong Key; public short From, To, Player, Base; }
     struct P2Node
     {
-        public int Parent, BOff, Nb, Player; public ulong Hash, Key; public int Goals, Dist, MFrom, MTo, MBase, COff, CLen, CNext, CSorted;
+        public int Parent, BOff, Nb, Player; public ulong Hash, Key; public int Goals, Dist, MFrom, MTo, MBase, COff, CLen, CNext, CSorted, UOff;
     }
     struct P2Entry { public ulong Key; public uint Seq; public int Node; public int W; }
     struct P2Cand { public int Box, To, Player, Pieces; }
 
-    /// <summary>Append-only store of children in 64K-kid native chunks (bulk append, no per-kid call).</summary>
-    sealed unsafe class KidStore
+    /// <summary>Append-only store of unmanaged items in 64K-item native chunks that never move (no LOH growth copies, no GC traffic);
+    /// <see cref="Alloc"/> hands out contiguous runs that never straddle a chunk.</summary>
+    sealed unsafe class NativeStore<T> where T : unmanaged
     {
         const int Shift = 16, Per = 1 << Shift, Mask = Per - 1;
         nint[] chunks = new nint[16]; int nChunks;
         public int Count { get; private set; }
-        public ref P2Kid this[int i] { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref ((P2Kid*)chunks[i >> Shift])[i & Mask]; }
-        /// <summary>Appends n kids contiguously (a node's kids never straddle a chunk).</summary>
-        public int Append(P2Kid[] a, int n)
+        public ref T this[int i] { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref ((T*)chunks[i >> Shift])[i & Mask]; }
+        public T* Ptr(int i) => (i >> Shift) < nChunks ? (T*)chunks[i >> Shift] + (i & Mask) : null;
+        /// <summary>Reserves n contiguous (uninitialised) items; returns the offset of the first.</summary>
+        public int Alloc(int n)
         {
-            if (n > Per) throw new InvalidOperationException("too many planner kids");
+            if (n > Per) throw new InvalidOperationException("planner run too long");
             if (n == 0) return Count;
             if ((Count & Mask) + n > Per) Count = (Count + Per) & ~Mask;
-            int ci = Count >> Shift, at = Count & Mask;
+            int ci = Count >> Shift;
             while (ci >= nChunks)
             {
                 if (nChunks == chunks.Length) Array.Resize(ref chunks, nChunks * 2);
-                chunks[nChunks++] = (nint)NativeMemory.Alloc((nuint)(Per * sizeof(P2Kid)));
+                chunks[nChunks++] = (nint)NativeMemory.Alloc((nuint)(Per * sizeof(T)));
             }
-            fixed (P2Kid* src = &a[0]) Buffer.MemoryCopy(src, (P2Kid*)chunks[ci] + at, (long)n * sizeof(P2Kid), (long)n * sizeof(P2Kid));
             int off = Count; Count += n;
             return off;
         }
-        public P2Kid* Ptr(int i) => (P2Kid*)chunks[i >> Shift] + (i & Mask);
-        ~KidStore() { for (int i = 0; i < nChunks; i++) NativeMemory.Free((void*)chunks[i]); }
+        public int Append(T[] a, int n)
+        {
+            int off = Alloc(n);
+            if (n > 0) fixed (T* src = &a[0]) Buffer.MemoryCopy(src, Ptr(off), (long)n * sizeof(T), (long)n * sizeof(T));
+            return off;
+        }
+        ~NativeStore() { for (int i = 0; i < nChunks; i++) NativeMemory.Free((void*)chunks[i]); }
     }
 
     sealed class P2Heap
@@ -259,10 +265,9 @@ public sealed unsafe partial class FullSolver
         // own occupancy (the planner works on a private board while the macro loop owns s.occ)
         readonly bool[] occ; readonly byte[] blk;
         // nodes
-        P2Node[] nodes = new P2Node[1024]; int nodeN;
-        int[] boxArena = new int[4096]; int boxN;
-        ulong[] usedArena = new ulong[1024]; int usedN;
-        readonly KidStore kids = new();
+        readonly NativeStore<P2Node> nodes = new(); int nodeN => nodes.Count;
+        readonly NativeStore<int> boxStore = new(); readonly NativeStore<ulong> usedStore = new();
+        readonly NativeStore<P2Kid> kids = new();
         ulong[] seen = new ulong[1 << 16]; ulong seenMask = (1 << 16) - 1; int nseen;
         uint seq;
         // scan scratch
@@ -383,8 +388,8 @@ public sealed unsafe partial class FullSolver
             ClearOcc();
             foreach (int b in Boxes(id)) SetOccCell(b, true);
         }
-        ReadOnlySpan<int> Boxes(int id) => new(boxArena, nodes[id].BOff, nodes[id].Nb);
-        Span<ulong> Used(int id) => new(usedArena, id * nw, nw);
+        ReadOnlySpan<int> Boxes(int id) => new(boxStore.Ptr(nodes[id].BOff), nodes[id].Nb);
+        Span<ulong> Used(int id) => new(usedStore.Ptr(nodes[id].UOff), nw);
 
         /// <summary>Flood from player; returns (min cell, stamp); marks hold the stamp, queue the cells.</summary>
         (int norm, uint st) Flood(int player)
@@ -1414,14 +1419,16 @@ public sealed unsafe partial class FullSolver
         {
             if (!SeenInsert(c.Hash)) return -1;
             ref var pn = ref nodes[parent];
-            int off = boxN;
             bool removed = c.Base >= 0;
-            EnsureBoxes(pn.Nb);
-            for (int i = 0; i < pn.Nb; i++)
+            int off = boxStore.Alloc(removed ? pn.Nb - 1 : pn.Nb);
             {
-                int b = boxArena[pn.BOff + i];
-                if (b == c.From) { if (!removed) boxArena[boxN++] = c.To; continue; }
-                boxArena[boxN++] = b;
+                int* dstB = boxStore.Ptr(off); int* srcB = boxStore.Ptr(pn.BOff); int k = 0;
+                for (int i = 0; i < pn.Nb; i++)
+                {
+                    int b = srcB[i];
+                    if (b == c.From) { if (!removed) dstB[k++] = c.To; continue; }
+                    dstB[k++] = b;
+                }
             }
             int id = nodeN;
             var nn = new P2Node { Parent = parent, BOff = off, Nb = pn.Nb, Player = c.Player, Hash = c.Hash, Key = c.Key, Goals = pn.Goals, Dist = pn.Dist, MFrom = c.From, MTo = c.To, MBase = c.Base };
@@ -1429,15 +1436,14 @@ public sealed unsafe partial class FullSolver
             if (goal[c.From]) nn.Goals--;
             nn.Dist -= distance[c.From];
             if (!removed) { if (goal[c.To]) nn.Goals++; nn.Dist += distance[c.To]; }
+            int uoff = usedStore.Alloc(nw);
+            new Span<ulong>(usedStore.Ptr(pn.UOff), nw).CopyTo(new Span<ulong>(usedStore.Ptr(uoff), nw));
+            if (removed) usedStore.Ptr(uoff)[c.Base >> 6] |= 1UL << (c.Base & 63);
+            nn.UOff = uoff;
             PushNode(nn);
-            EnsureUsed();
-            Array.Copy(usedArena, parent * nw, usedArena, id * nw, nw); usedN += nw;
-            if (removed) usedArena[id * nw + (c.Base >> 6)] |= 1UL << (c.Base & 63);
             return id;
         }
-        void EnsureBoxes(int add) { if (boxN + add > boxArena.Length) Array.Resize(ref boxArena, Math.Max(boxArena.Length * 2, boxN + add)); }
-        void EnsureUsed() { if (usedN + nw > usedArena.Length) Array.Resize(ref usedArena, Math.Max(usedArena.Length * 2, usedN + nw)); }
-        void PushNode(in P2Node nn) { if (nodeN == nodes.Length) Array.Resize(ref nodes, nodeN * 2); nodes[nodeN++] = nn; }
+        void PushNode(in P2Node nn) { int id = nodes.Alloc(1); nodes[id] = nn; }
 
         int CellOf(ulong key)
         {
@@ -1497,10 +1503,9 @@ public sealed unsafe partial class FullSolver
             foreach (int r in roots)
             {
                 ulong h = zp[r]; foreach (int g in s.goals) h ^= zb[g];
-                EnsureBoxes(s.goals.Length);
-                int off = boxN; foreach (int g in s.goals) boxArena[boxN++] = g;
-                PushNode(new P2Node { Parent = -1, BOff = off, Nb = s.goals.Length, Player = r, Hash = h, Goals = s.goals.Length, Dist = gsum, MBase = -1, Key = Key(s.goals.Length, 1, s.goals.Length, gsum, 0) });
-                EnsureUsed(); Array.Clear(usedArena, usedN, nw); usedN += nw;
+                int off = boxStore.Alloc(s.goals.Length); { int* bp = boxStore.Ptr(off); int k = 0; foreach (int g in s.goals) bp[k++] = g; }
+                int uoff = usedStore.Alloc(nw); new Span<ulong>(usedStore.Ptr(uoff), nw).Clear();
+                PushNode(new P2Node { Parent = -1, BOff = off, UOff = uoff, Nb = s.goals.Length, Player = r, Hash = h, Goals = s.goals.Length, Dist = gsum, MBase = -1, Key = Key(s.goals.Length, 1, s.goals.Length, gsum, 0) });
                 SeenInsert(h);
                 if (Weighted) nodeW.Add(0);
             }
@@ -1679,10 +1684,9 @@ public sealed unsafe partial class FullSolver
             foreach (int r in roots)
             {
                 ulong h = zp[r]; foreach (int g in s.goals) h ^= zb[g];
-                EnsureBoxes(s.goals.Length);
-                int off = boxN; foreach (int g in s.goals) boxArena[boxN++] = g;
-                PushNode(new P2Node { Parent = -1, BOff = off, Nb = s.goals.Length, Player = r, Hash = h, Goals = s.goals.Length, Dist = gsum, MBase = -1, Key = Key(s.goals.Length, 1, s.goals.Length, gsum, 0) });
-                EnsureUsed(); Array.Clear(usedArena, usedN, nw); usedN += nw;
+                int off = boxStore.Alloc(s.goals.Length); { int* bp = boxStore.Ptr(off); int k = 0; foreach (int g in s.goals) bp[k++] = g; }
+                int uoff = usedStore.Alloc(nw); new Span<ulong>(usedStore.Ptr(uoff), nw).Clear();
+                PushNode(new P2Node { Parent = -1, BOff = off, UOff = uoff, Nb = s.goals.Length, Player = r, Hash = h, Goals = s.goals.Length, Dist = gsum, MBase = -1, Key = Key(s.goals.Length, 1, s.goals.Length, gsum, 0) });
                 SeenInsert(h);
                 if (matchOn) SetOcc(nodeN - 1);
             }

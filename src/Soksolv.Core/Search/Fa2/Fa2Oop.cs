@@ -7,7 +7,54 @@ public sealed unsafe partial class FullSolver
     OopZones? oopz;
 
     /// <summary>Every cell from which a box can be pushed onto one of targets with only blocked cells as obstacles (Go sourcesOf).</summary>
+    static readonly bool SrcCheck = Environment.GetEnvironmentVariable("SOKSOLV_CHECK_HS") == "1";   // compare with the flood reference
+    CellPieces? oopPieces;
+
+    /// <summary>One low-link DFS of the free cells answers every pull state's "player region with the box on <c>to</c>" (the neighbours of
+    /// <c>to</c> that stay connected to the player's side) in O(1), instead of a flood per state.</summary>
     bool[] SourcesOf(bool[] blocked, List<int> targets)
+    {
+        oopPieces ??= new CellPieces(cells, dirs);
+        var cp = oopPieces; var bl = cp.Blk;
+        for (int c = 0; c < cells; c++) bl[c] = (byte)(blocked[c] ? 1 : 0);
+        cp.Build();
+        var inside = new bool[cells];
+        var seen = new bool[4 * cells];
+        var labs = new sbyte[4 * cells]; var labOk = new bool[cells];
+        var q = new List<int>();
+        int* lab = stackalloc int[4];
+        foreach (int g in targets)
+        {
+            if (blocked[g]) continue;
+            inside[g] = true;
+            for (int di = 0; di < 4; di++)
+                if (!blocked[g + dirs[di]]) { int k = g * 4 + di; if (!seen[k]) { seen[k] = true; q.Add(k); } }
+        }
+        for (int i = 0; i < q.Count; i++)
+        {
+            int k = q[i];
+            int b = k >> 2, di = k & 3, d = dirs[di];
+            int to = b + d, p = to + d;
+            if (blocked[to] || blocked[p]) continue;
+            inside[to] = true;
+            if (!labOk[to]) { cp.Labels(to, lab); for (int j = 0; j < 4; j++) labs[to * 4 + j] = (sbyte)lab[j]; labOk[to] = true; }
+            int lp = labs[to * 4 + di];   // the player stands on `to`'s neighbour di (= p): its piece is the player's region
+            for (int d2 = 0; d2 < 4; d2++)
+            {
+                if (labs[to * 4 + d2] != lp) continue;
+                int k2 = to * 4 + d2;
+                if (!seen[k2]) { seen[k2] = true; q.Add(k2); }
+            }
+        }
+        if (SrcCheck)
+        {
+            var r0 = SourcesOfFlood(blocked, targets);
+            for (int c = 0; c < cells; c++) if (r0[c] != inside[c]) throw new InvalidOperationException($"sourcesOf cell {c}: dfs {inside[c]} != flood {r0[c]}");
+        }
+        return inside;
+    }
+
+    bool[] SourcesOfFlood(bool[] blocked, List<int> targets)
     {
         var inside = new bool[cells];
         var seen = new bool[4 * cells];

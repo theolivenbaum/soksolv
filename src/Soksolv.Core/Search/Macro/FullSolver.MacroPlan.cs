@@ -230,7 +230,7 @@ public sealed unsafe partial class FullSolver
 
         // cut scan over G0 (every box placed): queries of "player region with box b lifted and a box on `to`" without a flood per pull state
         CutScan? cut; byte[]? cblk;
-        readonly List<PMove> pmMoves = new(), pmRemovals = new(); readonly List<int> pmRb = new();
+        readonly List<PMove> pmMoves = new(), pmRemovals = new(); readonly List<int> pmRb = new(), pmPc = new();
         void SetBlk(int c, bool v) { occ[c] = v; cblk![c] = (byte)(v || s.wall[c] ? 1 : 0); }
 
         static void StableSort(List<PMove> l, Comparison<PMove> cmp)
@@ -257,7 +257,7 @@ public sealed unsafe partial class FullSolver
             Buffer.BlockCopy(wallBlk!, 0, cblk!, 0, cblk!.Length);
             foreach (int bx in boxes) cblk[bx] = 1;
             var moves = pmMoves; moves.Clear(); var removals = pmRemovals; removals.Clear();
-            var rbOf = pmRb; rbOf.Clear();
+            var rbOf = pmRb; rbOf.Clear(); var pcOf = pmPc; pcOf.Clear();
             cut.CutNewNode();
             int baseR = cut.CutAll(floor);          // regions of the unlifted board (DFS components of G0)
             int plab = cut.CompId(player);          // the player's region: pulls start on its cells
@@ -317,7 +317,7 @@ public sealed unsafe partial class FullSolver
                     {
                         moves.Add(m2);
                         if (rb < 0) rb = baseR + 1 - cut.LiftNeighbourComps;
-                        rbOf.Add(rb);
+                        rbOf.Add(rb); pcOf.Add(qq->Pc);
                     }
                 }
                 SetBlk(b, true);
@@ -333,11 +333,15 @@ public sealed unsafe partial class FullSolver
             {
                 var m = moves[i];
                 if (!s.goal[m.From] || !(pushable[m.To] || start[m.To])) continue;
-                cut.CutBegin(m.From);
-                SetBlk(m.From, false);
-                int regions = rbOf[i] - 1 + cut.CutPieces(m.To);
-                if (FullSolver.CheckCut) { SetBlk(m.To, true); int f = Regions(); SetBlk(m.To, false); if (f != regions) throw new InvalidOperationException($"v1 planner regions: scan {regions} != flood {f}"); }
-                SetBlk(m.From, true);
+                int regions = rbOf[i] - 1 + pcOf[i];   // pieces of the pulled-to cell in the lift context of its BFS
+                if (FullSolver.CheckCut)
+                {
+                    cut.CutBegin(m.From);
+                    SetBlk(m.From, false);
+                    if (rbOf[i] - 1 + cut.CutPieces(m.To) != regions) throw new InvalidOperationException("v1 planner: pieces differ across lift contexts");
+                    SetBlk(m.To, true); int f = Regions(); SetBlk(m.To, false); if (f != regions) throw new InvalidOperationException($"v1 planner regions: scan {regions} != flood {f}");
+                    SetBlk(m.From, true);
+                }
                 if (regions <= parentRegions && m.Score > bestScore) { advisor = i; bestScore = m.Score; }
             }
             if (advisor >= 0) { var m = moves[advisor]; m.Weight = 0; moves[advisor] = m; }
@@ -420,7 +424,7 @@ public sealed unsafe partial class FullSolver
                 Enqueue(e.Node);
                 var boxes = (int[])n.Boxes.Clone();
                 int i = Array.BinarySearch(boxes, m.From);
-                if (m.Remove) boxes = boxes.Where((_, j) => j != i).ToArray();
+                if (m.Remove) { var nb = new int[boxes.Length - 1]; Array.Copy(boxes, 0, nb, 0, i); Array.Copy(boxes, i + 1, nb, i, boxes.Length - 1 - i); boxes = nb; }
                 else { boxes[i] = m.To; SortUtil.Insertion(boxes); }
                 int weight = n.Weight + m.Weight;
                 expanded++;
