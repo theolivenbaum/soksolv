@@ -39,7 +39,7 @@ public sealed unsafe class RevStore : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)] public ulong ZPlayer(int cell) => zPlayer[cell];
     public ulong HashOfBoxes(ReadOnlySpan<int> cells, int player)
     {
-        ulong h = zPlayer[player];
+        ulong h = player >= 0 ? zPlayer[player] : 0;
         foreach (int c in cells) h ^= zBox[Fidx[c]];
         return h;
     }
@@ -55,6 +55,11 @@ public sealed unsafe class RevStore : IDisposable
     static ulong Spread(ulong h) { h ^= h >> 29; h *= 0xBF58476D1CE4E5B9UL; return h ^ (h >> 32); }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)] static int Player(byte* r) => (int)((*(ulong*)r >> 32) & 0x7FFF);
+
+    public int Start(ulong zh, out uint fp) { ulong h = Spread(zh); fp = (uint)(h >> 32); return (int)fp & tmask; }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ulong Entry(int i) => table[i];
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public int Next(int i) => (i + 1) & tmask;
+    public bool KeyEquals(int id, ulong* key) => new ReadOnlySpan<ulong>(Rec.At(id) + 8, Nw).SequenceEqual(new ReadOnlySpan<ulong>(key, Nw));
 
     /// <summary>Finds a state; returns its id or -1 (slot/fp then say where to insert).</summary>
     public int Find(ulong* key, int player, ulong zh, out int slot, out uint fp)

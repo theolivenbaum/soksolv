@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.InteropServices;
 
 namespace Soksolv.Search.Reverse;
@@ -23,6 +24,7 @@ public sealed unsafe class BucketQueue : IDisposable
     public const int MaxBuckets = 1 << 16;
     IntBuf[] b = [];
     int[] head = [];
+    ulong[] bits = new ulong[2];   // bit k: bucket k holds entries
     int min;
     public int N;
 
@@ -33,30 +35,38 @@ public sealed unsafe class BucketQueue : IDisposable
         {
             int nb = Math.Max(k + 1, 2 * b.Length);
             Array.Resize(ref b, nb); Array.Resize(ref head, nb);
+            Array.Resize(ref bits, (nb >> 6) + 2);
         }
         b[k].Add(id);
+        bits[k >> 6] |= 1UL << (k & 63);
         if (N == 0 || k < min) min = k;
         N++;
     }
 
     public (int id, int h) Pop()
     {
-        while (head[min] == b[min].Len) { b[min].Len = 0; head[min] = 0; min++; }
-        int k = min;
-        int id = b[k].P[head[k]++];
-        N--;
+        int from = min, w = from >> 6;
+        ulong x = bits[w] & (~0UL << (from & 63));
+        while (x == 0) x = bits[++w];
+        int k = (w << 6) + BitOperations.TrailingZeroCount(x);
+        min = k;
+        ref var bk = ref b[k];
         int hd = head[k];
-        if (hd >= 1 << 16 && hd * 2 >= b[k].Len)
+        int id = bk.P[hd++];
+        head[k] = hd;
+        N--;
+        if (hd == bk.Len) { bk.Len = 0; head[k] = 0; bits[k >> 6] &= ~(1UL << (k & 63)); }
+        else if (hd >= 1 << 16 && hd * 2 >= bk.Len)
         {
-            int rest = b[k].Len - hd;
-            Buffer.MemoryCopy(b[k].P + hd, b[k].P, rest * 4L, rest * 4L);
-            b[k].Len = rest; head[k] = 0;
+            int rest = bk.Len - hd;
+            Buffer.MemoryCopy(bk.P + hd, bk.P, rest * 4L, rest * 4L);
+            bk.Len = rest; head[k] = 0;
         }
         return (id, k);
     }
 
     public long Bytes { get { long t = (long)b.Length * 16 + (long)head.Length * 4; for (int i = 0; i < b.Length; i++) t += (long)b[i].Cap * 4; return t; } }
-    public void Dispose() { for (int i = 0; i < b.Length; i++) b[i].Free(); b = []; head = []; N = 0; }
+    public void Dispose() { for (int i = 0; i < b.Length; i++) b[i].Free(); b = []; head = []; bits = new ulong[2]; N = 0; }
 }
 
 /// <summary>FESS-style cell scheduling (port of Go cellQueue): open nodes live in per-cell queues (cell = boxes on start squares).</summary>
@@ -102,14 +112,14 @@ public sealed class CellQueue : IDisposable
     public void Dispose() { foreach (var x in q) x.Dispose(); q.Clear(); }
 }
 
-/// <summary>Type-based exploration (port of Go explore.Types): random non-empty type, then a random node in it; fixed-seed xorshift.</summary>
-public sealed class TypeQueue
+/// <summary>Type-based exploration (port of Go explore.Types): random non-empty type, then a random node in it; fixed-seed xorshift. Unmanaged per-type (id, payload) lists.</summary>
+public sealed unsafe class TypeQueue : IDisposable
 {
     readonly Dictionary<ulong, int> idx = new();
     readonly List<int[]?> dense = new();
-    readonly List<List<(int id, int payload)>> nodes = new();
+    IntBuf[] nodes = new IntBuf[64]; int nTypes;
     readonly List<int> live = new();
-    readonly List<int> pos = new();
+    int[] pos = new int[64];
     ulong rng = 0x9E3779B97F4A7C15UL;
     public int N;
 
@@ -131,12 +141,14 @@ public sealed class TypeQueue
         else ok = idx.TryGetValue(key, out i);
         if (!ok)
         {
-            i = nodes.Count;
+            i = nTypes++;
             if (h < 4096 && k < 256) dense[(int)h]![k] = i; else idx[key] = i;
-            nodes.Add(new()); pos.Add(-1);
+            if (i >= nodes.Length) { Array.Resize(ref nodes, nodes.Length * 2); Array.Resize(ref pos, pos.Length * 2); }
+            pos[i] = -1;
         }
-        if (nodes[i].Count == 0) { pos[i] = live.Count; live.Add(i); }
-        nodes[i].Add((id, payload));
+        ref var b = ref nodes[i];
+        if (b.Len == 0) { pos[i] = live.Count; live.Add(i); }
+        b.Add(id); b.Add(payload);
         N++;
     }
 
@@ -145,20 +157,22 @@ public sealed class TypeQueue
         id = payload = 0;
         if (live.Count == 0) return false;
         int i = live[(int)(Next() % (ulong)live.Count)];
-        var b = nodes[i];
-        int j = (int)(Next() % (ulong)b.Count);
-        var e = b[j];
-        b[j] = b[^1]; b.RemoveAt(b.Count - 1);
+        ref var b = ref nodes[i];
+        int j = (int)(Next() % (ulong)(b.Len >> 1));
+        id = b.P[2 * j]; payload = b.P[2 * j + 1];
+        b.Len -= 2;
+        b.P[2 * j] = b.P[b.Len]; b.P[2 * j + 1] = b.P[b.Len + 1];
         N--;
-        if (b.Count == 0)
+        if (b.Len == 0)
         {
             int p = pos[i]; int last = live[^1];
             live[p] = last; pos[last] = p;
             live.RemoveAt(live.Count - 1);
             pos[i] = -1;
         }
-        id = e.id; payload = e.payload;
         return true;
     }
-    public long Bytes => (long)N * 8 + 64;
+    public long Bytes { get { long t = 64; for (int i = 0; i < nTypes; i++) t += (long)nodes[i].Cap * 4; return t; } }
+    public void Dispose() { for (int i = 0; i < nTypes; i++) nodes[i].Free(); nTypes = 0; N = 0; }
+
 }

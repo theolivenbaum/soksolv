@@ -50,44 +50,47 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     int[] dist = [];            // pushes needed to bring a box from some start square to the cell; -1 unreachable
     readonly bool[] start;      // start squares
     int[] startIdx = [];
-    bool[] canReach = [];       // canReach[j*cells+c]
+    int* distP, key8P, fidxP, startIdxP;
+    ulong* rmask;               // rmask[c*rw + (j>>6)] bit j: a box on start square j can be pushed to cell c
+    readonly int rw;
+    readonly ulong* gseenM;
     int[] key8 = [];
     readonly RevStore store;
+    /// <summary>Without a meeting network the stored player is any cell of the region (normalised only on a box-set collision): hash = boxes only.</summary>
+    readonly bool lazyNorm;
     readonly int[] fidx, fcell;
     readonly int floorN;
 
     // scratch
-    readonly bool[] occ;
     readonly byte[] blkArr; readonly byte* blk;
     readonly uint[] mark, mark2; readonly uint* markP, mark2P;
     readonly int[] queue; readonly int* queueP;
     uint stamp;
     int lastRegionSize;
     readonly ulong* key, pkey;
-    int[] matchOf; uint[] gseen; uint gstamp;
+    int[] matchOf;
     long pruned;
 
     // queues
     readonly BucketQueue q = new(), nq = new();
     CellQueue? cellq;
     TypeQueue? types;
-    ulong[] expandedBits = [];
+    ulong* expandedBits; int expandedCap;   // words
     int typeTurn, novTurn;
     ulong[][] novSeen = [];
     long expandedTotal, lastImpExp, walkNext;
     ulong wrng;
     bool memFull, popMarked;
     int provU;
-    byte[] supU = [];
+    byte* supU; int supUCap;
     Supply? sup;
     readonly Stopwatch clock = Stopwatch.StartNew();
     public SolveStats Stats = new();
 
     public ReverseSolver(Level level, RevOptions options)
     {
-        lv = level; opt = options; n = lv.Boxes.Length; cells = lv.Cells; W = lv.W; wall = lv.Wall;
+        lv = level; opt = options; lazyNorm = opt.Net == null; n = lv.Boxes.Length; cells = lv.Cells; W = lv.W; wall = lv.Wall;
         dirs = [-W, W, -1, 1];
-        occ = new bool[cells];
         blkArr = GC.AllocateArray<byte>(cells, pinned: true);
         mark = GC.AllocateArray<uint>(cells, pinned: true); mark2 = GC.AllocateArray<uint>(cells, pinned: true);
         queue = GC.AllocateArray<int>(cells, pinned: true);
@@ -122,26 +125,35 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         key = (ulong*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(Math.Max(1, store.Nw) * 8));
         pkey = (ulong*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(Math.Max(1, store.Nw) * 8));
 
-        canReach = new bool[n * cells];
+        rw = Math.Max(1, (n + 63) / 64);
+        rmask = (ulong*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(cells * rw * 8));
+        gseenM = (ulong*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(rw * 8));
         startIdx = new int[cells]; Array.Fill(startIdx, -1);
-        for (int j = 0; j < n; j++)
         {
-            int b = lv.Boxes[j];
-            startIdx[b] = j;
-            var r = canReach.AsSpan(j * cells, cells);
-            r[b] = true;
-            var qq = new List<int> { b };
-            for (int i = 0; i < qq.Count; i++)
+            var r = new bool[cells];
+            var qq = new List<int>();
+            for (int j = 0; j < n; j++)
             {
-                int c = qq[i];
-                foreach (int d in dirs)
+                int b = lv.Boxes[j];
+                startIdx[b] = j;
+                Array.Clear(r); qq.Clear();
+                r[b] = true; qq.Add(b);
+                for (int i = 0; i < qq.Count; i++)
                 {
-                    int t = c + d;
-                    if (!wall[c - d] && !wall[t] && !r[t]) { r[t] = true; qq.Add(t); }
+                    int c = qq[i];
+                    foreach (int d in dirs)
+                    {
+                        int t = c + d;
+                        if (!wall[c - d] && !wall[t] && !r[t]) { r[t] = true; qq.Add(t); }
+                    }
                 }
+                foreach (int c in qq) rmask[c * rw + (j >> 6)] |= 1UL << (j & 63);
             }
         }
-        matchOf = new int[n]; gseen = new uint[n];
+        matchOf = new int[n];
+        distP = (int*)System.Runtime.InteropServices.NativeMemory.Alloc((nuint)cells * 4); key8P = (int*)System.Runtime.InteropServices.NativeMemory.Alloc((nuint)cells * 4);
+        fidxP = (int*)System.Runtime.InteropServices.NativeMemory.Alloc((nuint)cells * 4); startIdxP = (int*)System.Runtime.InteropServices.NativeMemory.Alloc((nuint)cells * 4);
+        for (int c = 0; c < cells; c++) { distP[c] = dist[c]; fidxP[c] = fidx[c]; startIdxP[c] = startIdx[c]; }
         Perturb(opt.Phase);
         if (opt.Supply > 0 && n <= 256) { sup = new Supply(opt.Supply, cells, n, wall, dirs, dist, startIdx); if (!sup.Ok) { sup.Dispose(); sup = null; } }
         if (opt.Cells) cellq = new CellQueue();
@@ -150,11 +162,11 @@ public sealed unsafe partial class ReverseSolver : IDisposable
 
     public void Dispose()
     {
-        store.Dispose(); sup?.Dispose(); sup = null; q.Dispose(); nq.Dispose(); cellq?.Dispose();
-        System.Runtime.InteropServices.NativeMemory.Free(key); System.Runtime.InteropServices.NativeMemory.Free(pkey);
+        store.Dispose(); sup?.Dispose(); sup = null; types?.Dispose(); q.Dispose(); nq.Dispose(); cellq?.Dispose();
+        System.Runtime.InteropServices.NativeMemory.Free(key); System.Runtime.InteropServices.NativeMemory.Free(pkey); System.Runtime.InteropServices.NativeMemory.Free(rmask); System.Runtime.InteropServices.NativeMemory.Free(distP); System.Runtime.InteropServices.NativeMemory.Free(key8P); System.Runtime.InteropServices.NativeMemory.Free(fidxP); System.Runtime.InteropServices.NativeMemory.Free(startIdxP); System.Runtime.InteropServices.NativeMemory.Free(expandedBits); System.Runtime.InteropServices.NativeMemory.Free(supU); expandedBits = null; supU = null; System.Runtime.InteropServices.NativeMemory.Free(gseenM);
     }
 
-    void SetOcc(int c, bool v) { occ[c] = v; blk[c] = (byte)(v ? 1 : 0); }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] void SetOcc(int c, bool v) { blk[c] = (byte)(v ? 1 : 0); }
 
     /// <summary>Ordering key per cell: 8 x pull distance, plus for phase p > 0 a pseudo-random offset in [0, 8p) off the start squares.</summary>
     void Perturb(int phase)
@@ -172,6 +184,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
                 key8[c] += (int)(x % (ulong)(8 * phase));
             }
         }
+        for (int c = 0; c < dist.Length; c++) key8P[c] = key8[c];
     }
 
     // ---- flood / normalization -------------------------------------------------------------------------------
@@ -194,13 +207,31 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         return m;
     }
 
+    /// <summary>True if target lies in the player's region from p (per occ); stops as soon as it is found. A false result leaves the whole region stamped in mk (stamp = `stamp`).</summary>
+    bool ReachTo(int p, int target, uint* mk)
+    {
+        if (stamp > uint.MaxValue - 4) { Array.Clear(mark); Array.Clear(mark2); stamp = 0; }
+        uint st = ++stamp;
+        int w = W;
+        int* qp = queueP; int tail = 0; qp[tail++] = p; mk[p] = st;
+        for (int i = 0; i < tail; i++)
+        {
+            int x = qp[i];
+            int y = x - w; if (mk[y] != st && blk[y] == 0) { if (y == target) return true; mk[y] = st; qp[tail++] = y; }
+            y = x + w; if (mk[y] != st && blk[y] == 0) { if (y == target) return true; mk[y] = st; qp[tail++] = y; }
+            y = x - 1; if (mk[y] != st && blk[y] == 0) { if (y == target) return true; mk[y] = st; qp[tail++] = y; }
+            y = x + 1; if (mk[y] != st && blk[y] == 0) { if (y == target) return true; mk[y] = st; qp[tail++] = y; }
+        }
+        return false;
+    }
+
     /// <summary>Child's normalized player after pulling a box from b to p (occ holds the child; parent region stamped st in mark, minimum minR).</summary>
     int Normalize(int b, int p, int minR, uint st)
     {
         foreach (int d in dirs)
         {
             int x = b + d;
-            if (x != p && !wall[x] && !occ[x] && mark[x] != st) return Reach(p + (p - b), mark2P);
+            if (x != p && blk[x] == 0 && mark[x] != st) return Reach(p + (p - b), mark2P);
         }
         if (p == minR || !RingConnected(p)) return Reach(p + (p - b), mark2P);
         return Math.Min(minR, b);
@@ -211,13 +242,13 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         int w = W;
         Span<int> ring = [c - w, c - w + 1, c + 1, c + w + 1, c + w, c + w - 1, c - 1, c - w - 1];
         int startI = -1;
-        for (int i = 0; i < 8; i++) if (wall[ring[i]] || occ[ring[i]]) { startI = i; break; }
+        for (int i = 0; i < 8; i++) if (blk[ring[i]] != 0) { startI = i; break; }
         if (startI < 0) return true;
         int runs = 0; bool inRun = false, runHasOrth = false;
         for (int k = 1; k <= 8; k++)
         {
             int i = (startI + k) % 8; int x = ring[i];
-            if (!wall[x] && !occ[x]) { inRun = true; runHasOrth = runHasOrth || i % 2 == 0; continue; }
+            if (blk[x] == 0) { inRun = true; runHasOrth = runHasOrth || i % 2 == 0; continue; }
             if (inRun && runHasOrth) runs++;
             inRun = false; runHasOrth = false;
         }
@@ -230,19 +261,25 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         Array.Fill(matchOf, -1);
         for (int i = 0; i < boxes.Length; i++)
         {
-            if (++gstamp == 0) { Array.Clear(gseen); gstamp = 1; }
+            for (int w = 0; w < rw; w++) gseenM[w] = 0;
             if (!TryMatch(i, boxes)) return false;
         }
         return true;
     }
     bool TryMatch(int i, ReadOnlySpan<int> boxes)
     {
-        int b = boxes[i];
-        for (int j = 0; j < n; j++)
+        ulong* m = rmask + boxes[i] * rw;
+        for (int w = 0; w < rw; w++)
         {
-            if (gseen[j] == gstamp || !canReach[j * cells + b]) continue;
-            gseen[j] = gstamp;
-            if (matchOf[j] < 0 || TryMatch(matchOf[j], boxes)) { matchOf[j] = i; return true; }
+            while (true)
+            {
+                ulong x = m[w] & ~gseenM[w];
+                if (x == 0) break;
+                int bit = BitOperations.TrailingZeroCount(x);
+                gseenM[w] |= 1UL << bit;
+                int j = w * 64 + bit;
+                if (matchOf[j] < 0 || TryMatch(matchOf[j], boxes)) { matchOf[j] = i; return true; }
+            }
         }
         return false;
     }
@@ -259,8 +296,9 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     {
         if (store.ParentOf(id) < 0) return false;
         Pulled(id, out int b, out int t);
-        for (int j = 0; j < n; j++)
-            if (canReach[j * cells + b] && !canReach[j * cells + t]) return false;
+        ulong* mb = rmask + b * rw; ulong* mt = rmask + t * rw;
+        for (int w = 0; w < rw; w++)
+            if ((mb[w] & ~mt[w]) != 0) return false;
         return true;
     }
 
@@ -274,20 +312,50 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     int Add(ReadOnlySpan<int> boxes, int player, int parent, int from, int dir, int h)
     {
         BuildKey(boxes, key);
-        return AddKeyed(boxes, player, parent, from, dir, h, store.HashOfBoxes(boxes, player));
+        int k0 = 0; foreach (int b in boxes) if (start[b]) k0++;
+        return AddKeyed(boxes, player, parent, from, dir, h, store.HashOfBoxes(boxes, lazyNorm ? -1 : player), k0);
+    }
+
+    /// <summary>Looks the state (box bitset key, player any cell of its region) up. With lazy normalisation, equal box sets match when the stored player lies in the player's region (flooded on demand).</summary>
+    int FindState(ulong* k, int player, ulong zh, out int slot, out uint fp)
+    {
+        if (!lazyNorm) return store.Find(k, player, zh, out slot, out fp);
+        int i = store.Start(zh, out fp);
+        uint st2 = 0; // stamp of a completed flood of the player's region (0: none yet)
+        while (true)
+        {
+            ulong e = store.Entry(i);
+            if (e == 0) { slot = i; return -1; }
+            if ((uint)(e >> 32) == fp)
+            {
+                int id = (int)(uint)e - 1;
+                if (store.KeyEquals(id, k))
+                {
+                    int cp = store.PlayerOf(id);
+                    if (cp != player)
+                    {
+                        if (st2 == 0)
+                        {
+                            if (ReachTo(player, cp, mark2P)) { slot = i; return id; }
+                            st2 = stamp; goto next;
+                        }
+                        if (mark2[cp] != st2) goto next;
+                    }
+                    slot = i; return id;
+                }
+            }
+            next: i = store.Next(i);
+        }
     }
 
     /// <summary>Adds the state whose box bitset is in key. Returns the node id (the existing id for a duplicate; -1 if memory is full).</summary>
-    int AddKeyed(ReadOnlySpan<int> boxes, int player, int parent, int from, int dir, int h, ulong zh)
+    int AddKeyed(ReadOnlySpan<int> boxes, int player, int parent, int from, int dir, int h, ulong zh, int k)
     {
-        int id = store.Find(key, player, zh, out int slot, out uint fp);
+        int id = FindState(key, player, zh, out int slot, out uint fp);
         if (id >= 0 || memFull) return id;
         id = store.Count;
         store.Append(parent, player, key, parent >= 0 ? fidx[from] : 0, dir, slot, fp);
         q.Push(h, id);
-        int k = 0;
-        if (opt.Types || opt.Novelty || cellq != null)
-            foreach (int b in boxes) if (start[b]) k++;
         if (opt.Types) types!.Push((ulong)h << 16 | (uint)k, id, h);
         if (opt.Novelty)
         {
@@ -298,7 +366,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             var seen = novSeen[k]; bool novel = false;
             foreach (int b in boxes)
             {
-                int w = b / 64; ulong bit = 1UL << (b % 64);
+                int w = b >> 6; ulong bit = 1UL << (b & 63);
                 if ((seen[w] & bit) == 0) { seen[w] |= bit; novel = true; }
             }
             if (novel) nq.Push(h, id);
@@ -320,7 +388,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         return id;
     }
 
-    public ulong TrackedBytes() => (ulong)(store.Bytes + q.Bytes + nq.Bytes + (cellq?.Bytes ?? 0) + expandedBits.Length * 8L + (types?.Bytes ?? 0) + supU.Length + (sup?.Bytes() ?? 0));
+    public ulong TrackedBytes() => (ulong)(store.Bytes + q.Bytes + nq.Bytes + (cellq?.Bytes ?? 0) + expandedCap * 8L + (types?.Bytes ?? 0) + supUCap + (sup?.Bytes() ?? 0));
 
     // ---- queues ---------------------------------------------------------------------------------------------------
     /// <summary>Greedy (lowest h) until CellsAfter, then 1/2 greedy, 1/4 round-robin cell, 1/4 best cell; entries for already expanded nodes skipped.</summary>
@@ -358,19 +426,19 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             id &= ~SupMark;
             if (cellq == null && !opt.Novelty && types == null) return true;
             int w = id >> 6; ulong bit = 1UL << (id & 63);
-            if (w >= expandedBits.Length) Array.Resize(ref expandedBits, Math.Max(w + 1, expandedBits.Length * 2));
+            if (w >= expandedCap) { int nc = Math.Max(Math.Max(w + 1, expandedCap * 2), 1024); expandedBits = (ulong*)System.Runtime.InteropServices.NativeMemory.Realloc(expandedBits, (nuint)nc * 8); new Span<ulong>(expandedBits + expandedCap, nc - expandedCap).Clear(); expandedCap = nc; }
             if ((expandedBits[w] & bit) != 0) continue; // already expanded through the other queue
             expandedBits[w] |= bit;
             return true;
         }
     }
 
-    void Unexpand(int id) { int w = id >> 6; if (w < expandedBits.Length) expandedBits[w] &= ~(1UL << (id & 63)); }
+    void Unexpand(int id) { int w = id >> 6; if (w < expandedCap) expandedBits[w] &= ~(1UL << (id & 63)); }
 
     void SetSupU(int id, int u)
     {
         int cnt = store.Count;
-        if (supU.Length < cnt) Array.Resize(ref supU, Math.Max(cnt, supU.Length * 2));
+        if (supUCap < cnt) { int nc = Math.Max(Math.Max(cnt, supUCap * 2), 4096); supU = (byte*)System.Runtime.InteropServices.NativeMemory.Realloc(supU, (nuint)nc); new Span<byte>(supU + supUCap, nc - supUCap).Clear(); supUCap = nc; }
         supU[id] = (byte)(u + 1);
     }
 
@@ -406,7 +474,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         var regionMark = new uint[cells];
         for (int c = 0; c < cells; c++)
         {
-            if (wall[c] || occ[c] || regionMark[c] == seenRegion) continue;
+            if (blk[c] != 0 || regionMark[c] == seenRegion) continue;
             int p = Reach(c, markP);
             for (int i = 0; i < lastRegionSize; i++) regionMark[queue[i]] = seenRegion;
             Add(goalArr, p, -1, -1, -1, h0);
@@ -435,7 +503,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             int prov = 0, curU = 0;
             if (sup != null)
             {
-                int u = id < supU.Length ? supU[id] : 0;
+                int u = id < supUCap ? supU[id] : 0;
                 if (popMarked) { curU = u - 1; if (h < BucketQueue.MaxBuckets - 2) h -= curU * sup.W * 8; else h = BucketQueue.MaxBuckets - 1; }
                 else if (u >= 128) { prov = u - 128; supEval = true; if (h < BucketQueue.MaxBuckets - 2) h -= prov * sup.W * 8; else h = BucketQueue.MaxBuckets - 1; }
                 else if (u > 1) { Unexpand(id); continue; }
@@ -449,14 +517,18 @@ public sealed unsafe partial class ReverseSolver : IDisposable
                 h = 0;
                 foreach (int b in cur) h += key8[b];
             }
-            Reach(store.PlayerOf(id), markP);
-            uint st = stamp;
-            Prof.Stop(23, tu);
-            if (h == 0 && mark[lv.Player] == st)
+            int pmin = -1; uint st = 0;
+            if (h == 0)
             {
-                foreach (int b in cur) SetOcc(b, false);
-                return new SolveResult { Solved = true, Solution = Reconstruct(id), Nodes = expanded };
+                pmin = Reach(store.PlayerOf(id), markP);
+                st = stamp;
+                if (mark[lv.Player] == st)
+                {
+                    foreach (int b in cur) SetOcc(b, false);
+                    return new SolveResult { Solved = true, Solution = Reconstruct(id), Nodes = expanded };
+                }
             }
+            Prof.Stop(23, tu);
             long tf = Prof.Start();
             bool infeasible = h > 0 && !Inherits(id) && !Feasible(cur);
             Prof.Stop(17, tf);
@@ -488,6 +560,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
                 supZero = u == 0 && k < n;
             }
             if (sup == null || !opt.SupplyInherit) curU = 0;
+            if (pmin < 0) { long tr = Prof.Start(); pmin = Reach(store.PlayerOf(id), markP); st = stamp; Prof.Stop(24, tr); }
             expanded++;
             if ((bestId < 0 || h < bestH) && (!opt.Connected || lastRegionSize == floorN - n))
             {
@@ -511,41 +584,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             }
             // Pull: player on b+d (reachable) steps to b+2d (free), box b -> b+d. A child's key is the parent's with one bit moved.
             long tl = Prof.Start();
-            BuildKey(cur, pkey);
-            ulong parentHash = store.HashOfBoxes(cur, store.PlayerOf(id));
-            int pplayer = store.PlayerOf(id);
-            for (int i = 0; i < cur.Length; i++)
-            {
-                int b = cur[i];
-                for (int di = 0; di < 4; di++)
-                {
-                    int d = dirs[di];
-                    int p = b + d, p2 = b + 2 * d;
-                    if (mark[p] != st || wall[p2] || occ[p2] || dist[p] < 0) continue;
-                    SetOcc(b, false); SetOcc(p, true);
-                    int np = Normalize(b, p, pplayer, st);
-                    // child = cur with box i moved to p, kept ascending
-                    cur.CopyTo(child, 0);
-                    int j = i;
-                    while (j + 1 < child.Length && child[j + 1] < p) { child[j] = child[j + 1]; j++; }
-                    while (j > 0 && child[j - 1] > p) { child[j] = child[j - 1]; j--; }
-                    child[j] = p;
-                    for (int w = 0; w < store.Nw; w++) key[w] = pkey[w];
-                    int fb = fidx[b], fp = fidx[p];
-                    key[fb >> 6] &= ~(1UL << (fb & 63));
-                    key[fp >> 6] |= 1UL << (fp & 63);
-                    int ch = h - key8[b] + key8[p];
-                    if (curU > 1 && startIdx[b] < 0)
-                    {
-                        provU = curU - 1;
-                        ch += provU * sup!.W * 8;
-                    }
-                    ulong zh = parentHash ^ store.ZFloor(fb) ^ store.ZFloor(fp) ^ store.ZPlayer(pplayer) ^ store.ZPlayer(np);
-                    AddKeyed(child, np, id, b, di, ch, zh);
-                    provU = 0;
-                    SetOcc(b, true); SetOcc(p, false);
-                }
-            }
+            PullChildren(id, h, st, pmin, curU, cur, child);
             Prof.Stop(18, tl);
             long tm = Prof.Start();
             if (supZero && !opt.NoMacros) PlacementMacros(id, cur, child);
@@ -554,6 +593,64 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             if (meetPending.Count > 0) MeetPost(cur);
         }
         return new SolveResult { Reason = "exhausted", Nodes = expanded };
+    }
+
+    // state of the expansion in progress (PullChildren / EmitChild)
+    int pcId, pcH, pcPlayer, pcCurU, pcKPar; uint pcSt; ulong pcParentHash; int[] pcCur = [], pcChild = [];
+
+    /// <summary>Pull: player on b+d (reachable) steps to b+2d (free), box b -> b+d. A child's key is the parent's with one bit moved.</summary>
+    void PullChildren(int id, int h, uint st, int pplayer, int curU, int[] cur, int[] child)
+    {
+        BuildKey(cur, pkey);
+        pcId = id; pcH = h; pcSt = st; pcPlayer = pplayer; pcCurU = curU; pcCur = cur; pcChild = child;
+        pcParentHash = store.HashOfBoxes(cur, lazyNorm ? -1 : pplayer);
+        uint* mkp = markP; byte* blkp = blk; int* distp = distP, sidxp = startIdxP;
+        int ncur = cur.Length;
+        int kPar = 0; for (int i = 0; i < ncur; i++) if (sidxp[cur[i]] >= 0) kPar++;
+        pcKPar = kPar;
+        int d0 = -W, d1 = W;
+        for (int i = 0; i < ncur; i++)
+        {
+            int b = cur[i];
+            int p = b + d0;
+            if (mkp[p] == st && blkp[p + d0] == 0 && distp[p] >= 0) EmitChild(i, b, 0, d0, p);
+            p = b + d1;
+            if (mkp[p] == st && blkp[p + d1] == 0 && distp[p] >= 0) EmitChild(i, b, 1, d1, p);
+            p = b - 1;
+            if (mkp[p] == st && blkp[p - 1] == 0 && distp[p] >= 0) EmitChild(i, b, 2, -1, p);
+            p = b + 1;
+            if (mkp[p] == st && blkp[p + 1] == 0 && distp[p] >= 0) EmitChild(i, b, 3, 1, p);
+        }
+    }
+
+    void EmitChild(int i, int b, int di, int d, int p)
+    {
+        byte* blkp = blk; int* key8p = key8P, fidxp = fidxP, sidxp = startIdxP;
+        int[] cur = pcCur, child = pcChild;
+        int ncur = cur.Length, nw = store.Nw;
+        blkp[b] = 0; blkp[p] = 1;
+        int np = lazyNorm ? p + d : Normalize(b, p, pcPlayer, pcSt);
+        // child = cur with box i moved to p, kept ascending
+        cur.CopyTo(child, 0);
+        int j = i;
+        while (j + 1 < ncur && child[j + 1] < p) { child[j] = child[j + 1]; j++; }
+        while (j > 0 && child[j - 1] > p) { child[j] = child[j - 1]; j--; }
+        child[j] = p;
+        int fb = fidxp[b], fp = fidxp[p];
+        for (int w = 0; w < nw; w++) key[w] = pkey[w];
+        key[fb >> 6] &= ~(1UL << (fb & 63));
+        key[fp >> 6] |= 1UL << (fp & 63);
+        int ch = pcH - key8p[b] + key8p[p];
+        if (pcCurU > 1 && sidxp[b] < 0)
+        {
+            provU = pcCurU - 1;
+            ch += provU * sup!.W * 8;
+        }
+        ulong zh = pcParentHash ^ store.ZFloor(fb) ^ store.ZFloor(fp);
+        if (!lazyNorm) zh ^= store.ZPlayer(pcPlayer) ^ store.ZPlayer(np);
+        AddKeyed(child, np, pcId, b, di, ch, zh, pcKPar - (sidxp[b] >= 0 ? 1 : 0) + (sidxp[p] >= 0 ? 1 : 0));
+        provU = 0;
+        blkp[b] = 1; blkp[p] = 0;
     }
 
     // ---- reconstruction -------------------------------------------------------------------------------------------
@@ -569,7 +666,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             for (int k = 0; k < 4; k++) if (b + dirs[k] == t) d = k;
             pushes.Add((t, opposite[d]));
         }
-        for (int c = 0; c < cells; c++) if (occ[c]) SetOcc(c, false);
+        for (int c = 0; c < cells; c++) if (!wall[c]) SetOcc(c, false);
         foreach (int b in lv.Boxes) SetOcc(b, true);
         var prev = new sbyte[cells];
         var sb = new StringBuilder();
@@ -586,7 +683,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
                 for (int k = 0; k < 4; k++)
                 {
                     int nb = c + dirs[k];
-                    if (mark[nb] != st && !wall[nb] && !occ[nb]) { mark[nb] = st; prev[nb] = (sbyte)k; queue[tail++] = nb; }
+                    if (mark[nb] != st && blk[nb] == 0) { mark[nb] = st; prev[nb] = (sbyte)k; queue[tail++] = nb; }
                 }
             }
             walk.Clear();
@@ -596,7 +693,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             SetOcc(from, false); SetOcc(from + dirs[dir], true);
             p = from;
         }
-        for (int c = 0; c < cells; c++) if (occ[c]) SetOcc(c, false);
+        for (int c = 0; c < cells; c++) if (!wall[c]) SetOcc(c, false);
         return sb.ToString();
     }
 
@@ -629,15 +726,15 @@ public sealed unsafe partial class ReverseSolver : IDisposable
                     for (int di = 0; di < 4; di++)
                     {
                         int d = dirs[di], p = b + d, p2 = b + 2 * d;
-                        if (mark[p] == st && !wall[p2] && !occ[p2] && dist[p] >= 0) opts.Add((i, di));
+                        if (mark[p] == st && blk[p2] == 0 && dist[p] >= 0) opts.Add((i, di));
                     }
                 }
                 if (opts.Count == 0) { foreach (int b in cur) SetOcc(b, false); break; }
                 var o = opts[(int)(WalkRand() % (ulong)opts.Count)];
                 int bb = cur[o.i];
-                int pp = bb + dirs[o.di];
+                int pp = bb + dirs[o.di]; int o_d = dirs[o.di];
                 SetOcc(bb, false); SetOcc(pp, true);
-                int np = Normalize(bb, pp, store.PlayerOf(id), st);
+                int np = lazyNorm ? pp + o_d : Normalize(bb, pp, store.PlayerOf(id), st);
                 cur.CopyTo(child, 0);
                 child[o.i] = pp;
                 Array.Sort(child);
