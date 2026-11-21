@@ -16,10 +16,9 @@ public sealed unsafe partial class FullSolver
     readonly ChunkList<PfFest.Tuple> pfOwn = new(), pfBest = new();
     PfFest.Tuple pfNext; bool pfHave;
     const int PfTypes = 8;            // Go PFTypes: one selection in this many is type-based exploration
-    const int PfZoneDeadLimit = 1000; // Go PFZoneDead
     ulong mRng;
 
-    void PfInit()
+    void PfOnInit()
     {
         if (pff != null) return;
         var g = (int[])lv.Boxes.Clone(); // the pull view's boxes are the real goals
@@ -55,7 +54,7 @@ public sealed unsafe partial class FullSolver
         if (pfHave) own = pfNext;
         else
         {
-            PfInit();
+            PfOnInit();
             int d = MatchDist(boxes);
             own = new PfFest.Tuple(reg, MRoomConnectivity(), 0, d >= AssignmentInf ? -1 : d, 0);
             PfFill(ref own, boxes);
@@ -151,127 +150,6 @@ public sealed unsafe partial class FullSolver
             if (wall[t + d8[(j + 4) & 7]] && wall[t + d8[(j + 5) & 7]] && wall[t + d8[(j + 7) & 7]]) return true;
         }
         return false;
-    }
-
-    // ---- start-zone / reach filtering of the roots (Go pfReachInit, liveZoneRoots) -----------------------------------------------------
-    /// <summary>Go pfReachInit: intersect the start-square matching with the exact (player-aware) single-box reach of hubReach.</summary>
-    void PfReachInit()
-    {
-        if (goalAdj.Length == 0) InitMatching();
-        var r = HubReach.Create(wall, W, goals, realPlayer);
-        if (r == null || r.Rb.Length != goals.Length) return;
-        for (int g = 0; g < goals.Length; g++)
-        {
-            var rb = r.Rb[g];
-            for (int c = 0; c < cells; c++)
-                if ((rb[c >> 6] & 1UL << (c & 63)) == 0) goalAdj[c * gw + (g >> 6)] &= ~(1UL << (g & 63));
-        }
-    }
-
-    int[] LiveZoneRoots(int[] roots)
-    {
-        var start = (int[])lv.Boxes.Clone();
-        var live = new List<int>();
-        foreach (int r in roots)
-            if (!PullZoneDead(wall, W, goal, dist, start, r, PfZoneDeadLimit)) live.Add(r);
-        return live.Count == 0 ? roots : [.. live];
-    }
-
-    /// <summary>Go pullZoneDead: can the pull view's position provably never put every box on a start square (bounded relaxed pull search with wobbler deletion)?</summary>
-    static bool PullZoneDead(bool[] wall, int w, bool[] start, int[] dist, int[] boxes, int player, int limit)
-    {
-        int cells = wall.Length;
-        int[] dirs = [-w, w, -1, 1];
-        var occ = new bool[cells];
-        var mark = new int[cells];
-        int stamp = 0;
-        var q = new List<int>();
-        int Reach(int p)
-        {
-            stamp++;
-            mark[p] = stamp;
-            q.Clear(); q.Add(p);
-            int lo = p;
-            for (int i = 0; i < q.Count; i++)
-                foreach (int d in dirs)
-                {
-                    int y = q[i] + d;
-                    if (!wall[y] && !occ[y] && mark[y] != stamp) { mark[y] = stamp; q.Add(y); lo = Math.Min(lo, y); }
-                }
-            return lo;
-        }
-        bool OnStart(int[] bx) { foreach (int b in bx) if (!start[b]) return false; return true; }
-        var seen = new HashSet<string>();
-        string Enc(int[] bx, int p)
-        {
-            var ch = new char[(bx.Length + 1) * 2];
-            for (int i = 0; i < bx.Length; i++) { ch[2 * i] = (char)(bx[i] & 0xffff); ch[2 * i + 1] = (char)(bx[i] >>> 16); }
-            ch[2 * bx.Length] = (char)(p & 0xffff); ch[2 * bx.Length + 1] = (char)(p >>> 16);
-            return new string(ch);
-        }
-        var fifo = new List<(int[] boxes, int player)>();
-        bool Push(int[] bx, int p)
-        {
-            string k = Enc(bx, p);
-            if (seen.Contains(k)) return false;
-            if (OnStart(bx)) return true;
-            seen.Add(k);
-            fifo.Add((bx, p));
-            return false;
-        }
-        var root = (int[])boxes.Clone();
-        Array.Sort(root);
-        foreach (int b in root) if (dist[b] < 0) return true; // a box already on a dead square
-        foreach (int b in root) occ[b] = true;
-        int rp = Reach(player);
-        foreach (int b in root) occ[b] = false;
-        if (Push(root, rp)) return false;
-        for (int head = 0; head < fifo.Count; head++)
-        {
-            if (seen.Count > limit) return false; // not proven within the limit
-            var cur = fifo[head];
-            foreach (int b in cur.boxes) occ[b] = true;
-            Reach(cur.player);
-            int region = stamp;
-            var pulls = new List<(int i, int to, int np)>();
-            int wobbler = -1;
-            for (int i = 0; i < cur.boxes.Length; i++)
-            {
-                int b = cur.boxes[i];
-                foreach (int d in dirs)
-                {
-                    int p1 = b + d, p2 = b + 2 * d;
-                    if (mark[p1] != region || wall[p2] || occ[p2] || dist[p1] < 0) continue;
-                    occ[b] = false; occ[p1] = true;
-                    int np = Reach(p2);
-                    bool back = mark[b] == stamp && !wall[b - d] && !occ[b - d]; // the player can reach b and pull the box back onto it
-                    occ[p1] = false; occ[b] = true;
-                    Reach(cur.player); // restore the parent's region marks
-                    region = stamp;
-                    if (back) { wobbler = i; break; }
-                    pulls.Add((i, p1, np));
-                }
-                if (wobbler >= 0) break;
-            }
-            if (wobbler >= 0)
-            {
-                var bx = cur.boxes.Where((_, idx) => idx != wobbler).ToArray();
-                occ[cur.boxes[wobbler]] = false;
-                int np = Reach(cur.player);
-                foreach (int b in cur.boxes) occ[b] = false;
-                if (Push(bx, np)) return false;
-                continue;
-            }
-            foreach (int b in cur.boxes) occ[b] = false;
-            foreach (var pl in pulls)
-            {
-                var bx = (int[])cur.boxes.Clone();
-                bx[pl.i] = pl.to;
-                Array.Sort(bx);
-                if (Push(bx, pl.np)) return false;
-            }
-        }
-        return true;
     }
 
     /// <summary>Go heap.Remove on a fessHeap (random removal for type exploration).</summary>

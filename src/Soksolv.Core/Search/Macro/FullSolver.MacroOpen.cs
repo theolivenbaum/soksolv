@@ -65,7 +65,7 @@ public sealed unsafe partial class FullSolver
         int parentMob = 0;
         if (pfOn)
         {
-            PfInit();
+            PfOnInit();
             int pd = MatchParent(cur); // also primes the one-row updates
             if (pd >= AssignmentInf) pd = -1;
             var pt = new PfFest.Tuple(maux[id].Reg, 0, 0, pd, 0);

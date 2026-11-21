@@ -34,7 +34,6 @@ public sealed unsafe partial class FullSolver
     ulong RaceBytes => (ulong)(nodes.Bytes + mmv.Bytes + mmvScore.Bytes + maux.Bytes);
     internal long ExpandedN => mExpandedN;
     internal bool MemFull => mMemFull;
-    bool mMemFull;
 
     /// <summary>Go newTowardReal: the real-level toward search aimed at tgt (HF ranking against the target board).</summary>
     static FullSolver NewTowardReal(string[] rows, Level lv, FullOptions opt, TowardTarget tgt, long nodeLimit, bool nodeMode, Func<ulong>? peerBytes)
