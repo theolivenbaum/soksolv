@@ -77,7 +77,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     TypeQueue? types;
     ulong* expandedBits; int expandedCap;   // words
     int typeTurn, novTurn;
-    ulong[][] novSeen = [];
+    nint[] novSeen = [];
     long expandedTotal, lastImpExp, walkNext;
     ulong wrng;
     bool memFull, popMarked;
@@ -163,7 +163,8 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     public void Dispose()
     {
         store.Dispose(); sup?.Dispose(); sup = null; types?.Dispose(); q.Dispose(); nq.Dispose(); cellq?.Dispose();
-        System.Runtime.InteropServices.NativeMemory.Free(key); System.Runtime.InteropServices.NativeMemory.Free(pkey); System.Runtime.InteropServices.NativeMemory.Free(rmask); System.Runtime.InteropServices.NativeMemory.Free(distP); System.Runtime.InteropServices.NativeMemory.Free(key8P); System.Runtime.InteropServices.NativeMemory.Free(fidxP); System.Runtime.InteropServices.NativeMemory.Free(startIdxP); System.Runtime.InteropServices.NativeMemory.Free(expandedBits); System.Runtime.InteropServices.NativeMemory.Free(supU); expandedBits = null; supU = null; System.Runtime.InteropServices.NativeMemory.Free(gseenM);
+        System.Runtime.InteropServices.NativeMemory.Free(key); System.Runtime.InteropServices.NativeMemory.Free(pkey); foreach (var nsp in novSeen) System.Runtime.InteropServices.NativeMemory.Free((void*)nsp); novSeen = [];
+        System.Runtime.InteropServices.NativeMemory.Free(rmask); System.Runtime.InteropServices.NativeMemory.Free(distP); System.Runtime.InteropServices.NativeMemory.Free(key8P); System.Runtime.InteropServices.NativeMemory.Free(fidxP); System.Runtime.InteropServices.NativeMemory.Free(startIdxP); System.Runtime.InteropServices.NativeMemory.Free(expandedBits); System.Runtime.InteropServices.NativeMemory.Free(supU); expandedBits = null; supU = null; System.Runtime.InteropServices.NativeMemory.Free(gseenM);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)] void SetOcc(int c, bool v) { blk[c] = (byte)(v ? 1 : 0); }
@@ -193,18 +194,18 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     {
         if (stamp > uint.MaxValue - 4) { Array.Clear(mark); Array.Clear(mark2); stamp = 0; }
         uint st = ++stamp;
-        int w = W;
-        int* qp = queueP; int tail = 0; qp[tail++] = p; mk[p] = st; int m = p;
-        for (int i = 0; i < tail; i++)
+        byte* bk = blk; nint w = W;
+        int* qp = queueP; nint tail = 0; qp[tail++] = p; mk[p] = st; nint m = p;
+        for (nint i = 0; i < tail; i++)
         {
-            int x = qp[i];
-            int y = x - w; if (mk[y] != st && blk[y] == 0) { mk[y] = st; qp[tail++] = y; if (y < m) m = y; }
-            y = x + w; if (mk[y] != st && blk[y] == 0) { mk[y] = st; qp[tail++] = y; }
-            y = x - 1; if (mk[y] != st && blk[y] == 0) { mk[y] = st; qp[tail++] = y; if (y < m) m = y; }
-            y = x + 1; if (mk[y] != st && blk[y] == 0) { mk[y] = st; qp[tail++] = y; }
+            nint x = qp[i];
+            nint y = x - w; if (mk[y] != st && bk[y] == 0) { mk[y] = st; qp[tail++] = (int)y; if (y < m) m = y; }
+            y = x + w; if (mk[y] != st && bk[y] == 0) { mk[y] = st; qp[tail++] = (int)y; }
+            y = x - 1; if (mk[y] != st && bk[y] == 0) { mk[y] = st; qp[tail++] = (int)y; if (y < m) m = y; }
+            y = x + 1; if (mk[y] != st && bk[y] == 0) { mk[y] = st; qp[tail++] = (int)y; }
         }
-        lastRegionSize = tail;
-        return m;
+        lastRegionSize = (int)tail;
+        return (int)m;
     }
 
     /// <summary>True if target lies in the player's region from p (per occ); stops as soon as it is found. A false result leaves the whole region stamped in mk (stamp = `stamp`).</summary>
@@ -212,15 +213,15 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     {
         if (stamp > uint.MaxValue - 4) { Array.Clear(mark); Array.Clear(mark2); stamp = 0; }
         uint st = ++stamp;
-        int w = W;
-        int* qp = queueP; int tail = 0; qp[tail++] = p; mk[p] = st;
-        for (int i = 0; i < tail; i++)
+        byte* bk = blk; nint w = W; nint tg = target;
+        int* qp = queueP; nint tail = 0; qp[tail++] = p; mk[p] = st;
+        for (nint i = 0; i < tail; i++)
         {
-            int x = qp[i];
-            int y = x - w; if (mk[y] != st && blk[y] == 0) { if (y == target) return true; mk[y] = st; qp[tail++] = y; }
-            y = x + w; if (mk[y] != st && blk[y] == 0) { if (y == target) return true; mk[y] = st; qp[tail++] = y; }
-            y = x - 1; if (mk[y] != st && blk[y] == 0) { if (y == target) return true; mk[y] = st; qp[tail++] = y; }
-            y = x + 1; if (mk[y] != st && blk[y] == 0) { if (y == target) return true; mk[y] = st; qp[tail++] = y; }
+            nint x = qp[i];
+            nint y = x - w; if (mk[y] != st && bk[y] == 0) { if (y == tg) return true; mk[y] = st; qp[tail++] = (int)y; }
+            y = x + w; if (mk[y] != st && bk[y] == 0) { if (y == tg) return true; mk[y] = st; qp[tail++] = (int)y; }
+            y = x - 1; if (mk[y] != st && bk[y] == 0) { if (y == tg) return true; mk[y] = st; qp[tail++] = (int)y; }
+            y = x + 1; if (mk[y] != st && bk[y] == 0) { if (y == tg) return true; mk[y] = st; qp[tail++] = (int)y; }
         }
         return false;
     }
@@ -349,7 +350,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     }
 
     /// <summary>Adds the state whose box bitset is in key. Returns the node id (the existing id for a duplicate; -1 if memory is full).</summary>
-    int AddKeyed(ReadOnlySpan<int> boxes, int player, int parent, int from, int dir, int h, ulong zh, int k)
+    int AddKeyed(ReadOnlySpan<int> boxes, int player, int parent, int from, int dir, int h, ulong zh, int k, int kPar = -1, int moved = -1)
     {
         int id = FindState(key, player, zh, out int slot, out uint fp);
         if (id >= 0 || memFull) return id;
@@ -361,14 +362,22 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         {
             // best-first width search's novelty: a state with a box on a square no box has stood on before, among states
             // with as many boxes back home, also enters the novelty queue
-            while (novSeen.Length <= k) Array.Resize(ref novSeen, novSeen.Length + 1);
-            novSeen[k] ??= new ulong[(cells + 63) / 64];
-            var seen = novSeen[k]; bool novel = false;
-            foreach (int b in boxes)
+            if (novSeen.Length <= k) Array.Resize(ref novSeen, k + 8);
+            ulong* seen = (ulong*)novSeen[k];
+            if (seen == null) { seen = (ulong*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)((cells + 63) / 64) * 8); novSeen[k] = (nint)seen; }
+            bool novel = false;
+            if (kPar == k && moved >= 0)
             {
-                int w = b >> 6; ulong bit = 1UL << (b & 63);
+                // the other boxes stood in the parent, whose boxes were all marked in seen[kPar]
+                int w = moved >> 6; ulong bit = 1UL << (moved & 63);
                 if ((seen[w] & bit) == 0) { seen[w] |= bit; novel = true; }
             }
+            else
+                foreach (int b in boxes)
+                {
+                    int w = b >> 6; ulong bit = 1UL << (b & 63);
+                    if ((seen[w] & bit) == 0) { seen[w] |= bit; novel = true; }
+                }
             if (novel) nq.Push(h, id);
         }
         if (provU > 0)
@@ -530,7 +539,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             }
             Prof.Stop(23, tu);
             long tf = Prof.Start();
-            bool infeasible = h > 0 && !Inherits(id) && !Feasible(cur);
+            bool infeasible = !popMarked && h > 0 && !Inherits(id) && !Feasible(cur);
             Prof.Stop(17, tf);
             if (infeasible)
             {
@@ -631,11 +640,20 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         blkp[b] = 0; blkp[p] = 1;
         int np = lazyNorm ? p + d : Normalize(b, p, pcPlayer, pcSt);
         // child = cur with box i moved to p, kept ascending
-        cur.CopyTo(child, 0);
-        int j = i;
-        while (j + 1 < ncur && child[j + 1] < p) { child[j] = child[j + 1]; j++; }
-        while (j > 0 && child[j - 1] > p) { child[j] = child[j - 1]; j--; }
-        child[j] = p;
+        {
+            ref int cr = ref System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(cur);
+            ref int cd = ref System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(child);
+            int j = 0, x = 0;
+            for (; x < ncur; x++)
+            {
+                if (x == i) continue;
+                int c = Unsafe.Add(ref cr, x);
+                if (c > p) break;
+                Unsafe.Add(ref cd, j++) = c;
+            }
+            Unsafe.Add(ref cd, j++) = p;
+            for (; x < ncur; x++) { if (x == i) continue; Unsafe.Add(ref cd, j++) = Unsafe.Add(ref cr, x); }
+        }
         int fb = fidxp[b], fp = fidxp[p];
         for (int w = 0; w < nw; w++) key[w] = pkey[w];
         key[fb >> 6] &= ~(1UL << (fb & 63));
@@ -648,7 +666,8 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         }
         ulong zh = pcParentHash ^ store.ZFloor(fb) ^ store.ZFloor(fp);
         if (!lazyNorm) zh ^= store.ZPlayer(pcPlayer) ^ store.ZPlayer(np);
-        AddKeyed(child, np, pcId, b, di, ch, zh, pcKPar - (sidxp[b] >= 0 ? 1 : 0) + (sidxp[p] >= 0 ? 1 : 0));
+        int kc = pcKPar - (sidxp[b] >= 0 ? 1 : 0) + (sidxp[p] >= 0 ? 1 : 0);
+        AddKeyed(child, np, pcId, b, di, ch, zh, kc, pcKPar, p);
         provU = 0;
         blkp[b] = 1; blkp[p] = 0;
     }
