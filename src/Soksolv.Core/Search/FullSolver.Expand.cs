@@ -6,6 +6,17 @@ public sealed unsafe partial class FullSolver
     // ---- features ---------------------------------------------------------------------------------------------------
     int PackedCount()
     {
+        int gw = packWords;
+        int maxR = -1;
+        for (int r = nRounds - 1; r >= 0 && maxR < 0; r--)
+            for (int w = 0; w < gw; w++)
+                if ((rdMask[r * gw + w] & ~gOcc[w]) != 0) { maxR = r; break; }
+        int cnt = 0, k = maxR < 0 ? 0 : maxR;
+        for (int w = 0; w < gw; w++) cnt += BitOperations.PopCount(gOcc[w] & geMask[k * gw + w]);
+        return cnt;
+    }
+    int PackedCountSlow()
+    {
         int maxR = -1;
         foreach (int g in goals) if (!occ[g]) maxR = Math.Max(maxR, round[g]);
         int c = 0;
@@ -13,8 +24,63 @@ public sealed unsafe partial class FullSolver
         return c;
     }
 
+    /// <summary>Counts the connected components of free cells with word-parallel row floods (boards up to 64 wide).</summary>
+    int RegionsBits()
+    {
+        int rows = frRows;
+        ulong* rem = frRem; ulong* reg = frReg; ulong* fr = frR;
+        for (int r = 0; r < rows; r++) rem[r] = fr[r];
+        int cnt = 0, last = rows - 2;
+        for (int r0 = 1; r0 <= last; )
+        {
+            if (rem[r0] == 0) { r0++; continue; }
+            cnt++;
+            int cp = BitOperations.TrailingZeroCount(rem[r0]);
+            reg[r0] = FillRowB(1UL << cp, rem[r0]);
+            int lo = r0, hi = r0;
+            while (true)
+            {
+                bool ch = false;
+                int a = lo > 1 ? lo - 1 : 1, z = hi < last ? hi + 1 : last;
+                for (int r = a; r <= z; r++)
+                {
+                    ulong cur = reg[r];
+                    ulong y = cur | (reg[r - 1] | reg[r + 1]) & rem[r];
+                    if (y == cur) continue;
+                    y = FillRowB(y, rem[r]); reg[r] = y; ch = true;
+                    if (r < lo) lo = r; if (r > hi) hi = r;
+                }
+                if (!ch) break;
+                ch = false;
+                a = lo > 1 ? lo - 1 : 1; z = hi < last ? hi + 1 : last;
+                for (int r = z; r >= a; r--)
+                {
+                    ulong cur = reg[r];
+                    ulong y = cur | (reg[r - 1] | reg[r + 1]) & rem[r];
+                    if (y == cur) continue;
+                    y = FillRowB(y, rem[r]); reg[r] = y; ch = true;
+                    if (r < lo) lo = r; if (r > hi) hi = r;
+                }
+                if (!ch) break;
+            }
+            for (int r = lo; r <= hi; r++) { rem[r] &= ~reg[r]; reg[r] = 0; }
+        }
+        return cnt;
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    static ulong FillRowB(ulong y, ulong f)
+    {
+        while (true)
+        {
+            ulong z = (y | y << 1 | y >> 1) & f;
+            if (z == y) return y;
+            y = z;
+        }
+    }
+
     int Regions()
     {
+        if (fbits) return RegionsBits();
         if (floorCells.Length == 0)
         {
             var l = new List<int>();
@@ -808,6 +874,7 @@ public sealed unsafe partial class FullSolver
         if (reg < 0) reg = Regions();
         nodes.Reg(id) = (sbyte)Math.Min(reg, 127);
         int onGoal = PackedCount();
+        if (CheckRegions && onGoal != PackedCountSlow()) throw new InvalidOperationException("packed count mismatch");
         int bucket = onGoal * MaxRegions + Math.Min(reg, MaxRegions - 1);
         nodes.Bucket(id) = (ushort)bucket;
         PushNode(h, w, id, bucket);

@@ -4,6 +4,7 @@ using System.Diagnostics.Tracing;
 using Soksolv.Model;
 using Soksolv.Search;
 
+if (Environment.GetEnvironmentVariable("SOKSOLV_CHECK") == "1") FullSolver.CheckRegions = true;
 string file = args[0]; long nodes = long.Parse(args[1]);
 bool parity = args.Contains("-parity");
 if (parity) { ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; } else { ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; }

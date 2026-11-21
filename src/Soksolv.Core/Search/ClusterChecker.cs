@@ -121,9 +121,9 @@ public sealed unsafe class ClusterChecker
         if (bits)
         {
             int W = board.W; rows = n / W;
-            var fa = GC.AllocateArray<ulong>(rows * 4 + 8, pinned: true);
+            var fa = keepA = GC.AllocateArray<ulong>(rows * 4 + 8, pinned: true);
             freeR = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref fa[0]); regR = freeR + rows + 2; pkR = regR + rows + 2; mkR = pkR + rows + 2;
-            var ra = GC.AllocateArray<byte>(2 * n, pinned: true);
+            var ra = keepB = GC.AllocateArray<byte>(2 * n, pinned: true);
             rowOf = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref ra[0]); colOf = rowOf + n;
             for (int c = 0; c < n; c++) { rowOf[c] = (byte)(c / W); colOf[c] = (byte)(c % W); if (!board.Wall[c]) freeR[c / W] |= 1UL << (c % W); }
             regLo = 1; regHi = 0;
@@ -137,7 +137,7 @@ public sealed unsafe class ClusterChecker
     readonly int rows;
     readonly ulong* freeR, regR, pkR, mkR;
     readonly byte* rowOf, colOf;
-    int regLo, regHi;
+    int regLo, regHi; readonly ulong[]? keepA; readonly byte[]? keepB; // keep the pinned arrays alive
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void Block(int c) { blk[c] = 1; if (bits) freeR[rowOf[c]] &= ~(1UL << colOf[c]); }
