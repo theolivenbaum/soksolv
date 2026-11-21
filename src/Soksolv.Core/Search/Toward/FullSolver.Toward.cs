@@ -56,7 +56,7 @@ public sealed unsafe partial class FullSolver
             }
         }
         hfBoxes = new int[n];
-        hu = new int[n + 1]; hv = new int[n + 1]; hp = new int[n + 1]; hway = new int[n + 1]; hminv = new int[n + 1]; hused = new bool[n + 1];
+        HungarianInit();
     }
 
     bool[]? tgtPocket;   // exp-460/480 (hub contexts): floor cells the target board seals off from its player and holds no target box (null: off)
@@ -112,11 +112,31 @@ public sealed unsafe partial class FullSolver
 
     int[] hu = [], hv = [], hp = [], hway = [], hminv = []; bool[] hused = [];
 
-    int Edge(int box, int j) { int e = tgtDist[(j - 1) * cells + box]; return e < 0 ? AssignmentInf : e; }
+    // Hungarian state: duals/columns padded to a multiple of 8 lanes (index 0 is the virtual column); edge table transposed (per box cell: its distance to every target, AssignmentInf for none).
+    int hP; int[] tgtDistT = []; int[] hmask = [];
+
+    /// <summary>(Re)allocates the Hungarian arrays and rebuilds the per-box-cell target distance rows from tgtDist.</summary>
+    void HungarianInit()
+    {
+        int m = n + 1;
+        hP = (m + 7) & ~7;
+        hu = new int[m]; hp = new int[m];
+        hv = new int[hP]; hway = new int[hP]; hminv = new int[hP]; hmask = new int[hP]; hused = new bool[m];
+        tgtDistT = new int[cells * hP];
+        for (int g = 0; g < n; g++)
+            for (int c = 0; c < cells; c++)
+            {
+                int e = tgtDist[g * cells + c];
+                tgtDistT[c * hP + g + 1] = e < 0 ? AssignmentInf : e;
+            }
+    }
+
+    int Edge(int box, int j) => tgtDistT[box * hP + j];
 
     /// <summary>One augmenting path for row (1-based) of the Hungarian algorithm over the current duals hu/hv/hp (e-maxx formulation, as Go augmentAssignment).</summary>
     void AugmentRow(ReadOnlySpan<int> boxes, int row)
     {
+        if (System.Runtime.Intrinsics.Vector128.IsHardwareAccelerated) { AugmentRowV(boxes, row); return; }
         int m = n; var u = hu; var v = hv; var p = hp; var way = hway; var minv = hminv; var used = hused;
         p[0] = row; int j0 = 0;
         Array.Fill(minv, int.MaxValue); Array.Clear(used);
@@ -125,12 +145,11 @@ public sealed unsafe partial class FullSolver
             used[j0] = true;
             int i0 = p[j0], delta = int.MaxValue, j1 = 0;
             int box = boxes[i0 - 1];
-            int baseIdx = box;
+            int baseIdx = box * hP;
             for (int j = 1; j <= m; j++)
             {
                 if (used[j]) continue;
-                int e = tgtDist[(j - 1) * cells + baseIdx]; if (e < 0) e = AssignmentInf;
-                int cur = e - u[i0] - v[j];
+                int cur = tgtDistT[baseIdx + j] - u[i0] - v[j];
                 if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
                 if (minv[j] < delta) { delta = minv[j]; j1 = j; }
             }
@@ -139,6 +158,70 @@ public sealed unsafe partial class FullSolver
             j0 = j1;
         } while (p[j0] != 0);
         do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
+    }
+
+    /// <summary>SSE form of <see cref="AugmentRow"/> (4 columns per step, Vector128 is accelerated in the default Native AOT target; identical arithmetic, first minimal column wins ties).</summary>
+    void AugmentRowV(ReadOnlySpan<int> boxes, int row)
+    {
+        int m = n, P = hP;
+        var u = hu; var p = hp;
+        Span<int> usedList = stackalloc int[m + 1];
+        int nUsed = 0;
+        p[0] = row; int j0 = 0;
+        fixed (int* v = hv, way = hway, minv = hminv, um = hmask, dt = tgtDistT)
+        {
+            for (int j = 0; j < P; j += 4)
+            {
+                System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128.Create(int.MaxValue), minv + j);
+                System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128<int>.Zero, um + j);
+            }
+            for (int j = m + 1; j < P; j++) um[j] = -1;
+            var vmax = System.Runtime.Intrinsics.Vector128.Create(int.MaxValue);
+            do
+            {
+                um[j0] = -1; usedList[nUsed++] = j0;
+                int i0 = p[j0];
+                int ui = u[i0];
+                int* row0 = dt + boxes[i0 - 1] * P;
+                var vu = System.Runtime.Intrinsics.Vector128.Create(ui);
+                var vj0 = System.Runtime.Intrinsics.Vector128.Create(j0);
+                var dmin = vmax;
+                for (int j = 0; j < P; j += 4)
+                {
+                    var used = System.Runtime.Intrinsics.Vector128.Load(um + j);
+                    var cur = System.Runtime.Intrinsics.Vector128.Load(row0 + j) - vu - System.Runtime.Intrinsics.Vector128.Load(v + j);
+                    var mv = System.Runtime.Intrinsics.Vector128.Load(minv + j);
+                    var upd = System.Runtime.Intrinsics.Vector128.AndNot(System.Runtime.Intrinsics.Vector128.LessThan(cur, mv), used);
+                    mv = System.Runtime.Intrinsics.Vector128.ConditionalSelect(upd, cur, mv);
+                    System.Runtime.Intrinsics.Vector128.Store(mv, minv + j);
+                    System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128.ConditionalSelect(upd, vj0, System.Runtime.Intrinsics.Vector128.Load(way + j)), way + j);
+                    dmin = System.Runtime.Intrinsics.Vector128.Min(dmin, System.Runtime.Intrinsics.Vector128.ConditionalSelect(used, vmax, mv));
+                }
+                int delta = int.MaxValue;
+                for (int l = 0; l < 4; l++) { int x = System.Runtime.Intrinsics.Vector128.GetElement(dmin, l); if (x < delta) delta = x; }
+                int j1 = 0;
+                {
+                    var vd = System.Runtime.Intrinsics.Vector128.Create(delta);
+                    for (int j = 0; j < P; j += 4)
+                    {
+                        var used = System.Runtime.Intrinsics.Vector128.Load(um + j);
+                        var eq = System.Runtime.Intrinsics.Vector128.AndNot(System.Runtime.Intrinsics.Vector128.Equals(System.Runtime.Intrinsics.Vector128.Load(minv + j), vd), used);
+                        uint bits = System.Runtime.Intrinsics.Vector128.ExtractMostSignificantBits(eq);
+                        if (bits != 0) { j1 = j + System.Numerics.BitOperations.TrailingZeroCount(bits); break; }
+                    }
+                }
+                var vdel = System.Runtime.Intrinsics.Vector128.Create(delta);
+                for (int j = 0; j < P; j += 4)
+                {
+                    var used = System.Runtime.Intrinsics.Vector128.Load(um + j);
+                    System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128.Load(v + j) - (vdel & used), v + j);
+                    System.Runtime.Intrinsics.Vector128.Store(System.Runtime.Intrinsics.Vector128.Load(minv + j) - System.Runtime.Intrinsics.Vector128.AndNot(vdel, used), minv + j);
+                }
+                for (int k = 0; k < nUsed; k++) u[p[usedList[k]]] += delta;
+                j0 = j1;
+            } while (p[j0] != 0);
+            do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
+        }
     }
 
     long AssignmentCost(ReadOnlySpan<int> boxes)
