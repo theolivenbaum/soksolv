@@ -28,28 +28,43 @@ Same machine, Go binary built from `.reference`, `bench/compare.py` (prints CPU 
   C# reports "solution has no push").
 * Golden node counts from Go are pinned in `tests/Soksolv.Tests/ReverseTests.cs`.
 
-## Speed / memory (Native AOT build vs Go, single lane, same machine)
+## Speed / memory (Native AOT build vs Go, single lane, same machine; details and method in docs/perf.md section "reverse")
 
-| run | Go | C# | ratio |
-|---|---|---|---|
-| 18 levels, A (supply 0), `-nodes 200000` | 0.4 s common-solved | 0.3 s | 0.82 |
-| 18 levels, default lane, `-nodes 400000` | 3.6 s | 3.3 s | **0.92** |
-| 297 LTS sample, A, `-nodes 100000` | 4.8 s | 4.3 s | 0.90 |
-| 297 LTS sample, B, `-nodes 100000` | 14.6 s | 14.6 s | 1.00 |
+Equal-work CPU time (user+sys, `bench/lane-cpu.py`, `-nodes N`, best of 2-3): **0.46x Go** on the 22-level testdata
+(`-nodes 100000`, default lane) and 0.45x with `-rev-lanes 1`; **0.38x** on a 43-level LTS sample (`-nodes 20000`, both lane
+configurations). Before the perf pass: 0.92-0.96x (testdata) / 0.9-1.0x (LTS). Callgrind instruction counts at 10k nodes fell
+2.0-5.2x (Holland_81_27 689M -> 236M, Dive_Sven_1623_197 1612M -> 311M).
 
-Memory (reported tracked bytes) is 35-60% lower than Go on the long runs (e.g. Holland_81_27 at 400k nodes: 75 MB vs 113 MB,
-Sasquatch_IV_50_42: 39 vs 74 MB): unmanaged record arena (header + key words inline), packed hash slots with Zobrist
-incremental hashing (a pull flips two bits), off-heap int bucket lists, pinned pointer flood kernels.
+Memory: peak tracked MB 10-18% lower at equal node counts (Holland_81_27 @200k: 47.8 -> 36 MB); the garbage heap is flat
+(`alloc_mb` 3.3 MB at 200k nodes, 3.7 MB at 800k; it grew by ~60-90 B/node before: 62 MB at 400k).
 
-Profile (default lane, Holland_81_27): supply U evaluation ~42% (graph DFS ~20%, Tarjan closure ~14%), pull loop ~25%,
-placement macros ~12%, flood ~14%. Go spends the same share in `supply.dfs` (22% self); the supply code is the ceiling for
-this lane. Ideas not done: more/larger graph slots, incremental forest updates, delta-coded nodes (Go's `Compact` store keeps a
-full key only every 4th node; our plain records are already smaller than Go's compact store on these boards).
+Profile (default lane, 20k nodes, instruction share, all testdata levels): supply U evaluation (one-word matching, slot lookup,
+SCC memo) 11%, placement-macro graph (DFS 9% + lazy piece labels 6% + BFS 5%), pull children (EmitChild + PullChildren + AddNew)
+14%, region floods for duplicate tests and pops 8%, queues/store 12%.
+
+## Data layout and algorithms (src/Soksolv.Core/Search/Reverse/)
+
+* **Supply graph slots** (`ReverseSolver.Supply.cs`): the DFS forest / Tarjan lowpoints of the free cells for one obstacle set (the
+  start squares occupied by boxes; `f`) live in one unmanaged block per slot, indexed by compact floor index (`Disc/End/Par/Top/Cn`
+  as `ushort`, `Cn` = four 4-bit canonical piece ids per cell, SCC memo `SccOf` + growable `SccR` reach sets, ~18 B per floor cell).
+  Slots sit in a 4-way set-associative table with LRU replacement (budget 24 MiB). The Go design (direct mapped, 512K entry
+  lossy reach cache) rebuilt a graph for 19 of 20 evaluations on Holland_81_27 (56k builds for 2.9k distinct `f` @100k nodes); now
+  one build per distinct `f` (2.9k) and no separate cache. Piece ids are *canonical* (lowest neighbour direction of the piece) so they
+  do not depend on the DFS root; results are identical to Go's (parity).
+* **Placement macros** build a scratch graph of the real state (all boxes obstacles) with *lazy* labels (only cells the pull BFS
+  touches) and are skipped when no off-start box has a legal first pull (10-20% of calls).
+* **Lazy player normalisation**: without a meeting network the stored player is any cell of the region and the Zobrist hash covers the
+  boxes only; a probe hit on equal boxes asks "is the stored player in my region" with an early-exit flood (`ReachTo`) instead of
+  flooding every child to find its minimum cell (floods per expansion: ~5 -> ~2). With the meeting network (portfolio) the eager,
+  normalised path is kept (the forward lanes key their tables by the normalised player).
+* Pops of supply-deferred nodes (50% of all pops) skip the region flood and the feasibility check; matching uses start-square bitsets.
+* All per-node arrays (types queue, expanded bits, supply values, slots) are unmanaged; the child box list is only materialised when
+  the novelty scan or the meeting network needs it.
 
 ## Notes
 
-* The supply reach cache and graph slots are pure memos (results never depend on them): the C# cache starts at 4K entries and
-  doubles with misses up to Go's 512K (saves 20 MB on small levels).
+* The supply graph slots and SCC memos are pure memos (results never depend on them); there is no separate reach cache any more.
+  Boards with more than 12000 floor cells (`ushort` indices) run without supply ordering.
 * Memory-restart ring (`ReverseRunner`): a phase that ends with "memory" restarts with perturbation phase+1 (key8 offsets),
   with Go's quick-failure backoff; verified to survive `-mem 60` runs, solutions verified. Exact trajectories after a restart
   depend on memory/timing, so they are not comparable bit for bit.

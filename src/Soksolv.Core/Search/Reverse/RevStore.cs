@@ -17,10 +17,13 @@ public sealed unsafe class RevStore : IDisposable
     ulong* table; int tmask;
     readonly ulong[] zBox, zPlayer;
     public readonly int[] Fidx, Fcell;
+    int* fcellP, fidxP; ulong* zBoxP, zPlayerP;
 
     public RevStore(int cells, int[] fidx, int[] fcell)
     {
         Fidx = fidx; Fcell = fcell;
+        fcellP = (int*)NativeMemory.Alloc((nuint)Math.Max(1, fcell.Length) * 4);
+        for (int i = 0; i < fcell.Length; i++) fcellP[i] = fcell[i];
         Nw = (fcell.Length + 63) / 64;
         Rec = new RecordArena(8 * (1 + Nw));
         zBox = new ulong[Math.Max(1, fcell.Length)]; zPlayer = new ulong[cells];
@@ -28,6 +31,9 @@ public sealed unsafe class RevStore : IDisposable
         ulong Next() { s += 0x9E3779B97F4A7C15UL; ulong z = s; z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL; return z ^ (z >> 31); }
         for (int i = 0; i < zBox.Length; i++) zBox[i] = Next();
         for (int i = 0; i < cells; i++) zPlayer[i] = Next();
+        zBoxP = (ulong*)NativeMemory.Alloc((nuint)zBox.Length * 8); for (int i = 0; i < zBox.Length; i++) zBoxP[i] = zBox[i];
+        zPlayerP = (ulong*)NativeMemory.Alloc((nuint)cells * 8); for (int i = 0; i < cells; i++) zPlayerP[i] = zPlayer[i];
+        fidxP = (int*)NativeMemory.Alloc((nuint)cells * 4); for (int i = 0; i < cells; i++) fidxP[i] = fidx[i];
         AllocTable(1 << 12);
     }
     void AllocTable(int n) { table = (ulong*)NativeMemory.AllocZeroed((nuint)n * 8); tmask = n - 1; }
@@ -35,12 +41,13 @@ public sealed unsafe class RevStore : IDisposable
     public int TableSlots => tmask + 1;
     public long Bytes => Rec.Bytes + (long)(tmask + 1) * 8;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ulong ZFloor(int f) => zBox[f];
-    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ulong ZPlayer(int cell) => zPlayer[cell];
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ulong ZFloor(int f) => zBoxP[f];
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ulong ZPlayer(int cell) => zPlayerP[cell];
     public ulong HashOfBoxes(ReadOnlySpan<int> cells, int player)
     {
-        ulong h = zPlayer[player];
-        foreach (int c in cells) h ^= zBox[Fidx[c]];
+        ulong h = player >= 0 ? zPlayerP[player] : 0;
+        ulong* zb = zBoxP; int* fi = fidxP;
+        for (int i = 0; i < cells.Length; i++) h ^= zb[fi[cells[i]]];
         return h;
     }
     ulong HashOfRec(byte* r)
@@ -55,6 +62,17 @@ public sealed unsafe class RevStore : IDisposable
     static ulong Spread(ulong h) { h ^= h >> 29; h *= 0xBF58476D1CE4E5B9UL; return h ^ (h >> 32); }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)] static int Player(byte* r) => (int)((*(ulong*)r >> 32) & 0x7FFF);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void Prefetch(ulong zh)
+    {
+        if (System.Runtime.Intrinsics.X86.Sse.IsSupported) System.Runtime.Intrinsics.X86.Sse.Prefetch0(table + ((int)(uint)(Spread(zh) >> 32) & tmask));
+    }
+
+    public int Start(ulong zh, out uint fp) { ulong h = Spread(zh); fp = (uint)(h >> 32); return (int)fp & tmask; }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ulong Entry(int i) => table[i];
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public int Next(int i) => (i + 1) & tmask;
+    public bool KeyEquals(int id, ulong* key) => new ReadOnlySpan<ulong>(Rec.At(id) + 8, Nw).SequenceEqual(new ReadOnlySpan<ulong>(key, Nw));
 
     /// <summary>Finds a state; returns its id or -1 (slot/fp then say where to insert).</summary>
     public int Find(ulong* key, int player, ulong zh, out int slot, out uint fp)
@@ -117,10 +135,13 @@ public sealed unsafe class RevStore : IDisposable
     }
     public void Unpack(int id, Span<int> cur)
     {
-        ulong* k = Key(id); int i = 0;
-        for (int w = 0; w < Nw; w++)
-            for (ulong x = k[w]; x != 0; x &= x - 1) cur[i++] = Fcell[w * 64 + BitOperations.TrailingZeroCount(x)];
+        fixed (int* d = cur)
+        {
+            ulong* k = Key(id); int* fc = fcellP; int i = 0;
+            for (int w = 0; w < Nw; w++)
+                for (ulong x = k[w]; x != 0; x &= x - 1) d[i++] = fc[(w << 6) + BitOperations.TrailingZeroCount(x)];
+        }
     }
-    public void Dispose() { Rec.Dispose(); if (table != null) { NativeMemory.Free(table); table = null; } }
+    public void Dispose() { Rec.Dispose(); if (fcellP != null) { NativeMemory.Free(fcellP); NativeMemory.Free(zBoxP); NativeMemory.Free(zPlayerP); NativeMemory.Free(fidxP); } fcellP = null; if (table != null) { NativeMemory.Free(table); table = null; } }
     ~RevStore() => Dispose();
 }

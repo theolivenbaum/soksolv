@@ -71,7 +71,22 @@ public sealed class Table
     {
         var sl = Volatile.Read(ref cur);
         Insert(sl, k);
-        long n = Interlocked.Increment(ref adds);
+        MaybeGrow(sl, Interlocked.Increment(ref adds));
+    }
+
+    /// <summary>Like Add, but the shared add counter is updated once per 64 adds of one caller (pending is that caller's private count):
+    /// the counter's cache line is not bounced between the searches that fill one table.</summary>
+    public void AddBatched(ref int pending, ulong k)
+    {
+        var sl = Volatile.Read(ref cur);
+        Insert(sl, k);
+        if (++pending < 64) return;
+        MaybeGrow(sl, Interlocked.Add(ref adds, pending));
+        pending = 0;
+    }
+
+    void MaybeGrow(ulong[] sl, long n)
+    {
         if (n > sl.Length / 2 && sl.Length < max)
         {
             var next = new ulong[Math.Min(8 * sl.Length, max)];
