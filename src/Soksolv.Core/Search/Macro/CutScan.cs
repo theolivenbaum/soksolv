@@ -65,7 +65,7 @@ public sealed partial class FullSolver
             nr->Vgen = gen; nr->Tin = on; nr->Low = on; nr->Par = -1; nr->Sub = root; nr->Cid = comp;
             order[on++] = root;
             stack[0] = root; sdir[0] = 0; int sp = 1;
-            int e0 = d0, e1 = d1, e2 = d2, e3 = d3;
+            int* dr = dp;
             while (sp > 0)
             {
                 int top = sp - 1, v = stack[top];
@@ -73,7 +73,7 @@ public sealed partial class FullSolver
                 bool pushed = false;
                 for (int di = sdir[top]; di < 4; di++)
                 {
-                    int w = v + (di == 0 ? e0 : di == 1 ? e1 : di == 2 ? e2 : e3);
+                    int w = v + dr[di];
                     if (bk[w] != 0 || w == lift) continue;
                     CutNode* nw = nodes + w;
                     if (nw->Vgen != gen)

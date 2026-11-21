@@ -826,7 +826,6 @@ public sealed unsafe partial class FullSolver
             bstamp++; uint st = bstamp;
             var stk = sStk; int stn = 0;
             byte* blkL = pBlk; int* idx = sIdx; int* low = sLow; int* cmp = sCmp; int* call = sCall; byte* dir = sDir; uint* bs = bseenP; int* dr = pDir;
-            int d0 = dr[0], d1 = dr[1], d2 = dr[2], d3 = dr[3];
             int next = 0, ncomp = 0;
             var fr = elimFr;
             for (int fi = 0; fi < elimN; fi++)
@@ -843,7 +842,7 @@ public sealed unsafe partial class FullSolver
                     if (di < 4)
                     {
                         dir[top] = (byte)(di + 1);
-                        int dd = di == 0 ? d0 : di == 1 ? d1 : di == 2 ? d2 : d3;
+                        int dd = dr[di];
                         int to = v + dd;
                         if (blkL[to] != 0 || blkL[v - dd] != 0) continue;
                         if (bs[to] != st)

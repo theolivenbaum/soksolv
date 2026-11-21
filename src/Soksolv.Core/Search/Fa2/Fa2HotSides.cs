@@ -91,50 +91,83 @@ public sealed unsafe partial class FullSolver
         }
     }
 
-    /// <summary>gm[state*gw + w] = bitset of the goals whose reverse search reaches the state (c*4+j) (Go hsReachGoal, all goals at once:
-    /// goal bits flow along the same successor relation until a fixpoint; identical to one reverse BFS per goal).</summary>
+    int[]? hsIdx, hsLow, hsComp2, hsStk, hsCall; byte[]? hsK; ulong[]? hsCm;
+
+    /// <summary>gm[state*gw + w] = bitset of the goals whose reverse search reaches the state (c*4+j) (Go hsReachGoal, all goals at once).
+    /// Successors of (c,j): (c,t) for t != j with the same zone, and (c + dir[j], j) when that state exists. A Tarjan pass condenses the
+    /// strongly connected states; goal bits then flow once along each condensation edge (sources first), so every state gets exactly the
+    /// goals one reverse BFS per goal would reach from its goal states.</summary>
     void HsPropagate(int[] zone, ulong[] gm)
     {
         int gw = hsGw, ns = 4 * cells;
-        hsInq ??= new byte[ns]; hsQq ??= new int[ns + 1];
-        var inq = hsInq; var qq = hsQq; Array.Clear(inq);
-        int head = 0, tail = 0, cnt = 0, cap = qq.Length;
+        hsIdx ??= new int[ns]; hsLow ??= new int[ns]; hsComp2 ??= new int[ns]; hsStk ??= new int[ns + 1]; hsCall ??= new int[ns + 1]; hsK ??= new byte[ns + 1];
+        var idx = hsIdx; var low = hsLow; var cmp = hsComp2; var stk = hsStk; var call = hsCall; var kk = hsK;
+        Array.Fill(idx, -1);
+        // emission-ordered state list grouped by component
+        hsOrder ??= new int[ns]; hsCompStart ??= new int[ns + 1];
+        var order = hsOrder; var cstart = hsCompStart;
+        int next = 0, stn = 0, ncomp = 0, on = 0;
+        var dr = dirs;
+        for (int root = 0; root < ns; root++)
+        {
+            if (zone[root] == 0 || idx[root] >= 0) continue;
+            idx[root] = next; low[root] = next; next++; cmp[root] = -1;
+            stk[stn++] = root; call[0] = root; kk[0] = 0; int sp = 1;
+            while (sp > 0)
+            {
+                int top = sp - 1, v = call[top];
+                int k = kk[top];
+                if (k < 4)
+                {
+                    kk[top] = (byte)(k + 1);
+                    int c = v >> 2, j = v & 3, w;
+                    if (k < 3) { int t = k < j ? k : k + 1; w = c * 4 + t; if (zone[w] != zone[v]) continue; }
+                    else { int pp = c + dr[j]; if (pp < 0 || pp >= cells) continue; w = pp * 4 + j; if (zone[w] == 0) continue; }
+                    if (idx[w] < 0) { idx[w] = next; low[w] = next; next++; cmp[w] = -1; stk[stn++] = w; call[sp] = w; kk[sp] = 0; sp++; }
+                    else if (cmp[w] < 0 && idx[w] < low[v]) low[v] = idx[w];
+                    continue;
+                }
+                sp = top;
+                if (low[v] == idx[v])
+                {
+                    cstart[ncomp] = on;
+                    while (true) { int w2 = stk[--stn]; cmp[w2] = ncomp; order[on++] = w2; if (w2 == v) break; }
+                    ncomp++;
+                }
+                if (sp > 0) { int u = call[sp - 1]; if (low[v] < low[u]) low[u] = low[v]; }
+            }
+        }
+        cstart[ncomp] = on;
+        hsCm ??= new ulong[Math.Max(1, ns) * gw];
+        var cm = hsCm; Array.Clear(cm, 0, ncomp * gw);
         for (int gi = 0; gi < goals.Length; gi++)
             for (int j = 0; j < 4; j++)
             {
                 int st = goals[gi] * 4 + j;
-                if (zone[st] == 0) continue;
-                gm[st * gw + (gi >> 6)] |= 1UL << (gi & 63);
-                if (inq[st] == 0) { inq[st] = 1; qq[tail] = st; if (++tail == cap) tail = 0; cnt++; }
+                if (zone[st] != 0) cm[cmp[st] * gw + (gi >> 6)] |= 1UL << (gi & 63);
             }
-        while (cnt > 0)
+        // Tarjan emits a component after everything reachable from it: walk the components from the last emitted (a source) to the first
+        for (int ci = ncomp - 1; ci >= 0; ci--)
         {
-            int st = qq[head]; if (++head == cap) head = 0; cnt--; inq[st] = 0;
-            int c = st >> 2, j = st & 3, zc = zone[st];
-            for (int t = 0; t < 4; t++)
+            int cb = ci * gw;
+            for (int m = cstart[ci]; m < cstart[ci + 1]; m++)
             {
-                if (t == j) continue;
-                int s2 = c * 4 + t;
-                if (zone[s2] == zc) HsMerge(gm, st, s2, gw, inq, qq, ref tail, ref cnt, cap);
-            }
-            int p = c + dirs[j];
-            if (p >= 0 && p < cells)
-            {
-                int s3 = p * 4 + j;
-                if (zone[s3] != 0) HsMerge(gm, st, s3, gw, inq, qq, ref tail, ref cnt, cap);
+                int v = order[m], c = v >> 2, j = v & 3;
+                for (int k = 0; k < 4; k++)
+                {
+                    int w;
+                    if (k < 3) { int t = k < j ? k : k + 1; w = c * 4 + t; if (zone[w] != zone[v]) continue; }
+                    else { int pp = c + dr[j]; if (pp < 0 || pp >= cells) continue; w = pp * 4 + j; if (zone[w] == 0) continue; }
+                    int cw = cmp[w]; if (cw == ci) continue;
+                    int wb = cw * gw;
+                    for (int q = 0; q < gw; q++) cm[wb + q] |= cm[cb + q];
+                }
             }
         }
+        for (int st = 0; st < ns; st++)
+            if (zone[st] != 0) { int cb = cmp[st] * gw; for (int q = 0; q < gw; q++) gm[st * gw + q] = cm[cb + q]; }
     }
-    static void HsMerge(ulong[] gm, int a, int b, int gw, byte[] inq, int[] qq, ref int tail, ref int cnt, int cap)
-    {
-        bool changed = false;
-        for (int w = 0; w < gw; w++)
-        {
-            ulong nw = gm[a * gw + w] & ~gm[b * gw + w];
-            if (nw != 0) { gm[b * gw + w] |= nw; changed = true; }
-        }
-        if (changed && inq[b] == 0) { inq[b] = 1; qq[tail] = b; if (++tail == qq.Length) tail = 0; cnt++; }
-    }
+    int[]? hsOrder, hsCompStart;
 
     void HsInit()
     {
