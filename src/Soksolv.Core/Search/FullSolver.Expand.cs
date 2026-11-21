@@ -134,7 +134,7 @@ public sealed unsafe partial class FullSolver
     int[]? artDisc, artLow, artPieces; uint[]? artSeen; uint artStamp; int artComps;
     int[]? artStackC, artStackP; sbyte[]? artStackNext;
     /// <summary>Test hook: verify every incremental region count against a full flood.</summary>
-    public static bool CheckRegions;
+    public static bool CheckRegions = Environment.GetEnvironmentVariable("SOKSOLV_CHECK") == "1";
 
     void ComputeArticulation()
     {
@@ -309,7 +309,7 @@ public sealed unsafe partial class FullSolver
     // ---- word-parallel pair search (Go pairbits.go: pairDeadFromBits; boards up to 64 wide) -------------------------------------------
     ulong[]? bbFloorA, bbFreeA, bbRegA, bbRemA;
     ulong* bbFloor, bbFree, bbReg, bbRem; int bbRows;
-    public static bool PairBitsOff, PairBitsCheck;   // test hooks
+    public static bool PairBitsOff, PairBitsCheck = Environment.GetEnvironmentVariable("SOKSOLV_PAIR_CHECK") == "1";   // test hooks
 
     /// <summary>Row flood with a dirty-row worklist (rows ≤ 64): a row is re-examined only when a neighbouring row changed; passes alternate up/down like the sweeps they replace.</summary>
     internal static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp, bool clear = true)

@@ -109,7 +109,7 @@ public sealed unsafe partial class FullSolver
             int b = cur[i];
             if (corral != 0 && cmark[b] != corral) continue;
             mtst++;
-            mOpenCands = 0;
+            mOpenCands = 0; mCompsF = -1; mArtDone = false; mSplitSeen = 0;
             mVisitI = i;
             MBoxSearch(b, st, false, 0, 0, cur);
         }
@@ -495,15 +495,7 @@ public sealed unsafe partial class FullSolver
             int plen = 1;
             for (int x = mbprev[k]; x >= 0; x = mbprev[x]) plen++;
             tp = Prof.Start();
-            int r;
-            switch (++mOpenCands)
-            {
-                case 1: r = Regions(); break;
-                case 2:
-                    SetOcc(t, false); MArtic(); SetOcc(t, true);
-                    r = MChildRegions(t); break;
-                default: r = MChildRegions(t); break;
-            }
+            int r = MChildRegionCount(t, ++mOpenCands);
             Prof.Stop(4, tp);
             if (tgtPocket != null && r > 1) r = RegionsRel(); // exp-460: regions relative to the target (occ holds the child)
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
