@@ -92,37 +92,38 @@ public sealed unsafe partial class FullSolver
         fzNo ??= new uint[cells];
         fzEpoch++;
         fzLeft = PullFreezeVisits;
-        var (frozen, off) = PullFrozen(t);
-        return frozen && off;
+        return PullFrozenB(t) == 3;   // frozen and off a goal
     }
 
-    (bool frozen, bool off) PullFrozen(int c)
+    /// <summary>Go pullFrozen: 0 = not frozen, else bit 0 set (frozen) | bit 1 (some frozen box is off its goal).</summary>
+    int PullFrozenB(int c)
     {
-        if (fzNo![c] == fzEpoch || fzLeft <= 0) return (false, false);
+        var no = fzNo!;
+        if (no[c] == fzEpoch || fzLeft <= 0) return 0;
         fzLeft--;
         fz[c] = true;
-        bool off = !goal[c];
-        bool frozen = true;
+        int off = goal[c] ? 0 : 2;
         int w = W;
-        Span<int> ds = [1, -1, w, -w];
-        foreach (int d in ds)
-        {
-            var (b, o) = PullBlockedDir(c, d);
-            if (!b) { frozen = false; break; }
-            off = off || o;
-        }
+        bool frozen = true;
+        int r = PullBlockedDirB(c, 1);
+        if ((r & 1) != 0) { off |= r & 2; r = PullBlockedDirB(c, -1); }
+        if ((r & 1) != 0) { off |= r & 2; r = PullBlockedDirB(c, w); }
+        if ((r & 1) != 0) { off |= r & 2; r = PullBlockedDirB(c, -w); }
+        if ((r & 1) != 0) off |= r & 2; else frozen = false;
         fz[c] = false;
-        if (!frozen) { fzNo[c] = fzEpoch; return (false, false); }
-        return (true, off);
+        if (!frozen) { no[c] = fzEpoch; return 0; }
+        return 1 | off;
     }
 
-    (bool blocked, bool off) PullBlockedDir(int c, int d)
+    /// <summary>Go pullBlockedDir: 0 = not blocked, else 1 | (2 when a frozen box on the way is off its goal).</summary>
+    int PullBlockedDirB(int c, int d)
     {
         int x1 = c + d, x2 = c + 2 * d;
-        if (wall[x1] || wall[x2] || fz[x1] || fz[x2] || dist[x1] < 0) return (true, false);
-        if (occ[x1]) { var (f, o) = PullFrozen(x1); if (f) return (true, o); }
-        if (occ[x2]) { var (f, o) = PullFrozen(x2); if (f) return (true, o); }
-        return (false, false);
+        if (wall[x1] || wall[x2] || fz[x1] || fz[x2] || dist[x1] < 0) return 1;
+        byte* bk = blk;
+        if (bk[x1] != 0) { int f = PullFrozenB(x1); if ((f & 1) != 0) return 1 | (f & 2); }
+        if (bk[x2] != 0) { int f = PullFrozenB(x2); if ((f & 1) != 0) return 1 | (f & 2); }
+        return 0;
     }
 
     // ---- solution (Go pullTail / pullSolution / meet.Complete) ----------------------------------------------------------------------

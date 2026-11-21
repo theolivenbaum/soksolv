@@ -313,7 +313,27 @@ public sealed unsafe partial class FullSolver : IDisposable
         var ra = frKeepB = GC.AllocateArray<byte>(2 * cells, pinned: true);
         frRow = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref ra[0]); frCol = frRow + cells;
         for (int c = 0; c < cells; c++) { frRow[c] = (byte)(c / W); frCol[c] = (byte)(c % W); if (!wall[c]) frR[c / W] |= 1UL << (c % W); }
+        frFloorA = GC.AllocateArray<ulong>(frRows + 2, pinned: true);
+        frFloor = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref frFloorA[0]);
+        for (int c = 0; c < cells; c++) if (!wall[c]) frFloor[c / W] |= 1UL << (c % W);
     }
+    ulong[]? frFloorA; ulong* frFloor;   // static: floor (non-wall) cells per row
+
+    /// <summary>The 5x5 window around floor cell t as a bit set of box cells (bit (dy+2)*5+(dx+2), centre excluded); needs fbits, W &lt;= 62 and t at least 2 rows from the border rows.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    uint BoxWindow5(int t)
+    {
+        int r = frRow[t], c = frCol[t];
+        ulong* fr = frR; ulong* fl = frFloor;
+        uint win = 0;
+        win |= (uint)(((~fr[r - 2] & fl[r - 2]) << 2 >> c) & 31);
+        win |= (uint)(((~fr[r - 1] & fl[r - 1]) << 2 >> c) & 31) << 5;
+        win |= (uint)(((~fr[r] & fl[r]) << 2 >> c) & 31) << 10;
+        win |= (uint)(((~fr[r + 1] & fl[r + 1]) << 2 >> c) & 31) << 15;
+        win |= (uint)(((~fr[r + 2] & fl[r + 2]) << 2 >> c) & 31) << 20;
+        return win & ~(1u << 12);
+    }
+    bool WindowOk(int t) => fbits && W <= 62 && (uint)(frRow[t] - 2) < (uint)(frRows - 4);
     int packWords; ulong[]? frKeepA; byte[]? frKeepB; // keep the pinned arrays alive
 
     void SetOcc(int c, bool v)

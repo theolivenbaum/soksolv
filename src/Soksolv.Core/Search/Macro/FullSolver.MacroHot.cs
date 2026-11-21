@@ -201,6 +201,7 @@ public sealed unsafe partial class FullSolver
         return row;
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     static bool RowHits(ulong[] row, int fidx) => (row[fidx >> 6] >> (fidx & 63) & 1) != 0;
 
     // Per-node scratch (Go hotspotTable.counts/after): one cached row per box, the boxes' floor indices, and lazily
@@ -212,10 +213,12 @@ public sealed unsafe partial class FullSolver
     int hotBw, hotMgen = -1, hotN0, hotNBoxes; uint hotGen;
 
     /// <summary>Per box: number of other boxes its blocking would hurt. Readies the scratch used by HotAfter (call it for the same boxes, until the next HotCounts).</summary>
+    int[] hotCountsBuf = [];
     int[] HotCounts(ReadOnlySpan<int> boxes)
     {
         int nb = boxes.Length, nf = nodes.Fcell.Length, nw = Math.Max(1, nodes.Nw);
-        var counts = new int[nb];
+        var counts = hotCountsBuf.Length == nb ? hotCountsBuf : (hotCountsBuf = new int[nb]);   // the counts are only used while the node is open
+        Array.Clear(counts);
         if (hotNodeRows.Length < nb) { hotNodeRows = new ulong[]?[nb * 2]; hotNodeIdx = new int[nb * 2]; }
         if (hotPos == null) { hotPos = new ulong[nw]; hotMpos = new ulong[nw]; hotColGen = new uint[nf]; }
         Array.Clear(hotPos);
@@ -226,11 +229,15 @@ public sealed unsafe partial class FullSolver
             int fi = nodes.Fidx[boxes[i]]; hotNodeIdx[i] = fi;
             hotPos[fi >> 6] |= 1UL << (fi & 63);
         }
+        // counts[i] = other boxes whose floor index is in row i (rows never contain their own blocker, boxes are distinct)
+        var pos = hotPos;
         for (int i = 0; i < nb; i++)
         {
             var row = hotNodeRows[i]!;
-            for (int j = 0; j < nb; j++)
-                if (i != j && RowHits(row, hotNodeIdx[j])) counts[i]++;
+            int c = 0;
+            for (int w = 0; w < nw; w++) c += System.Numerics.BitOperations.PopCount(row[w] & pos[w]);
+            if (RowHits(row, hotNodeIdx[i])) c--;
+            counts[i] = c;
         }
         int bw = Math.Max((nb + 63) / 64, 1);
         if (bw != hotBw || hotCol == null)
@@ -251,8 +258,9 @@ public sealed unsafe partial class FullSolver
             hotColGen[x] = hotGen;
             var col = hotCol!;
             for (int w = 0; w < hotBw; w++) col[off + w] = 0;
+            int xw = x >> 6; ulong xb = 1UL << (x & 63);
             for (int i = 0; i < hotNBoxes; i++)
-                if (RowHits(hotNodeRows[i]!, x)) col[off + (i >> 6)] |= 1UL << (i & 63);
+                if ((hotNodeRows[i]![xw] & xb) != 0) col[off + (i >> 6)] |= 1UL << (i & 63);
         }
         return off;
     }

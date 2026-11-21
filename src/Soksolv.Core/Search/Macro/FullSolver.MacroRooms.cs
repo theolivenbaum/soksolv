@@ -25,6 +25,7 @@ public sealed unsafe partial class FullSolver
     int[] rmFlat = [], rmFbCell = [], rmFbKind = [], rmFbStartPin = [], rmRoomLen = [];
     int* rmLabP, rmRepP, rmDsuP, rmFlatP, rmFbCellP, rmFbKindP, rmFbStartP; ulong* rmTouchP, rmFragP; uint* rmRepStP;
     uint[] rmSeen = []; uint rmStamp; int[] rmQueue = [], rmStack = [];
+    int* rmCellP, rmStackP, rmCorrP, rmDirP; int[] rmCorrArr = [], rmDirArr = []; byte[] wallArr = []; byte* wallP;
 
     bool HasRooms => MacroStage >= 2 && rmRooms.Length > 0;
 
@@ -44,7 +45,7 @@ public sealed unsafe partial class FullSolver
                     if (c + d < parent.Length && parent[c + d] >= 0) parent[Root(c + d)] = Root(c);
         var count = new int[parent.Length];
         for (int c = 0; c < parent.Length; c++) if (parent[c] >= 0) count[Root(c)]++;
-        rmCell = new int[cells]; Array.Fill(rmCell, -1);
+        rmCell = GC.AllocateArray<int>(cells, pinned: true); Array.Fill(rmCell, -1);
         var ids = new Dictionary<int, int>(); var roomLists = new List<List<int>>();
         for (int c = 0; c < parent.Length; c++)
             if (parent[c] >= 0 && count[Root(c)] > 1)
@@ -115,7 +116,11 @@ public sealed unsafe partial class FullSolver
         rmDsuP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmDsu[0]); rmFragP = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFragTouch[0]);
         rmFlatP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFlat[0]); rmFbCellP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFbCell[0]);
         rmFbKindP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFbKind[0]); rmFbStartP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFbStartPin[0]);
-        rmSeen = new uint[cells]; rmQueue = new int[cells]; rmStack = new int[cells];
+        rmSeen = new uint[cells]; rmQueue = new int[cells]; rmStack = GC.AllocateArray<int>(cells, pinned: true);
+        rmCellP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmCell[0]); rmStackP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmStack[0]);
+        rmCorrArr = GC.AllocateArray<int>(Math.Max(1, rmCorr.Length), pinned: true); Array.Copy(rmCorr, rmCorrArr, rmCorr.Length); rmCorrP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmCorrArr[0]);
+        wallArr = GC.AllocateArray<byte>(cells, pinned: true); for (int c = 0; c < cells; c++) wallArr[c] = (byte)(wall[c] ? 1 : 0); wallP = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref wallArr[0]);
+        rmDirArr = GC.AllocateArray<int>(4, pinned: true); for (int di = 0; di < 4; di++) rmDirArr[di] = dirs[di]; rmDirP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmDirArr[0]);
         rmIn4 = new bool[cells];
         for (int c = 0; c < cells; c++)
         {
@@ -155,26 +160,28 @@ public sealed unsafe partial class FullSolver
 
     void LabelCorridors()
     {
-        int nw = rmNw;
-        foreach (int c in rmCorr) rmLab[c] = -1;
+        int nw = rmNw, nc = rmCorr.Length;
+        int* lab = rmLabP; int* rc = rmCellP; byte* bk = blk; int* stack = rmStackP; ulong* touch = rmTouchP; int* corr = rmCorrP; int* dp = rmDirP;
+        for (int i = 0; i < nc; i++) lab[corr[i]] = -1;
         int k = 0;
-        foreach (int c in rmCorr)
+        for (int ci = 0; ci < nc; ci++)
         {
-            if (occ[c] || rmLab[c] >= 0) continue;
+            int c = corr[ci];
+            if (bk[c] != 0 || lab[c] >= 0) continue;
             int tb = k * nw;
-            for (int w = 0; w < nw; w++) rmTouch[tb + w] = 0;
-            rmLab[c] = k;
-            int sp = 0; rmStack[sp++] = c;
+            for (int w = 0; w < nw; w++) touch[tb + w] = 0;
+            lab[c] = k;
+            int sp = 0; stack[sp++] = c;
             while (sp > 0)
             {
-                int x = rmStack[--sp];
-                foreach (int d in dirs)
+                int x = stack[--sp];
+                for (int di = 0; di < 4; di++)
                 {
-                    int y = x + d;
-                    if (wall[y]) continue;
-                    int cy = rmCell[y];
-                    if (cy >= 0) { if (!occ[y]) rmTouch[tb + (cy >> 6)] |= 1UL << (cy & 63); }
-                    else if (!occ[y] && rmLab[y] < 0) { rmLab[y] = k; rmStack[sp++] = y; }
+                    int y = x + dp[di];
+                    if (bk[y] != 0) continue;           // wall or box: neither joins the component nor touches a room
+                    int cy = rc[y];
+                    if (cy >= 0) touch[tb + (cy >> 6)] |= 1UL << (cy & 63);
+                    else if (lab[y] < 0) { lab[y] = k; stack[sp++] = y; }
                 }
             }
             k++;
@@ -402,28 +409,31 @@ public sealed unsafe partial class FullSolver
     void RmFlood(int c, ref int next, int k0)
     {
         int nw = rmNw, tb = next * nw;
-        for (int w = 0; w < nw; w++) rmTouch[tb + w] = 0;
+        int* lab = rmLabP; int* rc = rmCellP; byte* bk = blk; int* stack = rmStackP; ulong* touch = rmTouchP; int* dp = rmDirP;
+        for (int w = 0; w < nw; w++) touch[tb + w] = 0;
         if (rmUndoN + 2 > rmUndo.Length) Array.Resize(ref rmUndo, rmUndo.Length * 2);
-        rmUndo[rmUndoN++] = c; rmUndo[rmUndoN++] = rmLab[c];
-        rmLab[c] = next;
-        int sp = 0; rmStack[sp++] = c;
+        int[] undo = rmUndo; int un = rmUndoN;
+        undo[un++] = c; undo[un++] = lab[c];
+        lab[c] = next;
+        int sp = 0; stack[sp++] = c;
         while (sp > 0)
         {
-            int x = rmStack[--sp];
-            foreach (int d in dirs)
+            int x = stack[--sp];
+            for (int di = 0; di < 4; di++)
             {
-                int y = x + d;
-                if (wall[y] || occ[y]) continue;
-                int cy = rmCell[y];
-                if (cy >= 0) rmTouch[tb + (cy >> 6)] |= 1UL << (cy & 63);
-                else if (rmLab[y] < k0)
+                int y = x + dp[di];
+                if (bk[y] != 0) continue;
+                int cy = rc[y];
+                if (cy >= 0) touch[tb + (cy >> 6)] |= 1UL << (cy & 63);
+                else if (lab[y] < k0)
                 {
-                    if (rmUndoN + 2 > rmUndo.Length) Array.Resize(ref rmUndo, rmUndo.Length * 2);
-                    rmUndo[rmUndoN++] = y; rmUndo[rmUndoN++] = rmLab[y];
-                    rmLab[y] = next; rmStack[sp++] = y;
+                    if (un + 2 > undo.Length) { rmUndoN = un; Array.Resize(ref rmUndo, undo.Length * 2); undo = rmUndo; }
+                    undo[un++] = y; undo[un++] = lab[y];
+                    lab[y] = next; stack[sp++] = y;
                 }
             }
         }
+        rmUndoN = un;
         next++;
     }
 
@@ -445,42 +455,43 @@ public sealed unsafe partial class FullSolver
         int nw = rmNw;
         var aff = rmAff;
         for (int w = 0; w < nw; w++) aff[w] = 0;
+        int* rc = rmCellP; int* lab = rmLabP; byte* bk = blk; ulong* touch = rmTouchP; int* dp = rmDirP; byte* wl = wallP;
         for (int zi = 0; zi < 2; zi++)
         {
             int z = zi == 0 ? b : t;
-            int r0 = rmCell[z];
+            int r0 = rc[z];
             if (r0 >= 0) aff[r0 >> 6] |= 1UL << (r0 & 63);
-            foreach (int d in dirs)
+            for (int di = 0; di < 4; di++)
             {
-                int n = z + d;
-                if (wall[n]) continue;
-                int r = rmCell[n];
+                int n = z + dp[di];
+                if (wl[n] != 0) continue;
+                int r = rc[n];
                 if (r >= 0) aff[r >> 6] |= 1UL << (r & 63);
-                else { int k = rmLab[n]; if (k >= 0) for (int w = 0; w < nw; w++) aff[w] |= rmTouch[k * nw + w]; }
+                else { int k = lab[n]; if (k >= 0) for (int w = 0; w < nw; w++) aff[w] |= touch[k * nw + w]; }
             }
         }
         int k0 = rmK, next = k0;
         rmUndoN = 0;
-        if (rmCell[b] < 0) RmFlood(b, ref next, k0);
+        if (rc[b] < 0) RmFlood(b, ref next, k0);
         for (int zi = 0; zi < 2; zi++)
         {
             int z = zi == 0 ? b : t;
-            foreach (int d in dirs)
+            for (int di = 0; di < 4; di++)
             {
-                int n = z + d;
-                if (!wall[n] && !occ[n] && rmCell[n] < 0 && rmLab[n] < k0) RmFlood(n, ref next, k0);
+                int n = z + dp[di];
+                if (bk[n] == 0 && rc[n] < 0 && lab[n] < k0) RmFlood(n, ref next, k0);
             }
         }
         for (int zi = 0; zi < 2; zi++)
         {
             int z = zi == 0 ? b : t;
-            foreach (int d in dirs)
+            for (int di = 0; di < 4; di++)
             {
-                int n = z + d;
-                if (!wall[n] && !occ[n] && rmCell[n] < 0)
+                int n = z + dp[di];
+                if (bk[n] == 0 && rc[n] < 0)
                 {
-                    int k = rmLab[n];
-                    for (int w = 0; w < nw; w++) aff[w] |= rmTouch[k * nw + w];
+                    int k = lab[n];
+                    for (int w = 0; w < nw; w++) aff[w] |= touch[k * nw + w];
                 }
             }
         }
@@ -491,7 +502,7 @@ public sealed unsafe partial class FullSolver
                 int r = w << 6 | BitOperations.TrailingZeroCount(v);
                 total += RoomBroken(r) - rmShare[r];
             }
-        for (int i = rmUndoN - 2; i >= 0; i -= 2) rmLab[rmUndo[i]] = rmUndo[i + 1];
+        { int[] undo = rmUndo; for (int i = rmUndoN - 2; i >= 0; i -= 2) lab[undo[i]] = undo[i + 1]; }
         rmK = k0;
         if (CheckRooms)
         {

@@ -10,7 +10,8 @@ public sealed unsafe partial class FullSolver
     // novelty lane (Go exp-192/194/289): per-FESS-cell novelty memory
     const bool AccessNovelty = true, Novelty2 = true;
     readonly List<ulong[]?> mNovSeen = new(), mNovPushSeen = new();
-    readonly HashSet<ulong> mNovPairs = new(), mNovAccess = new();
+    readonly FlatSet64 mNovAccess = new();
+    PairBook? mNovBook; nint[] mNovRows = new nint[64];
     readonly List<ulong> mNovWords = new(), mNovT0 = new(), mNovT1 = new();
     long mParentSpread; bool mParentFrozen;
     int mOpenId, mOpenCands, mParentOop, mParentRoom, mParentConn, mParentPackedF; uint mOpenSt; int[]? mHotCounts;
@@ -39,7 +40,7 @@ public sealed unsafe partial class FullSolver
             int p0 = mRevP;
             if (p0 >= 0 && maux[p0].Bucket == maux[id].Bucket) { mPB0 = nodes.From(id); mPT0 = maux[id].PushTo; mPPlayer = nodes.Player(p0); }
         }
-        int parentPacked = MPacked();
+        int parentPacked = MPackedBoxes(cur);
         int parentConn = maux[id].Reg;
         mCmdMask = 0; mUnpinMask = 0;
         long tdl = Prof.Start();
@@ -55,6 +56,7 @@ public sealed unsafe partial class FullSolver
         Prof.Stop(24, tdl);
         mParentConn = parentConn; mParentPackedF = parentPacked;
         long trc = Prof.Start();
+        if (CandMemoOn || pull) { ulong bh = 0; foreach (int bx in cur) bh ^= nodes.ZBox(bx); mBoxHash = bh; }
         int parentRoom = pfOn ? 0 : MRoomConnParent();
         int parentOop = pfOn ? 0 : MOutOfPlan(cur);
         Prof.Stop(27, trc);
@@ -292,8 +294,11 @@ public sealed unsafe partial class FullSolver
         }
         if (noveltyN > 0) MNoveltyBlock(id, cur, nm, noveltyN, parentConn);
         bool useTier = noveltyN > 0 && AccessNovelty;
+        if (!pfOn && TryPackedSort(nm, useTier)) { }
+        else {
         for (int k = 0; k < nm; k++) mKeys[k] = new MKey { Tier = useTier ? mCands[k].Tier : 0, Bad = Feat(6) && mCands[k].RevBad ? 1 : 0, W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = pfOn ? mCands[k].B : mCands[k].Plen, Y = pfOn ? mCands[k].T : 0, Idx = k };
         MSortKeys(nm);
+        }
         int off = (int)Math.Min(maux[id].MvOff, (uint)nm);
         int win = nm - off;
         if (MoveWindow > 0 && win > MoveWindow) win = MoveWindow;
@@ -301,7 +306,7 @@ public sealed unsafe partial class FullSolver
         {
             int k = mKeys[j].Idx;
             ref var m = ref mCands[k];
-            ulong word = (ulong)m.I | (ulong)m.T << 15 | (ulong)mWeights[k] << 30 | (ulong)m.Side << 31 | (ulong)m.R << 33;
+            ulong word = (ulong)m.I | (ulong)m.T << 15 | (ulong)mWeights[k] << 30 | (ulong)m.Side << 31 | (ulong)m.R << 33 | (m.Plen < 0x8000 ? (ulong)m.Plen << 48 : 0UL);
             mmv.Add(m.AlreadyUsed ? word | MMoveUsed : word);
             mmvScore.Add(new MoveScore { Oop = (ushort)m.Oop, Packed = (ushort)m.Packed, Conn = (ushort)m.R, Hot = (ushort)Math.Min(m.Hot, 65535), Room = (uint)m.Room, Mobility = (uint)m.Mobility });
         }
@@ -325,6 +330,13 @@ public sealed unsafe partial class FullSolver
                 while (mNovPushSeen.Count <= bk) mNovPushSeen.Add(null);
                 pushSeen = mNovPushSeen[bk] ??= new ulong[(4 * cells + 63) / 64];
             }
+            ulong hiKey = (ulong)bk << 20;
+            if (Novelty2)
+            {
+                mNovBook ??= new PairBook(nodes.Nw);
+                if (mNovRows.Length < cur.Length) mNovRows = new nint[cur.Length * 2];
+                for (int j = 0; j < cur.Length; j++) mNovRows[j] = (nint)mNovBook.Find(hiKey | (uint)cur[j]);
+            }
             int nov = 0, nwd = (nm + 63) / 64, novOff = mNovWords.Count;
             for (int x = 0; x < nwd; x++) { mNovWords.Add(0); if (AccessNovelty) { mNovT0.Add(0); mNovT1.Add(0); } }
             maux[id].NovOffset = novOff + 1;
@@ -332,17 +344,11 @@ public sealed unsafe partial class FullSolver
             {
                 ref var m = ref mCands[k];
                 int w = m.T / 64; ulong bit = 1UL << (m.T % 64);
-                bool w1Novel = (seen[w] & bit) == 0, w2Novel = false;
-                if (Novelty2)
-                    for (int j = 0; j < cur.Length; j++)
-                    {
-                        if (j == m.I) continue;
-                        int a = m.T, c = cur[j];
-                        if (a > c) (a, c) = (c, a);
-                        if (!mNovPairs.Contains((ulong)bk << 40 | (ulong)a << 20 | (ulong)c)) { w2Novel = true; break; }
-                    }
+                // the novelty facts only matter for a move that can still take a free slot (budget left, not a rev-group undo)
+                bool canNovel = nov < novelty && !(Feat(6) && m.RevBad);
+                bool w1Novel = canNovel && (seen[w] & bit) == 0, w2Novel = false;
                 bool accessNovel = false;
-                if (AccessNovelty && m.AccLen > 0)
+                if (canNovel && AccessNovelty && m.AccLen > 0)
                     for (int e = m.AccStart; e < m.AccStart + m.AccLen; e++)
                     {
                         ulong raw = mAccBuf[e];
@@ -350,19 +356,35 @@ public sealed unsafe partial class FullSolver
                         if (tag == 0) { if ((pushSeen![raw / 64] & 1UL << (int)(raw % 64)) == 0) { accessNovel = true; break; } }
                         else if (!mNovAccess.Contains((ulong)bk << 44 | raw)) { accessNovel = true; break; }
                     }
+                if (canNovel && Novelty2 && !w1Novel && !accessNovel)   // the pair test only decides when neither of the others already made the move novel
+                {
+                    // one bit test per box in the box's row of the book: pair {T, c} seen <=> bit floorIdx(T) in row(bk, c)
+                    int ft = nodes.Fidx[m.T], fw = ft >> 6; ulong fbit = 1UL << (ft & 63);
+                    for (int j = 0; j < cur.Length; j++)
+                    {
+                        if (j == m.I) continue;
+                        ulong* row = (ulong*)mNovRows[j];
+                        if (row == null || (row[fw] & fbit) == 0) { w2Novel = true; break; }
+                    }
+                }
                 bool novel = w1Novel || w2Novel || accessNovel;
-                if (Feat(6) && m.RevBad) novel = false;
-                if (novel && nov < novelty)
+                if (novel)
                 {
                     seen[w] |= bit;
                     if (Novelty2)
+                    {
+                        int ft = nodes.Fidx[m.T];
+                        ulong* trow = mNovBook!.GetOrAdd(hiKey | (uint)m.T);
                         for (int j = 0; j < cur.Length; j++)
                         {
                             if (j == m.I) continue;
-                            int a = m.T, c = cur[j];
-                            if (a > c) (a, c) = (c, a);
-                            mNovPairs.Add((ulong)bk << 40 | (ulong)a << 20 | (ulong)c);
+                            ulong* xr = (ulong*)mNovRows[j];
+                            if (xr == null) { xr = mNovBook.GetOrAdd(hiKey | (uint)cur[j]); mNovRows[j] = (nint)xr; }
+                            xr[ft >> 6] |= 1UL << (ft & 63);
+                            int fx = nodes.Fidx[cur[j]];
+                            trow[fx >> 6] |= 1UL << (fx & 63);
                         }
+                    }
                     if (AccessNovelty && m.AccLen > 0)
                         for (int e = m.AccStart; e < m.AccStart + m.AccLen; e++)
                         {
@@ -435,6 +457,56 @@ public sealed unsafe partial class FullSolver
         return x.Idx < y.Idx ? -1 : 1;
     }
 
+    struct PKey { public ulong Hi, Lo; public int Idx; }
+    PKey[] mPKey = new PKey[64], mPKeyTmp = new PKey[64];
+
+    /// <summary>
+    /// The move order of MKeyCmp on two packed words (high: bad, weight, tier, oop, -packed, conn; low: room, hot, -mobility, path length) with the
+    /// candidate index as the last tie-break. Only when every field fits its 14/16-bit lane; false = use the general comparator.
+    /// Result: mKeys[0..nm).Idx in sorted order.
+    /// </summary>
+    bool TryPackedSort(int nm, bool useTier)
+    {
+        if (mPKey.Length < nm) { mPKey = new PKey[nm * 2]; mPKeyTmp = new PKey[nm * 2]; }
+        var a = mPKey; bool f6 = Feat(6);
+        for (int k = 0; k < nm; k++)
+        {
+            ref var m = ref mCands[k];
+            int tier = useTier ? m.Tier : 0, w = mWeights[k];
+            if ((uint)w > 3 || (uint)tier > 3 || (uint)m.Oop > 0x3FFF || (uint)m.Packed > 0xFFFF || (uint)m.R > 0xFFFF || (uint)m.Room > 0xFFFF
+                || (uint)m.Hot > 0xFFFF || (uint)m.Mobility > 0xFFFF || (uint)m.Plen > 0xFFFF) return false;
+            a[k].Hi = (f6 && m.RevBad ? 1UL << 50 : 0UL) | (ulong)w << 48 | (ulong)tier << 46 | (ulong)m.Oop << 32 | (ulong)(0xFFFF - m.Packed) << 16 | (ulong)m.R;
+            a[k].Lo = (ulong)m.Room << 48 | (ulong)m.Hot << 32 | (ulong)(0xFFFF - m.Mobility) << 16 | (ulong)m.Plen;
+            a[k].Idx = k;
+        }
+        var src = a; var dst = mPKeyTmp;
+        for (int i = 0; i < nm; i += 8)
+        {
+            int e = Math.Min(i + 8, nm);
+            for (int j = i + 1; j < e; j++)
+            {
+                var x = src[j]; int k = j - 1;
+                while (k >= i && PLess(x, src[k])) { src[k + 1] = src[k]; k--; }
+                src[k + 1] = x;
+            }
+        }
+        for (int w = 8; w < nm; w <<= 1)
+        {
+            for (int lo = 0; lo < nm; lo += 2 * w)
+            {
+                int mid = Math.Min(lo + w, nm), hi = Math.Min(lo + 2 * w, nm), i = lo, j = mid, o = lo;
+                while (i < mid && j < hi) dst[o++] = PLess(src[j], src[i]) ? src[j++] : src[i++];
+                while (i < mid) dst[o++] = src[i++];
+                while (j < hi) dst[o++] = src[j++];
+            }
+            (src, dst) = (dst, src);
+        }
+        for (int j = 0; j < nm; j++) mKeys[j].Idx = src[j].Idx;
+        return true;
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    static bool PLess(in PKey x, in PKey y) => x.Hi != y.Hi ? x.Hi < y.Hi : x.Lo != y.Lo ? x.Lo < y.Lo : x.Idx < y.Idx;
+
     MKey[] mKeyTmp = [];
     /// <summary>Bottom-up merge sort of mKeys[0..n) (a total order: Idx breaks ties), no delegate.</summary>
     void MSortKeys(int n)
@@ -494,10 +566,21 @@ public sealed unsafe partial class FullSolver
         if (dead == 0)
         {
             stats.Generated++;
-            int plen = 1;
-            for (int x = mbprev[k]; x >= 0; x = mbprev[x]) plen++;
+            int plen = mbdep[k];
             tp = Prof.Start();
-            int r = MChildRegionCount(t, ++mOpenCands);
+            CandMemo* cm = null;
+            if (CandMemoOn)
+            {
+                ulong ck = mBoxHash ^ nodes.ZBox(cur[i]) ^ nodes.ZBox(t);
+                cm = CandMemoSlot(ck);
+            }
+            int r;
+            if (cm != null && cm->R != 0xFFFF) { r = cm->R; ++mOpenCands; }
+            else
+            {
+                r = MChildRegionCount(t, ++mOpenCands);
+                if (cm != null && r < 0xFFFF) cm->R = (ushort)r;
+            }
             Prof.Stop(4, tp);
             if (tgtPocket != null && r > 1) r = RegionsRel(); // exp-460: regions relative to the target (occ holds the child)
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
@@ -506,13 +589,22 @@ public sealed unsafe partial class FullSolver
             var (mob, expl, accS, accL) = MacroStage >= 5 && !pfOn ? MMoveAccess(cur, i, t) : (0, false, 0, 0);
             Prof.Stop(3, tp);
             tp = Prof.Start();
-            int room = pfOn || hfRank ? 0 : t == cur[i] ? mParentRoom : MRoomConnChild(cur[i], t), packed, oop, progress = -2;
+            int room, packed, oop, progress = -2;
+            if (pfOn || hfRank) room = 0;
+            else if (t == cur[i]) room = mParentRoom;
+            else if (cm != null && cm->Room >= 0) room = cm->Room;
+            else { room = MRoomConnChild(cur[i], t); if (cm != null) cm->Room = room; }
             Prof.Stop(1, tp);
             if (mPlan != null)
             {
-                var (cphase, cpacked) = mPlan.ChildStatus(cur[i], t);
-                packed = mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.PackedChild(occ, cur[i], t, mPlan.FestMiss) : cpacked; progress = cphase;
-                oop = MOutOfPlanChild(cur, cphase, i, t);
+                if (cm != null && cm->Phase != short.MinValue) { progress = cm->Phase; packed = cm->Packed; oop = cm->Oop; }
+                else
+                {
+                    var (cphase, cpacked) = mPlan.ChildStatus(cur[i], t);
+                    packed = mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.PackedChild(occ, cur[i], t, mPlan.FestMiss) : cpacked; progress = cphase;
+                    oop = MOutOfPlanChild(cur, cphase, i, t);
+                    if (cm != null && cphase > short.MinValue && cphase <= short.MaxValue && packed >= 0 && packed < 0xFFFF && oop >= 0 && oop < 0xFFFF) { cm->Phase = (short)cphase; cm->Packed = (ushort)packed; cm->Oop = (ushort)oop; }
+                }
             }
             else { packed = pull ? (int)((mParentSpread - spreadDist[cur[i]] + spreadDist[t]) / SpreadBucket) : MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
             if (mCmdMask != 0 && dl != null && r <= mParentConn)
@@ -598,7 +690,7 @@ public sealed unsafe partial class FullSolver
                     if (mRevExits.Contains(cExit)) cGroupDup = true; else cDistinct = true;
                 }
             }
-            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, AlreadyUsed = cAlready, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
+            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, Stored = cStored, AlreadyUsed = cAlready, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = hotOverride >= 0 ? hotOverride : mHotCounts != null ? HotAfterMemo(cm, cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
         }
         SetOcc(t, false);
         return true;
@@ -624,7 +716,7 @@ public sealed unsafe partial class FullSolver
     {
         if (pull) // the dead-square table (pull distance to a start square) already filtered t; the push deadlock family does not apply
         {
-            if (PullFreezeDead(t)) { stats.Freeze++; return 2; }
+            if (PullFreezeMemo(cur[i], t)) { stats.Freeze++; return 2; }
             if (pfOn && PfInefficient(t, cur[i])) return 10; // exp-696
             return 0;
         }
@@ -679,15 +771,21 @@ public sealed unsafe partial class FullSolver
         mLastAdded = -1;
         int i = (int)(m & 0x7FFF), t = (int)(m >> 15 & 0x7FFF), wd = (int)(m >> 30 & 1), r = (int)(m >> 33 & 0x7FFF), side = (int)(m >> 31 & 3);
         int b = cur[i];
-        var seq = MBoxPathTo(b, t, st, side, cur);
         ch = h;
-        if (seq.Count == 0) return -1;
-        var last = seq[^1];
+        // the move word carries the path length of the box search that generated it (the last push direction is `side`): no second box search
+        int plenW = (int)(m >> 48 & 0x7FFF), pathLen, lastDir;
+        if (plenW > 0) { pathLen = plenW; lastDir = side; }
+        else
+        {
+            var seq = MBoxPathTo(b, t, st, side, cur);
+            if (seq.Count == 0) return -1;
+            pathLen = seq.Count; lastDir = seq[^1].Dir;
+        }
         cur.AsSpan().CopyTo(child);
         child[i] = t;
         SortUtil.Insertion(child);
         SetOcc(b, false); SetOcc(t, true);
-        int sideC = PlayerAfter(t, dirs[last.Dir]);
+        int sideC = PlayerAfter(t, dirs[lastDir]);
         int np = Reach(sideC, mark2);
         long tcl = Prof.Start();
         bool clDead = cl != null && cl.Dead(occ, t, sideC, mark2, stamp, -1);
@@ -713,7 +811,7 @@ public sealed unsafe partial class FullSolver
         for (int x = 0; x < nodes.Nw; x++) ckey[x] = pk[x];
         ulong zh = parentHash ^ nodes.ZPlayer(nodes.Player(id)) ^ nodes.ZPlayer(np);
         if (b != t) { Flip(b); Flip(t); zh ^= nodes.ZBox(b) ^ nodes.ZBox(t); }
-        int cid = MAdd(zh, np, id, b, t, last.Dir, nodes.G(id) + seq.Count, ch, w, r, child);
+        int cid = MAdd(zh, np, id, b, t, lastDir, nodes.G(id) + pathLen, ch, w, r, child);
         SetOcc(t, false); SetOcc(b, true);
         return cid;
     }
@@ -802,7 +900,9 @@ public sealed unsafe partial class FullSolver
             long tap = Prof.Start();
             hfAddDist = hfRank ? mmvScore[(int)e.Move].Hot : -1;
             if (pfOn) { var ms = mmvScore[(int)e.Move]; pfNext = PfFest.Tuple.FromMove(ms.Oop, (int)ms.Room, ms.Hot, (int)ms.Mobility); pfHave = true; }
+            mAddRoom = pfOn || hfRank ? -1 : (int)mmvScore[(int)e.Move].Room;
             int cid = MApply(id, mv & ~MMoveUsed, cur, child, h, st, parentHash, out int ch);
+            mAddRoom = -1;
             hfAddDist = -1; pfHave = false;
             Prof.Stop(9, tap);
             if (s1On) S1Step(expanded, id, (int)(e.Move - maux[id].MvStart), cid);
@@ -914,6 +1014,44 @@ public sealed unsafe partial class FullSolver
         }
         for (int c = 0; c < cells; c++) if (occ[c]) SetOcc(c, false);
         return sb.ToString();
+    }
+
+    int HotAfterMemo(CandMemo* cm, ReadOnlySpan<int> cur, int i, int t)
+    {
+        if (cm == null) return HotAfterP(cur, i, t);
+        if (cm->Hot != 0xFFFF) return cm->Hot;
+        int h = HotAfterP(cur, i, t);
+        if (h < 0xFFFF) cm->Hot = (ushort)h;
+        return h;
+    }
+
+    // the freeze proof of a pulled box is a pure function of (child box set, t): remembered by the Zobrist hash of both (bit 0 = verdict)
+    ulong* fzMemo; const int FzMemoBits = 17;
+    bool PullFreezeMemo(int b, int t)
+    {
+        if (CandMemoOff) return PullFreezeDead(t);
+        if (fzMemo == null) fzMemo = (ulong*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(8 << FzMemoBits));
+        ulong key = (mBoxHash ^ nodes.ZBox(b) ^ nodes.ZBox(t) ^ ((ulong)t + 1) * 0x9E3779B97F4A7C15UL) | 2;   // bit 1 marks an entry
+        ulong* e = fzMemo + ((int)(key >> 41) & ((1 << FzMemoBits) - 1));
+        ulong v = *e;
+        if ((v ^ key) >> 1 == 0 && (v & 2) != 0) return (v & 1) != 0;
+        bool dead = PullFreezeDead(t);
+        *e = (key & ~1UL) | (dead ? 1UL : 0UL);
+        return dead;
+    }
+
+    // ---- candidate memo: region count, room connectivity and hotspot count of a child are pure functions of its box set (and the static level), keyed by the xor of the Zobrist box keys ----
+    struct CandMemo { public ulong Key; public int Room; public ushort R, Hot, Packed, Oop; public short Phase; }
+    const int CandMemoBits = 16;
+    CandMemo* candMemo; ulong mBoxHash;
+    bool CandMemoOn => !pfOn && !hfRank && tgtPocket == null && !CandMemoOff;
+    static readonly bool CandMemoOff = Environment.GetEnvironmentVariable("SOKSOLV_CANDMEMO_OFF") == "1";
+    CandMemo* CandMemoSlot(ulong key)
+    {
+        if (candMemo == null) candMemo = (CandMemo*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(sizeof(CandMemo) << CandMemoBits));
+        CandMemo* e = candMemo + ((int)(key >> 40) & ((1 << CandMemoBits) - 1));
+        if (e->Key != key) { e->Key = key; e->Room = -1; e->R = 0xFFFF; e->Hot = 0xFFFF; e->Phase = short.MinValue; }
+        return e;
     }
 
     int HotAfterP(ReadOnlySpan<int> cur, int i, int t) { long tp = Prof.Start(); int h = HotAfter(cur, mHotCounts!, i, t); Prof.Stop(2, tp); return h; }

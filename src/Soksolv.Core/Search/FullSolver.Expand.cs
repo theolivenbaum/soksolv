@@ -698,8 +698,11 @@ public sealed unsafe partial class FullSolver
         while (side < 4 && t + dirs[side] != from) side++;
         if (side == 4) return false;
         int baseI = t * np;
+        bool win = WindowOk(t);
+        uint wm = win ? BoxWindow5(t) : 0;
         for (int k = 0; k < np; k++)
         {
+            if (win) { if (wm == 0) break; int j = System.Numerics.BitOperations.TrailingZeroCount(wm); k = j < 12 ? j : j - 1; wm &= wm - 1; }
             int x = t + poff[k];
             if (x < 0 || x >= cells || !occ[x] || x == from || (goal[t] && goal[x])) continue;
             ref sbyte v = ref pairSide[(baseI + k) * 4 + side];
@@ -720,6 +723,26 @@ public sealed unsafe partial class FullSolver
         if (goal[t] || dist[t] < 0) return false;
         int np = poff.Length;
         int baseI = t * np;
+        if (WindowOk(t))
+        {
+            // only the boxes inside the 5x5 window matter: walk the set bits of the window mask (same ascending order as the offset list)
+            for (uint m = BoxWindow5(t); m != 0; m &= m - 1)
+            {
+                int j = System.Numerics.BitOperations.TrailingZeroCount(m), k = j < 12 ? j : j - 1;
+                int x = t + poff[k];
+                sbyte v = dpair[baseI + k];
+                if (v == 0)
+                {
+                    stats.PairsTried++;
+                    v = 2;
+                    if (PairDead(t, x)) { v = 1; stats.PairsDead++; }
+                    dpair[baseI + k] = v;
+                    dpair[x * np + popp[k]] = v;
+                }
+                if (v == 1) return true;
+            }
+            return false;
+        }
         for (int k = 0; k < np; k++)
         {
             int x = t + poff[k];

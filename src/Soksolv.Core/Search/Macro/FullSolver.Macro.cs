@@ -26,7 +26,7 @@ public sealed unsafe partial class FullSolver
     int mNext, mTurn, mBest = -1, mLastAdded = -1, mReopen = -1, mRetargetNodes;
     bool mCancelled, mSetupDone, mStarted;
     long mExpandedN, mNodeLimit;
-    uint[] m3 = [], mpost = [], mseen = [], mtseen = []; int[] mbprev = [], mbq = [];
+    uint[] m3 = [], mpost = [], mseen = [], mtseen = []; int[] mbprev = [], mbdep = [], mbq = [];   // mbdep: number of pushes on the BFS path to a state
     uint mpstamp, mbstamp, mtst; int mCandNP;
     uint* m3P;
     int[] mCur = [], mChild = [];
@@ -118,7 +118,7 @@ public sealed unsafe partial class FullSolver
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
         m3P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref m3[0]);
         mpost = new uint[4 * cells]; mseen = new uint[4 * cells]; mtseen = new uint[4 * cells];
-        mbprev = new int[4 * cells]; mbq = new int[4 * cells + 4];
+        mbprev = new int[4 * cells]; mbdep = new int[4 * cells]; mbq = new int[4 * cells + 4];
         mCur = new int[n]; mChild = new int[n];
         }
         var res = MacroSearch(timeLimitSec, sw);
@@ -172,6 +172,15 @@ public sealed unsafe partial class FullSolver
     }
 
     /// <summary>Boxes on goals (no sink plan: Go packedWith with plan == nil).</summary>
+    /// <summary>MPacked() of the board holding exactly these boxes (pull: a sum over the boxes instead of a scan of every floor cell).</summary>
+    int MPackedBoxes(ReadOnlySpan<int> boxes)
+    {
+        if (!pull) return MPacked();
+        long sp = 0;
+        foreach (int b in boxes) sp += spreadDist[b];
+        return (int)(sp / SpreadBucket);
+    }
+
     int MPacked()
     {
         if (pull) // Festival's backward HF order: progress is how far the boxes have spread from the goals
@@ -211,6 +220,14 @@ public sealed unsafe partial class FullSolver
             if (--n2 < 0) return true;
         }
         return false;
+    }
+
+    /// <summary>Room connectivity of the candidate being applied, already computed (incrementally) when the move was generated; -1 = compute.</summary>
+    int mAddRoom = -1;
+    int MAddRoomChecked(ReadOnlySpan<int> boxes)
+    {
+        if (CheckRooms) { int want = MRoomConnectivity(); if (want != mAddRoom) throw new InvalidOperationException($"stored room {mAddRoom} != full {want}"); }
+        return mAddRoom;
     }
 
     int MAdd(ulong zh, int player, int parent, int from, int to, int dir, int g, int h, int w, int reg, ReadOnlySpan<int> boxes)
@@ -282,7 +299,7 @@ public sealed unsafe partial class FullSolver
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = RegionsRel();
         var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
-                          : new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
+                          : new FeatureCell(MPackedBoxes(boxes), reg, mAddRoom >= 0 ? MAddRoomChecked(boxes) : MRoomConnectivity(), MOutOfPlan(boxes));
         int bucket = pfOn ? PfAdd(boxes, parent, reg) : hfRank && opt.HfFestSched ? HfSchedAdd(boxes, cell, parent, reg) : Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
         if (nodes.NeedsGrow) nodes.Grow();
@@ -508,7 +525,7 @@ public sealed unsafe partial class FullSolver
         for (int di = 0; di < 4; di++)
         {
             int d = dirs[di];
-            if (mark[Front(b, d)] == st && (!pull || !wall[b + 2 * d] && !occ[b + 2 * d])) { int k = b * 4 + di; mseen[k] = bs; mbprev[k] = -1; mbq[qn++] = k; }
+            if (mark[Front(b, d)] == st && (!pull || !wall[b + 2 * d] && !occ[b + 2 * d])) { int k = b * 4 + di; mseen[k] = bs; mbprev[k] = -1; mbdep[k] = 1; mbq[qn++] = k; }
         }
         bool bbOnLocal = BbEnsure(), bbBuilt = false; int pushes = 0;
         bool node = bbOnLocal && bbNode;
@@ -531,7 +548,7 @@ public sealed unsafe partial class FullSolver
                 if (wall[nc] || occ[nc] || dist[nc] < 0) continue;
                 if (pull) { int pd = nc + dirs[di]; if (wall[pd] || occ[pd]) continue; } // the pulling player needs room to step back
                 if (mpost[nc * 4 + di] == bs) continue;
-                SetOcc(nc, true);
+                if (!node) SetOcc(nc, true);   // the row flood of a node search reads only the free rows
                 uint ps = ++mpstamp;
                 int pc = PlayerAfter(nc, dirs[di]);
                 int minC;
@@ -557,7 +574,7 @@ public sealed unsafe partial class FullSolver
                 }
                 pushes++;
                 mCandNP = minC;
-                SetOcc(nc, false);
+                if (!node) SetOcc(nc, false);
                 if (pathMode)
                 {
                     if (nc == pathT && (pathSide < 0 || (k & 3) == pathSide))
@@ -576,7 +593,7 @@ public sealed unsafe partial class FullSolver
                     if (mBitsOnly ? InPR(Front(nc, dirs[d2i])) : m3[Front(nc, dirs[d2i])] == ps)
                     {
                         mpost[k2] = bs;
-                        if (mseen[k2] != bs) { mseen[k2] = bs; mbprev[k2] = k; mbq[qn++] = k2; }
+                        if (mseen[k2] != bs) { mseen[k2] = bs; mbprev[k2] = k; mbdep[k2] = mbdep[k] + 1; mbq[qn++] = k2; }
                     }
                 }
             }
