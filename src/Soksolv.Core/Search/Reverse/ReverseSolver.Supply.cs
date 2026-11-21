@@ -204,6 +204,20 @@ public sealed unsafe class Supply : IDisposable
             for (int m = cm; m != 0; m &= m - 1) { nint c = nv[BitOperations.TrailingZeroCount(m)]; pc[c] = (byte)((pc[c] & 0xF0) | e0); }
             return;
         }
+        {
+            int pm2 = (disc[nv[0]] != 0xFFFF ? 1 : 0) | (disc[nv[1]] != 0xFFFF ? 2 : 0) | (disc[nv[2]] != 0xFFFF ? 4 : 0) | (disc[nv[3]] != 0xFFFF ? 8 : 0);
+            if (BitOperations.PopCount((uint)pm2) == 2)
+            {
+                // a cut vertex with two neighbours: they lie in different pieces, each its own canonical piece
+                int k1 = BitOperations.TrailingZeroCount(pm2), k2 = BitOperations.TrailingZeroCount(pm2 & (pm2 - 1));
+                cn[v] = (ushort)(0xFFFF & ~(0xFu << (4 * k1)) & ~(0xFu << (4 * k2)) | ((uint)k1 << (4 * k1)) | ((uint)k2 << (4 * k2)));
+                int up2 = 7;
+                if (pv != 0xFFFF) up2 = nv[k1] == pv ? k1 : k2;
+                pc[v] = (byte)(up2 << 4);
+                for (int m = cm; m != 0; m &= m - 1) { int c4 = BitOperations.TrailingZeroCount(m); nint c = nv[c4]; pc[c] = (byte)((pc[c] & 0xF0) | c4); }
+                return;
+            }
+        }
         int* lab = stackalloc int[8]; int* can = lab + 4;
         // piece code of each neighbour: -1 absent, 0 parent side, k+1 separate child subtree in direction k
         for (int kk = 0; kk < 4; kk++)
