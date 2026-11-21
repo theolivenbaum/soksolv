@@ -6,9 +6,6 @@ namespace Soksolv.Search;
 public sealed unsafe partial class FullSolver
 {
     // ---- step stubs (filled in by later fa2 steps) ----------------------------------------------------------------------------------
-    int Fa2RoomsChild(int b, int t) => 0;
-    void Fa2RoomsParent() { }
-    int Fa2RoomsNow() => 0;
     void Fa2HallParent(int[] cur, int id) { }
     void Fa2HallChild(int[] cur, ref Fa2Cand c, int i, int b, int np) { }
     void Fa2HallRoot(int[] cur, ref int pk, int np) { }
