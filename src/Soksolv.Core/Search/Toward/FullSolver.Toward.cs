@@ -1,4 +1,5 @@
 using Soksolv.Model;
+using Soksolv.Search.Macro;
 using Soksolv.Search.Meet;
 
 namespace Soksolv.Search;
@@ -139,6 +140,39 @@ public sealed unsafe partial class FullSolver
         string tail = MeetNet.Complete(wall, lv.W, tgtFull!.Boxes, at, tgtFull.Tail);
         string sol = prefix + tail;
         return (tail.Length > 0 || tgtFull.Tail.Length == 0) && Verifier.Check(rows, sol) == null ? sol : null;
+    }
+
+    // ---- Festival's HF scheduling (Go hfsched.go): every node keeps its own HF tuple and the best on its path ----------------------
+    public struct HfTuple { public bool Inf; public int Reg, On, Hot, Dist; }
+    readonly ChunkList<HfTuple> hfOwn = new(), hfBest = new();
+    int hfAddDist = -1; // predicted matching distance of the move being applied (Go addHF); -1: none
+
+    static bool HfBetter(in HfTuple a, in HfTuple b)
+    {
+        if (a.Inf != b.Inf) return !a.Inf;
+        if (a.Reg != b.Reg) return a.Reg < b.Reg;
+        if (a.On != b.On) return a.On > b.On;
+        if (a.Hot != b.Hot) return a.Hot < b.Hot;
+        return a.Dist < b.Dist;
+    }
+
+    int HfSchedAdd(ReadOnlySpan<int> boxes, in FeatureCell cell, int parent, int reg)
+    {
+        int dist = hfAddDist;
+        if (dist < 0) dist = Math.Min(MatchDist(boxes), 65535);
+        var own = new HfTuple { Inf = dist >= 65535, Reg = reg, On = cell.Packed, Hot = cell.Connectivity, Dist = dist };
+        var best = own;
+        if (parent >= 0 && parent < hfBest.Count && !HfBetter(own, hfBest[parent])) best = hfBest[parent];
+        hfOwn.Add(own); hfBest.Add(best);
+        return Project(new FeatureCell(best.On, 0, 0, best.Reg), -1);
+    }
+
+    int HfSchedReparent(int id, int parent)
+    {
+        var best = hfOwn[id];
+        if (parent >= 0 && parent < hfBest.Count && !HfBetter(best, hfBest[parent])) best = hfBest[parent];
+        hfBest[id] = best;
+        return Project(new FeatureCell(best.On, 0, 0, best.Reg), -1);
     }
 
     /// <summary>Go hfFrozenOff: a box off the target squares sits in a 2x2 block of walls and boxes (occ holds the position).</summary>

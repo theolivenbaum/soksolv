@@ -675,7 +675,9 @@ public sealed unsafe partial class FullSolver
             maux[id].MvLeft--;
             ulong parentHash = nodes.HashOf(cur, pl);
             long tap = Prof.Start();
+            hfAddDist = hfRank ? mmvScore[(int)e.Move].Hot : -1;
             int cid = MApply(id, mv & ~MMoveUsed, cur, child, h, st, parentHash, out int ch);
+            hfAddDist = -1;
             Prof.Stop(9, tap);
             if (s1On) S1Step(expanded, id, (int)(e.Move - maux[id].MvStart), cid);
             RecordEdge(id, mLastAdded);

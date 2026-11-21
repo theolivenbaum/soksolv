@@ -219,7 +219,7 @@ public sealed unsafe partial class FullSolver
             bool lowerWeight = w < nodes.W(id);
             if (MCreatesCycle(id, parent)) return -1;
             nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; a.PushTo = (ushort)to;
-            uint newBucket = (uint)Project(a.Actual, parent);
+            uint newBucket = (uint)(hfRank && opt.HfFestSched ? HfSchedReparent(id, parent) : Project(a.Actual, parent));
             bool movedCell = newBucket != a.Bucket;
             if (lowerWeight || movedCell)
             {
@@ -246,7 +246,7 @@ public sealed unsafe partial class FullSolver
         if (reg < 0) reg = Regions();
         var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
                           : new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
-        int bucket = Project(cell, parent);
+        int bucket = hfRank && opt.HfFestSched ? HfSchedAdd(boxes, cell, parent, reg) : Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
         if (nodes.NeedsGrow) nodes.Grow();
         return id;
@@ -365,7 +365,7 @@ public sealed unsafe partial class FullSolver
     void MNoteBest(int id)
     {
         if (id < 0 || maux[id].Dead != 0) return;
-        if (mBest < 0 || maux[mBest].Dead != 0 || ProgressBetter(maux[id].Actual, maux[mBest].Actual)) { if (pull && !FeasibleNode(id)) return; mBest = id; mLastImproveMs = clock.ElapsedMilliseconds; }
+        if (mBest < 0 || maux[mBest].Dead != 0 || (hfRank && opt.HfFestSched ? HfBetter(hfBest[id], hfBest[mBest]) : ProgressBetter(maux[id].Actual, maux[mBest].Actual))) { if (pull && !FeasibleNode(id)) return; mBest = id; mLastImproveMs = clock.ElapsedMilliseconds; }
     }
 
     // ---- StallFinish (Go fess_search.go finishFromBest) ------------------------------------------------------------------------------------
