@@ -312,7 +312,7 @@ public sealed unsafe partial class FullSolver
     public static bool PairBitsOff, PairBitsCheck;   // test hooks
 
     /// <summary>Row flood with a dirty-row worklist (rows ≤ 64): a row is re-examined only when a neighbouring row changed; passes alternate up/down like the sweeps they replace.</summary>
-    static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp, bool clear = true)
+    internal static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp, bool clear = true)
     {
         if (clear) for (int i = 0; i < rows; i++) reg[i] = 0;
         reg[rp] = FillRow(1UL << cp, free[rp]);

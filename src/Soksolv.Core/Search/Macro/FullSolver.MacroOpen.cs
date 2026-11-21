@@ -610,6 +610,21 @@ public sealed unsafe partial class FullSolver
         return true;
     }
 
+    bool mSdBuilt; int mSdStatic, mSdNSplit; bool[] mSdFlag = new bool[64]; int[] mSdSplit = new int[64];
+    void MSdBuild(ReadOnlySpan<int> cur)
+    {
+        if (mSdFlag.Length < cur.Length) { mSdFlag = new bool[cur.Length * 2]; mSdSplit = new int[cur.Length * 2]; }
+        mSdStatic = 0; mSdNSplit = 0;
+        for (int j = 0; j < cur.Length; j++)
+        {
+            int c = cur[j]; mSdFlag[j] = false;
+            if (goal[c]) continue;
+            if (sd!.IsSplitter(c)) mSdSplit[mSdNSplit++] = j;
+            else if (sd.StaticDead(c)) { mSdFlag[j] = true; mSdStatic++; }
+        }
+        mSdBuilt = true;
+    }
+
     /// <summary>Pruning rules for cur[i] pushed to t (occ holds the child). 0 = alive.</summary>
     int MPushDead(ReadOnlySpan<int> cur, int i, int t, int canonical)
     {
@@ -639,11 +654,21 @@ public sealed unsafe partial class FullSolver
             int p = t - dirs[canonical];
             bool dead = false;
             if (InPR(p))
-                for (int j = 0; j < cur.Length; j++)
+            {
+                // per box search: boxes on cells whose side-dead verdict does not depend on the player's side are counted once; only
+                // boxes on separator cells (and the moved box) are asked per candidate
+                if (!mSdBuilt) MSdBuild(cur);
+                if (mSdStatic - (mSdFlag[i] ? 1 : 0) > 0) dead = true;
+                else
                 {
-                    int c = j == i ? t : cur[j];
-                    if (!goal[c] && sd.Dead(c, p)) { dead = true; break; }
+                    for (int s2 = 0; s2 < mSdNSplit; s2++)
+                    {
+                        int j = mSdSplit[s2];
+                        if (j != i && sd.Dead(cur[j], p)) { dead = true; break; }
+                    }
+                    if (!dead && !goal[t] && sd.Dead(t, p)) dead = true;
                 }
+            }
             Prof.Stop(14, tq);
             if (dead) { stats.SideDead++; return 5; }
         }
