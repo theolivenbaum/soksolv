@@ -71,10 +71,10 @@ Equal work = `-nodes N` (`-procs 1`, Go default lanes = our default `-rev-lanes 
 
 | set | Go | C# before | C# after | before/Go | after/Go |
 |---|---|---|---|---|---|
-| testdata 22 levels, default lane, `-nodes 100000` | @GO1@ | @B1@ | 2.96 | @R1@ | **0.46** |
-| testdata 22 levels, `-rev-lanes 1`, `-nodes 100000` | @GO2@ | @B2@ | 2.51 | @R2@ | **0.45** |
-| LTS sample 43 levels (every 7th of the 297-level parity sample), default lane, `-nodes 20000` | @GO3@ | @B3@ | 2.99 | @R3@ | **0.38** |
-| same, `-rev-lanes 1` | @GO4@ | @B4@ | 2.80 | @R4@ | **0.38** |
+| testdata 22 levels, default lane, `-nodes 100000` | 6.52 | 6.40 | 2.96 | 0.98 | **0.46** |
+| testdata 22 levels, `-rev-lanes 1`, `-nodes 100000` | 5.72 | 5.21 | 2.51 | 0.91 | **0.45** |
+| LTS sample 43 levels (every 7th of the 297-level parity sample), default lane, `-nodes 20000` | 7.69 | 8.51 | 2.99 | 1.11 | **0.38** |
+| same, `-rev-lanes 1` | 7.66 | 8.32 | 2.80 | 1.09 | **0.38** |
 
 Per level (testdata, default lane, 100k nodes, after/Go): Dive_Sven_1623_197 0.33, Sasquatch_IV_50_42 0.39, Holland_81_27 0.43,
 Grigr2002_40_24 0.44, SokEvo_107_55 0.46, Sasquatch_VI_50_24 0.48, SokHard_163_13/23/36 0.48-0.51, Aymeric_282_273 0.51,
@@ -89,7 +89,7 @@ Parity (all exact, identical solved / nodes_expanded / pushes vs the unpatched G
 ### Allocation / memory
 
 `alloc_mb` (GC heap, AOT) is flat in the node count: Holland_81_27 3.3 MB @200k nodes, 3.7 MB @800k (the remainder is the bounded
-bucket/type tables); before 12.9 MB @100k, 61.8 MB @400k (~60-90 B/node: managed `List` type queue, `Array.Resize` of the expanded
+bucket/type tables); before 30.0 MB @100k, 62.1 MB @400k (~60-90 B/node: managed `List` type queue, `Array.Resize` of the expanded
 bits / supply values, one managed object per supply slot, 20 MB lossy reach cache). Everything per node is unmanaged now.
 Peak tracked MB at equal node counts (before -> after): Holland_81_27 @100k 28.6 -> 22.0 (-23%), @400k 75.5 -> 63.7 (-16%),
 Sasquatch_IV_50_42 @100k 13.9 -> 9.5, @400k 39.3 -> 32.9, Dive_Sven_1623_197 @100k 31.1 -> 26.7, @400k 84.5 -> 78.5 (-7%; 4-word keys).
@@ -116,7 +116,10 @@ record 16, table ~12, queues 5+6+4, supply values 1.
    The big `Search` method also spilled; extracting `PullChildren`/`EmitChild` removed the spills (-35% for the loop).
 7. **Child box list only on demand** (novelty scan when the at-home count changes, meeting network); the novelty scan of a child
    whose count did not change checks the one moved box. Bucket queue with a non-empty bitmap (was a linear scan over empty buckets).
-8. `TypeQueue`, expanded bits, supply values, supply slots on unmanaged memory (allocation-free steady state);
+8. **Hash-slot prefetch**: the candidate children of an expansion are enumerated first and their table slots prefetched (`Sse.Prefetch0`)
+   before the probes: -6..10% CPU at 400k nodes (no change below ~100k, where the table is cache resident). Prefetching the next
+   popped record: no gain.
+9. `TypeQueue`, expanded bits, supply values, supply slots on unmanaged memory (allocation-free steady state);
    `Table.AddBatched` (meeting perimeter: shared add counter updated once per 64 adds).
 
 ### What did not work / not done

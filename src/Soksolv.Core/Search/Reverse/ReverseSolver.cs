@@ -634,6 +634,31 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         int kPar = 0; for (int i = 0; i < ncur; i++) if (sidxp[cur[i]] >= 0) kPar++;
         pcKPar = kPar;
         int d0 = -W, d1 = W;
+        if (lazyNorm)
+        {
+            // gather the candidates and prefetch their hash slots, then insert: the probes of the children overlap their cache misses
+            int* cand = stackalloc int[4 * ncur]; int nc = 0;
+            int* fidxp = fidxP;
+            for (int i = 0; i < ncur; i++)
+            {
+                int b = cur[i]; int fb = fidxp[b];
+                int p = b + d0;
+                if (mkp[p] == st && blkp[p + d0] == 0 && distp[p] >= 0) { cand[nc++] = i << 2; store.Prefetch(pcParentHash ^ store.ZFloor(fb) ^ store.ZFloor(fidxp[p])); }
+                p = b + d1;
+                if (mkp[p] == st && blkp[p + d1] == 0 && distp[p] >= 0) { cand[nc++] = i << 2 | 1; store.Prefetch(pcParentHash ^ store.ZFloor(fb) ^ store.ZFloor(fidxp[p])); }
+                p = b - 1;
+                if (mkp[p] == st && blkp[p - 1] == 0 && distp[p] >= 0) { cand[nc++] = i << 2 | 2; store.Prefetch(pcParentHash ^ store.ZFloor(fb) ^ store.ZFloor(fidxp[p])); }
+                p = b + 1;
+                if (mkp[p] == st && blkp[p + 1] == 0 && distp[p] >= 0) { cand[nc++] = i << 2 | 3; store.Prefetch(pcParentHash ^ store.ZFloor(fb) ^ store.ZFloor(fidxp[p])); }
+            }
+            for (int c = 0; c < nc; c++)
+            {
+                int i = cand[c] >> 2, di = cand[c] & 3; int b = cur[i];
+                int d = di == 0 ? d0 : di == 1 ? d1 : di == 2 ? -1 : 1;
+                EmitChild(i, b, di, d, b + d);
+            }
+            return;
+        }
         for (int i = 0; i < ncur; i++)
         {
             int b = cur[i];

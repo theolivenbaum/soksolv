@@ -63,6 +63,12 @@ public sealed unsafe class RevStore : IDisposable
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)] static int Player(byte* r) => (int)((*(ulong*)r >> 32) & 0x7FFF);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void Prefetch(ulong zh)
+    {
+        if (System.Runtime.Intrinsics.X86.Sse.IsSupported) System.Runtime.Intrinsics.X86.Sse.Prefetch0(table + ((int)(uint)(Spread(zh) >> 32) & tmask));
+    }
+
     public int Start(ulong zh, out uint fp) { ulong h = Spread(zh); fp = (uint)(h >> 32); return (int)fp & tmask; }
     [MethodImpl(MethodImplOptions.AggressiveInlining)] public ulong Entry(int i) => table[i];
     [MethodImpl(MethodImplOptions.AggressiveInlining)] public int Next(int i) => (i + 1) & tmask;
