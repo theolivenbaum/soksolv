@@ -198,7 +198,7 @@ public sealed unsafe partial class FullSolver
             {
                 var bx = (int[])cur.boxes.Clone();
                 bx[pl.i] = pl.to;
-                Array.Sort(bx);
+                SmallSort.Ints(bx);
                 if (Push(bx, pl.np)) return false;
             }
         }

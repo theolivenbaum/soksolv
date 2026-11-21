@@ -73,7 +73,7 @@ public sealed unsafe partial class FullSolver
 
         var cur = new int[n]; var child = new int[n];
         Array.Copy(lv.Boxes, cur, n);
-        Array.Sort(cur);
+        SmallSort.Ints(cur);
         ulong bh = 0; bool allGoal = true;
         foreach (int b in cur)
         {
@@ -103,7 +103,7 @@ public sealed unsafe partial class FullSolver
             r.Nodes = fa2ExpandedN;
             r.Stats = stats; stats.Stored = nodes.Count;
             r.TimeMs = sw.Elapsed.TotalMilliseconds;
-            F2Report(r.TimeMs);
+            F2Report(r.TimeMs); F2MemoReport();
             r.PeakBytes = (long)Fa2Bytes();
             if (opt.Fa2.Debug) Console.Error.WriteLine($"fa2: nodes {fa2ExpandedN} edges {fa2Ed.Count} cells {fa2Cells.Count} dups {fa2Dups} lateDead {fa2LateDead} advDead {fa2LateDead2} refills {fa2Refills} plan {fa2Fp?.E.Count} init {fa2Fp?.InitNum}");
             return r;
@@ -115,12 +115,12 @@ public sealed unsafe partial class FullSolver
             int b = e.B;
             if (!ReferenceEquals(curArr, child)) Array.Copy(curArr, child, n);
             child[Fa2IdxOf(curArr, b)] = e.T;
-            Array.Sort(child);
+            SmallSort.Ints(child);
             for (int c = 0; c < cells; c++) if (occ[c]) SetOcc(c, false);
             ulong* pk2 = nodes.Key(id);
             for (int w = 0; w < nodes.Nw; w++) ckey[w] = pk2[w];
             Flip(b); Flip(e.T);
-            int cid = Fa2AddNode(e.T, id, b, (sbyte)e.Side, e.Adv, e.Key, Math.Min(a.Best, e.Key), a.W + e.W, 0);
+            int cid = Fa2AddNode(e.T, id, b, (sbyte)e.Dir, e.Adv, e.Key, Math.Min(a.Best, e.Key), a.W + e.W, 0);
             fa2ExpandedN++;
             string sol = MReconstruct(cid);
             return Done(new SolveResult { Solved = sol != "", Solution = sol, Reason = sol == "" ? "reconstruct failed" : "" });
@@ -151,15 +151,26 @@ public sealed unsafe partial class FullSolver
             int eb = e.B, et = e.T;
             Array.Copy(cur, child, n);
             child[Fa2IdxOf(cur, eb)] = et;
-            Array.Sort(child);
+            SmallSort.Ints(child);
             SetOcc(eb, false); SetOcc(et, true);
-            int side = et - dirs[e.Side];
+            int side = et - dirs[e.Dir];
             int np = Reach(side, mark);
             uint st = stamp;
             if (fa2Trace) Console.Error.WriteLine("  child " + string.Join(" ", child) + $" sideCell={side} np={np}");
             bool dead = false;
-            if (cl != null && cl.Dead(occ, et, side, mark, st, -1)) dead = true;
-            else if (dz != null && dz.DeadAfter(occ, child, side, et)) dead = true;
+            if (e.Verified) { }   // proved alive at expansion (same position, same player side): the checks are deterministic
+            else
+            {
+                ulong mk = Fa2MemoKey(eh, et);
+                if (fa2LiveMemo.Has(mk)) fa2MemoHits++;
+                else if (fa2DeadMemo.Has(mk)) { fa2MemoHits++; dead = true; }
+                else
+                {
+                    if (cl != null && cl.Dead(occ, et, side, mark, st, -1)) dead = true;
+                    else if (dz != null && dz.DeadAfter(occ, child, side, et)) dead = true;
+                    (dead ? fa2DeadMemo : fa2LiveMemo).Insert(mk);
+                }
+            }
             if (dead)
             {
                 fa2LateDead++; if (fa2Trace) Console.Error.WriteLine($"  late dead cl={(cl != null && cl.Dead(occ, et, side, mark, st, -1))} dz.Frozen={dz?.Frozen} matching={dz?.MatchingDead} corrals={dz?.Corrals} searches={dz?.Searches}");
@@ -176,7 +187,7 @@ public sealed unsafe partial class FullSolver
             ulong* pk3 = nodes.Key(id);
             for (int w = 0; w < nodes.Nw; w++) ckey[w] = pk3[w];
             Flip(eb); Flip(et);
-            int cid = Fa2AddNode(np, id, eb, (sbyte)e.Side, e.Adv, e.Key, Math.Min(an2.Best, e.Key), an2.W + e.W, cbh);
+            int cid = Fa2AddNode(np, id, eb, (sbyte)e.Dir, e.Adv, e.Key, Math.Min(an2.Best, e.Key), an2.W + e.W, cbh);
             uint kc = Fa2CellKey(e.Key);
             if (kc < fa2ImpKey) { fa2ImpKey = kc; fa2ImpAt = fa2ExpandedN; }
             if (Fa2Expand(cid, child, st) == 0) return SolvedChild(cid, child);
@@ -185,7 +196,12 @@ public sealed unsafe partial class FullSolver
         }
     }
 
-    ulong Fa2Bytes() => (ulong)(fa2Ed.Bytes + fa2Aux.Bytes + nodes.Bytes + fa2Cells.Sum(c => c.heap.Capacity * 16L));
+    ulong Fa2Bytes()
+    {
+        long hb = 0;
+        for (int i = 0; i < fa2Cells.Count; i++) hb += fa2Cells[i].heap.Capacity * 16L;
+        return (ulong)(fa2Ed.Bytes + fa2Aux.Bytes + fa2LiveMemo.Bytes + fa2DeadMemo.Bytes + nodes.Bytes + hb);
+    }
 
     /// <summary>Builds the plan and static analysis for fa2 (Go fa2Run up to the root). Returns a result only if setup fails.</summary>
     SolveResult? Fa2Setup(Stopwatch sw, double timeLimitSec)
