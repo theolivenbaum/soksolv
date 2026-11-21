@@ -78,6 +78,7 @@ public sealed unsafe partial class FullSolver
             var bd = new ClusterBoard(wall, goal, deadSq, W, salt: true);
             cl = new ClusterChecker(bd) { Shared = opt.SharedClusters, SharedPen = null };
         }
+        if (hfRank && opt.HfDiagDead) dd = new DiagDeadChecker(wall, goal, W);
         if (Feat(1) && !pull)
         {
             var deadSq = new bool[cells];
@@ -89,7 +90,7 @@ public sealed unsafe partial class FullSolver
         if (MacroStage >= 2) { MComputeRooms(); if (!pull) MComputeBasin(); } // goal rooms and out-of-plan are push-mode features
         if (Prof.On) Console.Error.WriteLine($"rooms+basin done t={clock.ElapsedMilliseconds} ms");
         long tPlan0 = clock.ElapsedMilliseconds;
-        if (MacroStage >= 3 && !pull) // pull mode has no packing plan (as in Festival)
+        if (MacroStage >= 3 && !pull && !hfRank) // pull mode has no packing plan; the toward search uses none (Go noPlan) (as in Festival)
         {
             long planDeadline = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(250, timeLimitSec * 1000 / 10);
             if (opt.PlanCapMs > 0) planDeadline = Math.Min(planDeadline, (long)Math.Max(opt.PlanCapMs, 1)); // factor sub-solve: the planner gets a small slice (exp-645b)
@@ -155,8 +156,14 @@ public sealed unsafe partial class FullSolver
         if (a.Connectivity != b.Connectivity) return a.Connectivity < b.Connectivity;
         return a.RoomConnectivity < b.RoomConnectivity;
     }
-    static bool ProgressBetter(in FeatureCell a, in FeatureCell b)
+    bool ProgressBetter(in FeatureCell a, in FeatureCell b)
     {
+        if (hfRank && opt.HfBestFest) // best-so-far in Festival's HF order: connectivity, imagine, hotspots
+        {
+            if (a.Oop != b.Oop) return a.Oop < b.Oop;
+            if (a.Packed != b.Packed) return a.Packed > b.Packed;
+            return a.Connectivity < b.Connectivity;
+        }
         if (a.Packed != b.Packed) return a.Packed > b.Packed;
         if (a.Connectivity != b.Connectivity) return a.Connectivity < b.Connectivity;
         if (a.RoomConnectivity != b.RoomConnectivity) return a.RoomConnectivity < b.RoomConnectivity;
@@ -172,6 +179,7 @@ public sealed unsafe partial class FullSolver
             foreach (int fc in nodes.Fcell) if (occ[fc]) sp += spreadDist[fc];
             return (int)(sp / SpreadBucket);
         }
+        if (tgt != null) { int tc = 0; foreach (int g in tgtList) if (occ[g]) tc++; return tc; }
         if (mPlan != null) return mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.Packed(occ) : mPlan.Status(occ).packed;
         int c = 0;
         foreach (int g in goals) if (occ[g]) c++;
@@ -217,7 +225,7 @@ public sealed unsafe partial class FullSolver
             bool lowerWeight = w < nodes.W(id);
             if (MCreatesCycle(id, parent)) return -1;
             nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; a.PushTo = (ushort)to;
-            uint newBucket = (uint)Project(a.Actual, parent);
+            uint newBucket = (uint)(hfRank && opt.HfFestSched ? HfSchedReparent(id, parent) : Project(a.Actual, parent));
             bool movedCell = newBucket != a.Bucket;
             if (lowerWeight || movedCell)
             {
@@ -242,8 +250,9 @@ public sealed unsafe partial class FullSolver
         if (opt.Net != null) { if (pull) PullMeetAdd(id, boxes, player); else MeetAdd(id, boxes, player); }
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = Regions();
-        var cell = new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
-        int bucket = Project(cell, parent);
+        var cell = hfRank ? new FeatureCell(MPacked(), HotRel(boxes), 0, reg + (opt.HfMatchFirst && (MatchDist(boxes) >= 1 << 20 || opt.HfFrozenMatch && HfFrozenOff(boxes)) ? HfNoMatch : 0)) // Festival's forward HF cells: boxes on target squares, hotspots against the target, connectivity as oop
+                          : new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));
+        int bucket = hfRank && opt.HfFestSched ? HfSchedAdd(boxes, cell, parent, reg) : Project(cell, parent);
         maux.Add(new MacroAux { MvStart = -1, Version = 0, Bucket = (uint)bucket, EdgeHead = -1, Reg = (ushort)reg, Actual = cell, RevGroup = id, RevSize = 1, RevBestExit = -1, PushTo = (ushort)to });
         if (nodes.NeedsGrow) nodes.Grow();
         return id;
@@ -362,7 +371,7 @@ public sealed unsafe partial class FullSolver
     void MNoteBest(int id)
     {
         if (id < 0 || maux[id].Dead != 0) return;
-        if (mBest < 0 || maux[mBest].Dead != 0 || ProgressBetter(maux[id].Actual, maux[mBest].Actual)) { if (pull && !FeasibleNode(id)) return; mBest = id; mLastImproveMs = clock.ElapsedMilliseconds; }
+        if (mBest < 0 || maux[mBest].Dead != 0 || (hfRank && opt.HfFestSched ? HfBetter(hfBest[id], hfBest[mBest]) : ProgressBetter(maux[id].Actual, maux[mBest].Actual))) { if (pull && !FeasibleNode(id)) return; mBest = id; mLastImproveMs = clock.ElapsedMilliseconds; }
     }
 
     // ---- StallFinish (Go fess_search.go finishFromBest) ------------------------------------------------------------------------------------

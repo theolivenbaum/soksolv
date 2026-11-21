@@ -95,3 +95,13 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [x] factor lane (resumable macro/novelty/fa2/reverse sub-engines): exact parity 12/12 gated levels; gate 224/13,315 levels; portfolio lane. Speed 1.12-1.17x Go.
 - [x] dive lane (pull-view landmark dive, paired base+A engines, Hungarian matcher, HubReach/zone-dead roots): exact parity 22/22 + 40/40 + 38/40 (2 setup-timeouts in Go); gate 315/13,315 levels; replaces reverse on gated boards. Speed 0.89x Go.
 - [ ] dive: perimeter meetings, revive ring; factor: -factor-alt; both: timed-mode ladder runs on the gated levels
+- [x] Macro wide-level speed: 1.22x -> 1.05x Go CPU on 12 wide levels (hot rows/columns, bit box search + moveAccessBits, plan4 radix sort, goal-area memo); remaining: CutQueryFill/Expand4 constants, displacement, region counts
+
+## toward / hf (thirteenth fork)
+- [x] target mode in the macro engine, `-strategy hf`: exact vs Go (19/19 testdata, 40/40 LTS at 3k nodes; 19/19 at 15k), 0.90x Go equal-work time
+- [ ] portfolio `toward` lane (retarget loop with the live pull best state + meetings), `-strategy toward|tfwd`
+- [ ] hub-pull / hub-gen / hub (pullfest pfOn, hubrace, hubstrata, hubgen, hub, hfsched)
+- [ ] `hf` peak-memory reporting; meetings inside the toward phase
+
+- [x] pullfest leaf functions (pushDistances/pfDist/pfHot/pfBicon/pfSpreadSum/tuple order): Search/Hub/PfFest.cs, exact vs Go goldens (18 levels x 8 samples)
+- [ ] pfOn engine hooks in the macro/pull engine (patched-Go `-strategy pull` + SOKSOLV_PFON reference), then hubstrata, hubrace, hubprobe, festb, hubgen, hub, hfsched, portfolio hub lanes + toward retargeting loop (see docs/lanes.md 'Hub family - status after the 14th fork')

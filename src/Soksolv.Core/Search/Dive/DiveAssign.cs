@@ -7,7 +7,6 @@ namespace Soksolv.Search;
 /// </summary>
 public sealed unsafe partial class FullSolver
 {
-    public const int AssignmentInf = 1 << 20;
     int[] dhU = [], dhV = [], dhP = [], dhWay = [], dhMinv = [];
     bool[] dhUsed = [];
     int[] dhUl = [], dhUd = []; int dhN;
