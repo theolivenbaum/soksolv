@@ -22,7 +22,10 @@ public sealed unsafe partial class FullSolver
     ulong[] frbWall = [], frbN = [], frbRoom = [], frbSE = [], frbEdge = [], frbScr = [], frbL = [], frbM = [], frbUpper = [], frbAff = [], frbBaseL = [];
     int[] frbLo = [], frbHi = [], frbBase = [];
     int frbBaseK = -1;
-    ulong* pWall, pN, pRoom, pSE, pEdge, pScr, pL, pM, pUp, pAff, pBaseL;
+    ulong* pWall, pN, pRoom, pSE, pEdge, pScr, pL, pM, pUp, pAff, pBaseL, pZ, pK, pCKey, pCVal;
+    ulong[] frbZ = [], frbK = [], frbCKey = [], frbCVal = [];
+    const int FrbCacheBits = 16;
+    internal long FrbHit, FrbMiss;
     int* pLo, pHi;
     internal long FrbFull, FrbInc, FrbRooms;
 
@@ -81,10 +84,14 @@ public sealed unsafe partial class FullSolver
         frbScr = GC.AllocateArray<ulong>(rows * 6 + nw + 8, pinned: true);
         frbL = GC.AllocateArray<ulong>(nr * nw, pinned: true); frbM = GC.AllocateArray<ulong>(nr * nw, pinned: true); frbBaseL = GC.AllocateArray<ulong>(nr * nw, pinned: true);
         frbBase = new int[n];
+        frbZ = GC.AllocateArray<ulong>(cells, pinned: true); frbK = GC.AllocateArray<ulong>(nr, pinned: true);
+        { ulong x = 0x2545F4914F6CDD1DUL; for (int c = 0; c < cells; c++) { x += 0x9E3779B97F4A7C15UL; ulong z = x; z = (z ^ z >> 30) * 0xBF58476D1CE4E5B9UL; z = (z ^ z >> 27) * 0x94D049BB133111EBUL; frbZ[c] = z ^ z >> 31; } }
+        frbCKey = GC.AllocateArray<ulong>(1 << FrbCacheBits, pinned: true); frbCVal = GC.AllocateArray<ulong>((1 << FrbCacheBits) * nw, pinned: true);
         pWall = (ulong*)Unsafe.AsPointer(ref frbWall[0]); pN = (ulong*)Unsafe.AsPointer(ref frbN[0]); pRoom = (ulong*)Unsafe.AsPointer(ref frbRoom[0]);
         pSE = (ulong*)Unsafe.AsPointer(ref frbSE[0]); pEdge = (ulong*)Unsafe.AsPointer(ref frbEdge[0]); pScr = (ulong*)Unsafe.AsPointer(ref frbScr[0]);
         pL = (ulong*)Unsafe.AsPointer(ref frbL[0]); pM = (ulong*)Unsafe.AsPointer(ref frbM[0]); pUp = (ulong*)Unsafe.AsPointer(ref frbUpper[0]);
         pAff = (ulong*)Unsafe.AsPointer(ref frbAff[0]); pBaseL = (ulong*)Unsafe.AsPointer(ref frbBaseL[0]);
+        pZ = (ulong*)Unsafe.AsPointer(ref frbZ[0]); pK = (ulong*)Unsafe.AsPointer(ref frbK[0]); pCKey = (ulong*)Unsafe.AsPointer(ref frbCKey[0]); pCVal = (ulong*)Unsafe.AsPointer(ref frbCVal[0]);
         pLo = (int*)Unsafe.AsPointer(ref frbLo[0]); pHi = (int*)Unsafe.AsPointer(ref frbHi[0]);
         frbOk = true;
     }
@@ -108,7 +115,15 @@ public sealed unsafe partial class FullSolver
         FrbFull++;
         for (int i = 0; i < frbNr * frbNw; i++) pL[i] = 0;
         FrbRows(boxes);
-        for (int r = 0; r < frbNr; r++) FrbRoom(r);
+        int nr0 = frbNr, nw0 = frbNw;
+        for (int r = 0; r < nr0; r++) pK[r] = 0;
+        foreach (int b in boxes)
+        {
+            ulong* ab = pAff + b * nw0;
+            for (int w2 = 0; w2 < nw0; w2++)
+                for (ulong m = ab[w2]; m != 0; m &= m - 1) pK[(w2 << 6) + BitOperations.TrailingZeroCount(m)] ^= pZ[b];
+        }
+        for (int r = 0; r < nr0; r++) FrbRoomC(r, pK[r]);
         int k = FrbCount();
         if (frbBase.Length != nb) frbBase = new int[nb];
         boxes.CopyTo(frbBase);
@@ -119,10 +134,18 @@ public sealed unsafe partial class FullSolver
 
     int FrbIncremental(ReadOnlySpan<int> boxes, int from, int to)
     {
-        int nr = frbNr, nw = frbNw;
+        int nr = frbNr, nw = frbNw, rows = frbRows;
         for (int i = 0; i < nr * nw; i++) pL[i] = pBaseL[i];
-        FrbRows(boxes);
+        // the scratch rows hold the base board: move the box in place, walk the affected rooms, move it back
+        ulong* occ = pScr, free = pScr + rows, fn = pScr + 2 * rows;
+        int rf = frRow[from] + 1, rt = frRow[to] + 1;
+        ulong bf = 1UL << frCol[from], bt = 1UL << frCol[to], mask = frbMask;
+        occ[rf] &= ~bf; occ[rt] |= bt;
+        free[rf] = ~(pWall[rf] | occ[rf]) & mask; fn[rf] = free[rf] & pN[rf];
+        free[rt] = ~(pWall[rt] | occ[rt]) & mask; fn[rt] = free[rt] & pN[rt];
         ulong* af = pAff + from * nw, at = pAff + to * nw;
+        // affected rooms A = af | at (bit sets; <= 64 rooms handled inline, larger sets through the loop below)
+        int k = frbBaseK;
         for (int w2 = 0; w2 < nw; w2++)
         {
             ulong m = af[w2] | at[w2];
@@ -130,11 +153,40 @@ public sealed unsafe partial class FullSolver
             {
                 int r = (w2 << 6) + BitOperations.TrailingZeroCount(m); m &= m - 1;
                 FrbRooms++;
-                for (int x = 0; x < nw; x++) pL[r * nw + x] = 0;
-                FrbRoom(r);
+                ulong kr = pK[r];
+                if ((af[r >> 6] >> (r & 63) & 1) != 0) kr ^= pZ[from];
+                if ((at[r >> 6] >> (r & 63) & 1) != 0) kr ^= pZ[to];
+                FrbRoomC(r, kr);
             }
         }
-        return FrbCount();
+        // pairs touching an affected room: M[r][o] = SE[r][o] & (L[r][o] | L[o][r]); count each unordered pair once
+        for (int w2 = 0; w2 < nw; w2++)
+        {
+            ulong m = af[w2] | at[w2];
+            while (m != 0)
+            {
+                int r = (w2 << 6) + BitOperations.TrailingZeroCount(m); m &= m - 1;
+                ulong* ser = pSE + r * nw;
+                for (int x = 0; x < nw; x++)
+                {
+                    ulong nb = ser[x];
+                    while (nb != 0)
+                    {
+                        int o = (x << 6) + BitOperations.TrailingZeroCount(nb); nb &= nb - 1;
+                        bool oAff = ((af[o >> 6] | at[o >> 6]) >> (o & 63) & 1) != 0;
+                        if (oAff && o < r) continue;
+                        int rb = r >> 6, ob = o >> 6; ulong rbit = 1UL << (r & 63), obit = 1UL << (o & 63);
+                        int before = ((pBaseL[r * nw + ob] & obit) | (pBaseL[o * nw + rb] & rbit)) != 0 ? 1 : 0;
+                        int after = ((pL[r * nw + ob] & obit) | (pL[o * nw + rb] & rbit)) != 0 ? 1 : 0;
+                        k += after - before;
+                    }
+                }
+            }
+        }
+        occ[rf] |= bf; occ[rt] &= ~bt;
+        free[rf] = ~(pWall[rf] | occ[rf]) & mask; fn[rf] = free[rf] & pN[rf];
+        free[rt] = ~(pWall[rt] | occ[rt]) & mask; fn[rt] = free[rt] & pN[rt];
+        return k;
     }
 
     /// <summary>occ / free / fn rows of the board (scratch rows 0..2).</summary>
@@ -147,6 +199,26 @@ public sealed unsafe partial class FullSolver
         free[0] = 0; free[rows - 1] = 0; fn[0] = 0; fn[rows - 1] = 0;
         ulong mask = frbMask;
         for (int i = 1; i <= h; i++) { free[i] = ~(pWall[i] | occ[i]) & mask; fn[i] = free[i] & pN[i]; }
+    }
+
+    /// <summary>Room r's lost bits for the occupancy key kr (Zobrist xor of the boxes in D_r): from the direct-mapped cache, or walked and stored.</summary>
+    void FrbRoomC(int r, ulong kr)
+    {
+        int nw = frbNw;
+        ulong ck = (kr + (ulong)(r + 1) * 0x9E3779B97F4A7C15UL) | 1;
+        int idx = (int)((ck * 0xBF58476D1CE4E5B9UL) >> (64 - FrbCacheBits));
+        ulong* lr = pL + r * nw, cv = pCVal + idx * nw;
+        if (pCKey[idx] == ck)
+        {
+            FrbHit++;
+            for (int x = 0; x < nw; x++) lr[x] = cv[x];
+            return;
+        }
+        FrbMiss++;
+        for (int x = 0; x < nw; x++) lr[x] = 0;
+        FrbRoom(r);
+        for (int x = 0; x < nw; x++) cv[x] = lr[x];
+        pCKey[idx] = ck;
     }
 
     /// <summary>Walks room r (rows prepared by <see cref="FrbRows"/>) and sets its lost bits in L[r] (zeroed by the caller).</summary>
