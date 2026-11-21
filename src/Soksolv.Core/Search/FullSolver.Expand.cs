@@ -36,32 +36,24 @@ public sealed unsafe partial class FullSolver
             if (rem[r0] == 0) { r0++; continue; }
             cnt++;
             int cp = BitOperations.TrailingZeroCount(rem[r0]);
-            reg[r0] = FillRowB(1UL << cp, rem[r0]);
             int lo = r0, hi = r0;
-            while (true)
+            ulong y0 = FillRowB(1UL << cp, rem[r0]);
+            reg[r0] = y0;
+            ulong dirty = 0;
+            if ((y0 & rem[r0 - 1]) != 0) dirty |= 1UL << (r0 - 1);
+            if ((y0 & rem[r0 + 1]) != 0) dirty |= 1UL << (r0 + 1);
+            while (dirty != 0)
             {
-                bool ch = false;
-                int a = lo > 1 ? lo - 1 : 1, z = hi < last ? hi + 1 : last;
-                for (int r = a; r <= z; r++)
-                {
-                    ulong cur = reg[r];
-                    ulong y = cur | (reg[r - 1] | reg[r + 1]) & rem[r];
-                    if (y == cur) continue;
-                    y = FillRowB(y, rem[r]); reg[r] = y; ch = true;
-                    if (r < lo) lo = r; if (r > hi) hi = r;
-                }
-                if (!ch) break;
-                ch = false;
-                a = lo > 1 ? lo - 1 : 1; z = hi < last ? hi + 1 : last;
-                for (int r = z; r >= a; r--)
-                {
-                    ulong cur = reg[r];
-                    ulong y = cur | (reg[r - 1] | reg[r + 1]) & rem[r];
-                    if (y == cur) continue;
-                    y = FillRowB(y, rem[r]); reg[r] = y; ch = true;
-                    if (r < lo) lo = r; if (r > hi) hi = r;
-                }
-                if (!ch) break;
+                int r = BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
+                ulong cur = reg[r];
+                ulong y = cur | (reg[r - 1] | reg[r + 1]) & rem[r];
+                if (y == cur) continue;
+                y = FillRowB(y, rem[r]);
+                reg[r] = y;
+                ulong nw = y & ~cur;
+                if (r < lo) lo = r; if (r > hi) hi = r;
+                if ((nw & rem[r - 1] & ~reg[r - 1]) != 0) dirty |= 1UL << (r - 1);
+                if ((nw & rem[r + 1] & ~reg[r + 1]) != 0) dirty |= 1UL << (r + 1);
             }
             for (int r = lo; r <= hi; r++) { rem[r] &= ~reg[r]; reg[r] = 0; }
         }
@@ -124,45 +116,55 @@ public sealed unsafe partial class FullSolver
             artDisc = new int[cells]; artLow = new int[cells]; artPieces = new int[cells]; artSeen = new uint[cells];
             artStackC = new int[cells + 1]; artStackP = new int[cells + 1]; artStackNext = new sbyte[cells + 1];
         }
-        var disc = artDisc; var low = artLow!; var pieces = artPieces!; var seen = artSeen!;
-        var sc = artStackC!; var sp = artStackP!; var sn = artStackNext!;
         uint st = ++artStamp;
         artComps = 0;
-        int timer = 0;
-        foreach (int root in FloorCells())
+        int timer = 0, comps = 0;
+        int w = W;
+        fixed (int* disc = artDisc, low = artLow, pieces = artPieces, sc = artStackC, sp = artStackP)
+        fixed (uint* seen = artSeen)
+        fixed (sbyte* sn = artStackNext)
+        fixed (int* fcs = FloorCells())
         {
-            if (blk[root] != 0 || seen[root] == st) continue;
-            artComps++;
-            timer++;
-            disc[root] = timer; low[root] = timer; pieces[root] = 0; seen[root] = st;
-            int sz = 0; sc[0] = root; sp[0] = -1; sn[0] = 0; sz = 1;
-            while (sz > 0)
+            int nf = floorCells.Length;
+            for (int fi = 0; fi < nf; fi++)
             {
-                int top = sz - 1;
-                if (sn[top] < 4)
+                int root = fcs[fi];
+                if (blk[root] != 0 || seen[root] == st) continue;
+                comps++;
+                timer++;
+                disc[root] = timer; low[root] = timer; pieces[root] = 0; seen[root] = st;
+                sc[0] = root; sp[0] = -1; sn[0] = 0; int sz = 1;
+                while (sz > 0)
                 {
-                    int y = sc[top] + dirs[sn[top]++];
-                    if (blk[y] != 0) continue;
-                    if (seen[y] != st)
+                    int top = sz - 1;
+                    int c = sc[top];
+                    int k = sn[top];
+                    if (k < 4)
                     {
-                        timer++;
-                        disc[y] = timer; low[y] = timer; pieces[y] = 1; seen[y] = st;
-                        sc[sz] = y; sp[sz] = sc[top]; sn[sz] = 0; sz++;
+                        sn[top] = (sbyte)(k + 1);
+                        int y = k == 0 ? c - w : k == 1 ? c + w : k == 2 ? c - 1 : c + 1;
+                        if (blk[y] != 0) continue;
+                        if (seen[y] != st)
+                        {
+                            timer++;
+                            disc[y] = timer; low[y] = timer; pieces[y] = 1; seen[y] = st;
+                            sc[sz] = y; sp[sz] = c; sn[sz] = 0; sz++;
+                        }
+                        else if (y != sp[top])
+                        {
+                            if (disc[y] < low[c]) low[c] = disc[y];
+                        }
+                        continue;
                     }
-                    else if (y != sp[top])
-                    {
-                        int c = sc[top];
-                        if (disc[y] < low[c]) low[c] = disc[y];
-                    }
-                    continue;
+                    int pp = sp[top];
+                    sz--;
+                    if (pp < 0) continue;
+                    if (low[c] < low[pp]) low[pp] = low[c];
+                    if (low[c] >= disc[pp]) pieces[pp]++;
                 }
-                int cc = sc[top], pp = sp[top];
-                sz--;
-                if (pp < 0) continue;
-                if (low[cc] < low[pp]) low[pp] = low[cc];
-                if (low[cc] >= disc[pp]) pieces[pp]++;
             }
         }
+        artComps = comps;
     }
 
     int ChildRegions(int t) => artComps - 1 + artPieces![t];
@@ -285,6 +287,28 @@ public sealed unsafe partial class FullSolver
     static void FloodRows(ulong* free, ulong* reg, int rows, int rp, int cp)
     {
         for (int i = 0; i < rows; i++) reg[i] = 0;
+        if (rows <= 64)
+        {
+            // dirty-row worklist (no whole-board sweeps)
+            ulong y0 = FillRow(1UL << cp, free[rp]);
+            reg[rp] = y0;
+            ulong dirty = 0;
+            if ((y0 & free[rp - 1]) != 0) dirty |= 1UL << (rp - 1);
+            if ((y0 & free[rp + 1]) != 0) dirty |= 1UL << (rp + 1);
+            while (dirty != 0)
+            {
+                int r = BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
+                ulong cur = reg[r];
+                ulong y = cur | (reg[r - 1] | reg[r + 1]) & free[r];
+                if (y == cur) continue;
+                y = FillRow(y, free[r]);
+                reg[r] = y;
+                ulong nw = y & ~cur;
+                if ((nw & free[r - 1] & ~reg[r - 1]) != 0) dirty |= 1UL << (r - 1);
+                if ((nw & free[r + 1] & ~reg[r + 1]) != 0) dirty |= 1UL << (r + 1);
+            }
+            return;
+        }
         reg[rp] = FillRow(1UL << cp, free[rp]);
         int last = rows - 2;
         while (true)
@@ -704,7 +728,7 @@ public sealed unsafe partial class FullSolver
             {
                 int b = cur[i];
                 if (corral != 0 && cmark[b] != corral) continue;
-                int cands = 0;
+                int cands = 0, pend = -1, pendT = 0; // first candidate's region count is deferred: a 2nd candidate gives it via articulation, a lone one needs a flood
                 for (int di = 0; di < 4; di++)
                 {
                     int d = dirs[di], t = b + d;
@@ -727,13 +751,14 @@ public sealed unsafe partial class FullSolver
                         int r;
                         switch (++cands)
                         {
-                            case 1: r = Regions(); break;
+                            case 1: r = 0; pend = np; pendT = t; break;
                             case 2:
                                 SetOcc(t, false); ComputeArticulation(); SetOcc(t, true);
-                                r = ChildRegions(t); break;
+                                r = ChildRegions(t);
+                                pushes1[pend].R = ChildRegions(pendT); pend = -1; break;
                             default: r = ChildRegions(t); break;
                         }
-                        if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
+                        if (CheckRegions && cands > 1 && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
                         Prof.Stop(1, t0);
                         int pen = 0;
                         if (opt.Penalties && cl != null && noise == null)
@@ -742,11 +767,19 @@ public sealed unsafe partial class FullSolver
                             if (pen > 0) stats.Penalized++;
                         }
                         pushes1[np++] = new Push1 { I = i, B = b, T = t, Dir = (sbyte)di, R = r, Pen = pen };
-                        if (r < best) { best = r; bestK = np - 1; }
                     }
                     SetOcc(b, true); SetOcc(t, false);
                 }
+                if (pend >= 0)
+                {
+                    long t1 = Prof.Start();
+                    SetOcc(b, false); SetOcc(pendT, true);
+                    pushes1[pend].R = Regions();
+                    SetOcc(b, true); SetOcc(pendT, false);
+                    Prof.Stop(1, t1);
+                }
             }
+            for (int k = 0; k < np; k++) if (pushes1[k].R < best) { best = pushes1[k].R; bestK = k; }
             int last = -1;
             if (nodes.Parent(id) >= 0)
             {

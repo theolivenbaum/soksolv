@@ -279,7 +279,7 @@ public sealed unsafe partial class FullSolver : IDisposable
 
     void InitBitRows()
     {
-        fbits = W <= 64 && cells / W <= 250 && cells % W == 0;
+        fbits = W <= 64 && cells / W <= 64 && cells % W == 0;
         // goal occupancy bitset + per-round masks for PackedCount (valid for any board size)
         int gwords = Math.Max(1, (goals.Length + 63) / 64);
         nRounds = 0; foreach (int g in goals) nRounds = Math.Max(nRounds, round[g] + 1);

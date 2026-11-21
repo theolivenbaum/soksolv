@@ -117,7 +117,7 @@ public sealed unsafe class ClusterChecker
         queue = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref queueArr[0]);
         queue2Arr = GC.AllocateArray<int>(n, pinned: true); mark2Arr = GC.AllocateArray<uint>(n, pinned: true);
         queue2 = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref queue2Arr[0]); mark2 = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref mark2Arr[0]);
-        bits = UseBits && board.W <= 64 && n / board.W <= 250 && n % board.W == 0;
+        bits = UseBits && board.W <= 64 && n / board.W <= 64 && n % board.W == 0;
         if (bits)
         {
             int W = board.W; rows = n / W;
@@ -165,38 +165,36 @@ public sealed unsafe class ClusterChecker
         int rp = rowOf[p]; int cp = colOf[p];
         ulong saved = fr[rp];
         fr[rp] = saved | 1UL << cp;
-        rg[rp] = FillRow(1UL << cp, fr[rp]);
-        int lo = rp, hi = rp, last = rows - 2;
-        while (true)
-        {
-            bool ch = false;
-            int r0 = lo > 1 ? lo - 1 : 1, r1 = hi < last ? hi + 1 : last;
-            for (int r = r0; r <= r1; r++)
-            {
-                ulong cur = rg[r];
-                ulong y = cur | (rg[r - 1] | rg[r + 1]) & fr[r];
-                if (y == cur) continue;
-                y = FillRow(y, fr[r]);
-                rg[r] = y; ch = true;
-                if (r < lo) lo = r; if (r > hi) hi = r;
-            }
-            if (!ch) break;
-            ch = false;
-            r0 = lo > 1 ? lo - 1 : 1; r1 = hi < last ? hi + 1 : last;
-            for (int r = r1; r >= r0; r--)
-            {
-                ulong cur = rg[r];
-                ulong y = cur | (rg[r - 1] | rg[r + 1]) & fr[r];
-                if (y == cur) continue;
-                y = FillRow(y, fr[r]);
-                rg[r] = y; ch = true;
-                if (r < lo) lo = r; if (r > hi) hi = r;
-            }
-            if (!ch) break;
-        }
+        int lo = rp, hi = rp;
+        FloodDirty(fr, rg, rp, 1UL << cp, ref lo, ref hi);
         fr[rp] = saved;
         regLo = lo; regHi = hi;
         for (int r = lo; ; r++) if (rg[r] != 0) return r * b.W + System.Numerics.BitOperations.TrailingZeroCount(rg[r]);
+    }
+
+    /// <summary>Row flood from the seed bits in row rp over free rows f into reg (zero on entry); a bitmask of dirty rows replaces whole-board sweeps (needs &lt;= 64 rows).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void FloodDirty(ulong* f, ulong* reg, int rp, ulong seed, ref int lo, ref int hi)
+    {
+        ulong y0 = FillRow(seed, f[rp]) | reg[rp];
+        ulong nw0 = y0 & ~reg[rp];
+        reg[rp] = y0;
+        ulong dirty = 0;
+        if ((nw0 & f[rp - 1] & ~reg[rp - 1]) != 0) dirty |= 1UL << (rp - 1);
+        if ((nw0 & f[rp + 1] & ~reg[rp + 1]) != 0) dirty |= 1UL << (rp + 1);
+        while (dirty != 0)
+        {
+            int r = System.Numerics.BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
+            ulong cur = reg[r];
+            ulong y = cur | (reg[r - 1] | reg[r + 1]) & f[r];
+            if (y == cur) continue;
+            y = FillRow(y, f[r]);
+            reg[r] = y;
+            ulong nw = y & ~cur;
+            if (r < lo) lo = r; if (r > hi) hi = r;
+            if ((nw & f[r - 1] & ~reg[r - 1]) != 0) dirty |= 1UL << (r - 1);
+            if ((nw & f[r + 1] & ~reg[r + 1]) != 0) dirty |= 1UL << (r + 1);
+        }
     }
 
     int RegionCount()
@@ -238,36 +236,9 @@ public sealed unsafe class ClusterChecker
                 built = true;
             }
             if ((pkR[r0] & bit0) != 0) continue;
-            // flood the pocket from y0 over mkR
-            ulong* mk = mkR; ulong* pk = pkR;
-            pk[r0] |= FillRow(bit0, mk[r0]);
-            int lo = r0, hi = r0, last = rows - 2;
-            // pk accumulates; flood only grows from the new seed's component (other components in pk are closed already)
-            while (true)
-            {
-                bool ch = false;
-                int a = lo > 1 ? lo - 1 : 1, z = hi < last ? hi + 1 : last;
-                for (int r = a; r <= z; r++)
-                {
-                    ulong cur = pk[r];
-                    ulong y = cur | (pk[r - 1] | pk[r + 1]) & mk[r];
-                    if (y == cur) continue;
-                    y = FillRow(y, mk[r]); pk[r] = y; ch = true;
-                    if (r < lo) lo = r; if (r > hi) hi = r;
-                }
-                if (!ch) break;
-                ch = false;
-                a = lo > 1 ? lo - 1 : 1; z = hi < last ? hi + 1 : last;
-                for (int r = z; r >= a; r--)
-                {
-                    ulong cur = pk[r];
-                    ulong y = cur | (pk[r - 1] | pk[r + 1]) & mk[r];
-                    if (y == cur) continue;
-                    y = FillRow(y, mk[r]); pk[r] = y; ch = true;
-                    if (r < lo) lo = r; if (r > hi) hi = r;
-                }
-                if (!ch) break;
-            }
+            // flood the pocket from y0 over mkR (pk accumulates earlier closed pockets; they are never re-dirtied)
+            int plo = r0, phi = r0;
+            FloodDirty(mkR, pkR, r0, bit0, ref plo, ref phi);
         }
         if (built)
         {
