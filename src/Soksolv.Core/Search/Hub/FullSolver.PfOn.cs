@@ -24,9 +24,9 @@ public sealed unsafe partial class FullSolver
         var g = (int[])lv.Boxes.Clone(); // the pull view's boxes are the real goals
         Array.Sort(g);
         pff = new PfFest(wall, W, g, true);
-        hu = new int[n + 1]; hv = new int[n + 1]; hp = new int[n + 1]; hway = new int[n + 1]; hminv = new int[n + 1]; hused = new bool[n + 1];
         hfBoxes = new int[n];
         tgtDist = pff.PfDist; // matchingDistances(): the pull lane's matching to the real goals
+        HungarianInit();
     }
 
     ulong Rnd()
@@ -39,7 +39,7 @@ public sealed unsafe partial class FullSolver
     /// <summary>Go pfFill: rooms (Festival's score_rooms), spread key, and for one region the hotspot count (occ holds the board).</summary>
     void PfFill(ref PfFest.Tuple pt, ReadOnlySpan<int> boxes)
     {
-        pt = pt with { Rooms = FestRooms() };
+        pt = pt with { Rooms = FestRooms(boxes) };
         if (opt.PfSpread && pt.Dist >= 0) pt = pt with { Dist = pff!.SpreadSum(boxes) }; // festXStyle: spread
         if (pt.Reg != 1) return;
         pt = pt with { Hot = pff!.Hot(boxes, occ) };
@@ -76,9 +76,21 @@ public sealed unsafe partial class FullSolver
     // ---- Festival's score_rooms (Go festRooms / festRoomsFlood) ---------------------------------------------------------------------
     uint[]? frCovered, frTouched; uint frCoverStamp, frTouchStamp; bool[]? frLost;
 
-    int FestRooms()
+    int FestRooms(ReadOnlySpan<int> boxes)
     {
         if (!HasRooms || rmRooms.Length < 2) return 0;
+        if (!frbInit) FrbPrepare();
+        if (frbOk)
+        {
+            int k = FestRoomsBits(boxes);
+            if (CheckFestRooms) { int e = FestRoomsQueue(); if (e != k) throw new InvalidOperationException($"FestRooms bits {k} != queue {e}"); }
+            return k;
+        }
+        return FestRoomsQueue();
+    }
+
+    int FestRoomsQueue()
+    {
         int nr = rmRooms.Length, nw = rmNw;
         if (frLost == null || frLost.Length != nr * nr) frLost = new bool[nr * nr];
         frCovered ??= new uint[cells]; frTouched ??= new uint[nr];

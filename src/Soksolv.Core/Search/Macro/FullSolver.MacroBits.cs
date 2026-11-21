@@ -33,6 +33,7 @@ public sealed unsafe partial class FullSolver
         bbWallP = (ulong*)Unsafe.AsPointer(ref bbWallA[0]); bbNFreeP = (ulong*)Unsafe.AsPointer(ref bbNFreeA[0]); bbNRegP = (ulong*)Unsafe.AsPointer(ref bbNRegA[0]);
         bbParP = (ulong*)Unsafe.AsPointer(ref bbParA[0]); bbAliveP = (ulong*)Unsafe.AsPointer(ref bbAliveA[0]);
         bbAll = W < 64 ? (1UL << W) - 1 : ~0UL;
+        divM = (uint)((1UL << 32) / (uint)W + 1); bbRegLo = bbH + 2; bbRegHi = -1;
         for (int r = 0; r < bbH; r++)
             for (int x = 0; x < W; x++)
             {
@@ -62,40 +63,81 @@ public sealed unsafe partial class FullSolver
         }
     }
 
-    /// <summary>Row-bitset flood: stamps m3 with ps for every cell reachable from pc with nc blocked; returns the minimum cell.</summary>
+    /// <summary>Row-bitset flood. Stamps m3 with ps for every cell reachable from pc with nc blocked unless <see cref="mBitsOnly"/> (then the region
+    /// lives only in the row bitset bbNRegP; ask <see cref="InPR"/>). Returns the region's minimum cell.</summary>
     int BbFlood(int pc, int nc, uint ps)
     {
         int w = W;
         int rn = nc / w + 1, rp = pc / w + 1, cp = pc % w;
-        ulong s1 = bbNFreeP[rn];
-        bbNFreeP[rn] &= ~(1UL << (nc % w));
-        ulong s2 = bbNFreeP[rp];
-        bbNFreeP[rp] |= 1UL << cp;
-        FloodRows(bbNFreeP, bbNRegP, bbH + 2, rp, cp);
-        bbNFreeP[rp] = s2; bbNFreeP[rn] = s1;
-        int minC = -1; bbRegLo = bbH + 2; bbRegHi = -1;
-        for (int r = 1; r <= bbH; r++)
+        ulong* free = bbNFreeP, reg = bbNRegP;
+        ulong s1 = free[rn];
+        free[rn] &= ~(1UL << (nc % w));
+        ulong s2 = free[rp];
+        free[rp] |= 1UL << cp;
+        // the previous region's rows are the only non-zero ones: clear just those (a connected region spans consecutive rows)
+        if (bbH + 2 <= 64)
         {
-            ulong x = bbNRegP[r];
-            if (x == 0) continue;
-            if (minC < 0) bbRegLo = r;
-            bbRegHi = r;
-            int baseC = (r - 1) * w;
-            if (minC < 0) minC = baseC + BitOperations.TrailingZeroCount(x);
-            for (; x != 0; x &= x - 1) m3P[baseC + BitOperations.TrailingZeroCount(x)] = ps;
+            if (bbRegHi >= 0) for (int r = bbRegLo; r <= bbRegHi; r++) reg[r] = 0;
+            FloodRowsDirtyC(free, reg, bbH + 2, rp, cp);
         }
+        else FloodRows(free, reg, bbH + 2, rp, cp);
+        free[rp] = s2; free[rn] = s1;
+        int lo = rp, hi = rp;
+        while (reg[lo - 1] != 0) lo--;
+        while (reg[hi + 1] != 0) hi++;
+        bbRegLo = lo; bbRegHi = hi;
+        int minC = (lo - 1) * w + BitOperations.TrailingZeroCount(reg[lo]);
+        if (!mBitsOnly)
+            for (int r = lo; r <= hi; r++)
+            {
+                ulong x = reg[r];
+                int baseC = (r - 1) * w;
+                for (; x != 0; x &= x - 1) m3P[baseC + BitOperations.TrailingZeroCount(x)] = ps;
+            }
         return minC;
     }
 
-    void BbBuildParent(uint st)
+    bool mBitsOnly; uint divM;
+    /// <summary>Is cell c in the player region of the last flood (bit-only mode) / stamped ps (m3 mode)?</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    bool InPR(int c)
     {
+        if (!mBitsOnly) return m3P[c] == mpstamp;
+        int r = (int)(((ulong)(uint)c * divM) >> 32);
+        return (bbNRegP[r + 1] >> (c - r * W) & 1) != 0;
+    }
+
+    /// <summary>FloodRowsDirty on rows whose reg is already zero (the caller cleared them).</summary>
+    static void FloodRowsDirtyC(ulong* free, ulong* reg, int rows, int rp, int cp) => FloodRowsDirty(free, reg, rows, rp, cp, false);
+
+    byte[]? accCntA; byte* accCnt; int accMp, accParLo, accParHi; int[] accSupOff = new int[4];
+    /// <summary>Per-node tables of the delta move-access terms: the parent's region rows, the number of (box, direction) pairs
+    /// supported by each cell (<c>accCnt</c>), the parent's mobility <c>accMp</c> = sum of accCnt over the parent's region.</summary>
+    void BbBuildParent(uint st, ReadOnlySpan<int> cur)
+    {
+        int lo = bbH + 2, hi = -1;
         for (int r = 0; r < bbH; r++)
         {
             ulong m = 0;
             int baseI = r * W;
             for (int x = 0; x < W; x++) if (mark[baseI + x] == st) m |= 1UL << x;
             bbParP[r + 1] = m;
+            if (m != 0) { if (lo > r + 1) lo = r + 1; hi = r + 1; }
         }
+        accParLo = lo; accParHi = hi;
+        if (accCntA == null) { accCntA = GC.AllocateArray<byte>(cells, pinned: true); accCnt = (byte*)Unsafe.AsPointer(ref accCntA[0]); }
+        Array.Clear(accCntA);
+        for (int k = 0; k < 4; k++) accSupOff[k] = pull ? dirs[k] : -dirs[k];
+        int mp = 0;
+        foreach (int c in cur)
+            for (int k = 0; k < 4; k++)
+            {
+                int sc = c + accSupOff[k];
+                accCnt[sc]++;
+                int rr = (int)(((ulong)(uint)sc * divM) >> 32);
+                if ((bbParP[rr + 1] >> (sc - rr * W) & 1) != 0) mp++;
+            }
+        accMp = mp;
         bbParentBuilt = true;
     }
 
@@ -104,12 +146,88 @@ public sealed unsafe partial class FullSolver
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static ulong AlignX(ulong v, int dx) => dx >= 0 ? v >> dx : v << -dx;
 
+    // per-direction access geometry as shifts: bit x of AlignX(v, dx) = bit x+dx of v = (v >> sr) << sl (one of them 0). Row offsets are relative to r+1.
+    struct AccGeo { public int SupR, SupSr, SupSl, LandR, LandSr, LandSl, FreeR, FreeSr, FreeSl; }
+    AccGeo[]? accGeoA; AccGeo* accGeo;
+    void BbGeoInit()
+    {
+        accGeoA = GC.AllocateArray<AccGeo>(4, pinned: true); accGeo = (AccGeo*)Unsafe.AsPointer(ref accGeoA[0]);
+        for (int k = 0; k < 4; k++)
+        {
+            ref var g = ref accGeo[k];
+            g.SupR = gSupR[k]; g.SupSr = gSupX[k] > 0 ? gSupX[k] : 0; g.SupSl = gSupX[k] < 0 ? -gSupX[k] : 0;
+            g.LandR = gLandR[k]; g.LandSr = gLandX[k] > 0 ? gLandX[k] : 0; g.LandSl = gLandX[k] < 0 ? -gLandX[k] : 0;
+            g.FreeR = gFreeR[k]; g.FreeSr = gFreeX[k] > 0 ? gFreeX[k] : 0; g.FreeSl = gFreeX[k] < 0 ? -gFreeX[k] : 0;
+        }
+    }
+
+    public static bool AccessRowsOnly = Environment.GetEnvironmentVariable("SOKSOLV_ACCESS_ROWS") == "1";   // test hook: skip the delta path
+
+    /// <summary>
+    /// Move access as a delta of the parent's per-node tables (no recorded facts): mobility(child) = Mp + sum(cnt over D) - sum(cnt over E) + the
+    /// 4+4 supports of the lifted and the landed box that lie in the child's region, with D = child region \ parent region, E = parent \ child;
+    /// explorer = an unchanged box with a legal push whose support lies in D. Returns mobility -1 when D/E are too large (the row kernel runs instead).
+    /// </summary>
+    (int mobility, bool explorer, int accStart, int accLen) MMoveAccessDelta(ReadOnlySpan<int> cur, int target, int origB)
+    {
+        const int Lim = 160;
+        ulong* reg = bbNRegP, par = bbParP, free = bbNFreeP, wallR = bbWallP;
+        int lo = Math.Min(bbRegLo, accParLo), hi = Math.Max(bbRegHi, accParHi);
+        int w = W; uint dm = divM;
+        byte* cnt = accCnt;
+        int mob = accMp, nb = 0;
+        bool explorer = false;
+        for (int r = lo; r <= hi; r++)
+        {
+            ulong d = reg[r] & ~par[r], e = par[r] & ~reg[r];
+            if ((d | e) == 0) continue;
+            nb += BitOperations.PopCount(d) + BitOperations.PopCount(e);
+            if (nb > Lim) return (-1, false, 0, 0);
+            int baseC = (r - 1) * w;
+            for (ulong x = e; x != 0; x &= x - 1) mob -= cnt[baseC + BitOperations.TrailingZeroCount(x)];
+            for (ulong x = d; x != 0; x &= x - 1)
+            {
+                int sc = baseC + BitOperations.TrailingZeroCount(x);
+                mob += cnt[sc];
+                if (explorer) continue;
+                for (int k = 0; k < 4; k++)
+                {
+                    int cb = sc - accSupOff[k];
+                    int rb = (int)(((ulong)(uint)cb * dm) >> 32);
+                    int colb = cb - rb * w;
+                    if (((bbAll & ~free[rb + 1] & ~wallR[rb + 1]) >> colb & 1) == 0) continue;   // not a box
+                    int dk = dirs[k];
+                    int to = pull ? cb + 2 * dk : cb + dk;
+                    if ((uint)to >= (uint)cells || to == target) continue;
+                    int rt = (int)(((ulong)(uint)to * dm) >> 32);
+                    if ((free[rt + 1] >> (to - rt * w) & 1) == 0) continue;
+                    if (dist[cb + dk] < 0) continue;
+                    explorer = true; break;
+                }
+            }
+        }
+        for (int k = 0; k < 4; k++)
+        {
+            int sb = origB + accSupOff[k], st = target + accSupOff[k];
+            int rb = (int)(((ulong)(uint)sb * dm) >> 32), rs = (int)(((ulong)(uint)st * dm) >> 32);
+            if ((reg[rb + 1] >> (sb - rb * w) & 1) != 0) mob--;
+            if ((reg[rs + 1] >> (st - rs * w) & 1) != 0) mob++;
+        }
+        return (mob, explorer, 0, 0);
+    }
+
     /// <summary>Go moveAccessBits: every term is a row-bitset expression over the rows holding boxes.</summary>
     (int mobility, bool explorer, int accStart, int accLen) MMoveAccessBits(ReadOnlySpan<int> cur, int moved, int target)
     {
-        if (!bbParentBuilt) BbBuildParent(mOpenSt);
+        if (!bbParentBuilt) BbBuildParent(mOpenSt, cur);
+        if (accGeoA == null) BbGeoInit();
         int origB = cur[moved];
         bool recordAcc = AccessNovelty && NoveltyBudget() > 0;
+        if (!recordAcc && !AccessRowsOnly)
+        {
+            var dr = MMoveAccessDelta(cur, target, origB);
+            if (dr.mobility >= 0) return dr;
+        }
         int accStart = recordAcc ? mAccN : 0;
         bool vacated = (mCmdMask | mUnpinMask) != 0 || (goal[origB] && !goal[target]);
         bool displaced = recordAcc && (mUnpackedRegime || vacated);
@@ -118,25 +236,38 @@ public sealed unsafe partial class FullSolver
         int w = W;
         int tr = target / w; ulong tbit = 1UL << (target % w);
         ulong* free = bbNFreeP, wallR = bbWallP, reg = bbNRegP, par = bbParP, alive = bbAliveP;
+        AccGeo* geo = accGeo;
+        ulong all = bbAll;
         // only box rows next to the region's rows can have a supporting cell in it
         for (int r = Math.Max(0, bbRegLo - 2), rEnd = Math.Min(bbH - 1, bbRegHi); r <= rEnd; r++)
         {
-            ulong boxes = bbAll & ~free[r + 1] & ~wallR[r + 1];
+            ulong boxes = all & ~free[r + 1] & ~wallR[r + 1];
             ulong tm = 0;
             if (r == tr) { boxes |= tbit; tm = tbit; }
             if (boxes == 0) continue;
+            if (explorer && !recordAcc)
+            {
+                // legality no longer matters: mobility only
+                for (int k = 0; k < 4; k++)
+                {
+                    AccGeo* g = geo + k;
+                    mobility += BitOperations.PopCount(boxes & ((reg[r + g->SupR + 1] >> g->SupSr) << g->SupSl));
+                }
+                continue;
+            }
             for (int k = 0; k < 4; k++)
             {
-                ulong reach = AlignX(RowAt(reg, r + gSupR[k] + 1), gSupX[k]);
+                AccGeo* g = geo + k;
+                ulong reach = (reg[r + g->SupR + 1] >> g->SupSr) << g->SupSl;
                 ulong sup = boxes & reach;
                 if (sup == 0) continue;
                 mobility += BitOperations.PopCount(sup);
                 if (explorer && !recordAcc) continue; // legality only matters for the first explorer or for recorded facts
-                ulong fresh = sup & ~AlignX(RowAt(par, r + gSupR[k] + 1), gSupX[k]);
+                ulong fresh = sup & ~((par[r + g->SupR + 1] >> g->SupSr) << g->SupSl);
                 if (fresh == 0 && !goalVacated) continue;
-                int fr = r + gFreeR[k];
+                int fr = r + g->FreeR;
                 ulong freeRow = RowAt(free, fr + 1) & ~(fr == tr ? tbit : 0UL);
-                ulong legal = sup & AlignX(freeRow, gFreeX[k]) & AlignX(RowAt(alive, r + gLandR[k] + 1), gLandX[k]);
+                ulong legal = sup & ((freeRow >> g->FreeSr) << g->FreeSl) & ((alive[r + g->LandR + 1] >> g->LandSr) << g->LandSl);
                 if (legal == 0) continue;
                 ulong x = fresh & legal & ~tm;
                 if (x != 0)

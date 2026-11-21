@@ -24,6 +24,7 @@ public sealed unsafe partial class FullSolver
     internal struct HubCand
     {
         public int Id, Cut, Pinned, Dist, Lb, Trapped;
+        public ulong Sig;
         public byte Tier, State;
         public bool Pocket;
         static int Len(int x) => 32 - BitOperations.LeadingZeroCount((uint)x);
@@ -85,7 +86,7 @@ public sealed unsafe partial class FullSolver
         public int Nominated, Committed, Reached, Abandoned, Extensions, MemFullN, Exhausted, TailFail, Infeasible, ScanSkipped, Scanned, Eligible, ReachRej, FallbackRej;
         public int[] TierCount = new int[5], TierSeen = new int[5];
         public int NReg1, MinHot0 = 1 << 30, MinHot = 1 << 30, BestOnAll, Rounds, Idle, Rescans, NSeen;
-        int lastHot, lastPocket;
+        int lastHot, lastPocket; int[] blockBuf = [];
         ulong[] candSeen = [];
         bool rescanOn; int idleCapRun;
         public string IdleEnd = "";
@@ -421,14 +422,19 @@ public sealed unsafe partial class FullSolver
             gen.Invalidate();
             gen.Unpack(id, buf);
             foreach (int b in buf) occ[b] = true;
-            var pocketCells = new List<int>();
+            var bits = ps.pff!.Bits;
+            int nb = 0;
             lastHot = 0; lastPocket = 0;
-            gen.FloodAt(gen.Node(id).Player);
-            for (int c = 0; c < wall.Length; c++)
-                if (!wall[c] && !occ[c] && !gen.LabIs1(c)) pocketCells.Add(c);
-            lastPocket = pocketCells.Count;
-            foreach (int c in pocketCells) occ[c] = true;
-            cut = ps.pff!.Bicon(occ);
+            gen.FloodAt(gen.Node(id).Player, buf);
+            if (blockBuf.Length < wall.Length) blockBuf = new int[wall.Length];
+            if (gen.BitsOk) nb = gen.PocketCells(blockBuf);
+            else
+                for (int c = 0; c < wall.Length; c++)
+                    if (!wall[c] && !occ[c] && !gen.LabIs1(c)) blockBuf[nb++] = c;
+            lastPocket = nb;
+            for (int j = 0; j < nb; j++) occ[blockBuf[j]] = true;
+            // the cut proxy only concerns the player's region: other components do not influence its cycles
+            cut = gen.BitsOk && bits != null ? bits.Count(buf, gen.Region1) : ps.pff!.Bicon(occ);
             pinned = 0; trapped = 0;
             foreach (int b in buf)
             {
@@ -455,7 +461,7 @@ public sealed unsafe partial class FullSolver
                     if (!wall[b + d] && !wall[b + 2 * d] && !occ[b + 2 * d] && gen.InPlayerRegion(b + d)) { ok = true; break; }
                 if (!ok) trapped++;
             }
-            foreach (int c in pocketCells) occ[c] = false;
+            for (int j = 0; j < nb; j++) occ[blockBuf[j]] = false;
             foreach (int b in buf) occ[b] = false;
         }
 
@@ -464,9 +470,10 @@ public sealed unsafe partial class FullSolver
             if (InTried(c.Id)) return;
             int dup = -1;
             ulong csig = SigOf(c.Id);
+            c.Sig = csig;
             for (int i = 0; i < nPool; i++)
             {
-                if (SigOf(pool[i].Id) == csig)
+                if (pool[i].Sig == csig)
                 {
                     if (!c.KeyLess(pool[i])) return;
                     dup = i;
@@ -509,7 +516,7 @@ public sealed unsafe partial class FullSolver
                     if (DupLive(p.Id)) { p.State = HubInfeasible; continue; }
                     if (bi >= 0)
                     {
-                        bool pt = SharedTriedSig(SigOf(p.Id)), bt = SharedTriedSig(SigOf(pool[bi].Id));
+                        bool pt = SharedTriedSig(p.Sig), bt = SharedTriedSig(pool[bi].Sig);
                         if (pt != bt)
                         {
                             if (!pt) bi = i;
