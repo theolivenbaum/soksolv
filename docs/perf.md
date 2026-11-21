@@ -11,12 +11,12 @@ Tools: `bench/lane-parity.py` (vs unpatched Go), `bench/lane-timing.py`, `bench/
 
 | level | Go | C# before | C# after | after/Go |
 |---|---|---|---|---|
-| Holland_81_57 | 1.9 | 1.41 | 0.65 | 0.36 |
+| Holland_81_57 | 1.9 | 1.41 | 0.65-0.77 | 0.36-0.43 |
 | SokHard_163_36 | 2.3 | 1.73 | 0.68 | 0.30 |
 | Aymeric_Du_Peloux_282_273 | 4.9 | 3.58 | 1.7 | 0.35 |
 | Dive_Sven_1623_197 | 7.3 | 4.27 | 2.6 | 0.38 |
 | Sasquatch_VI_50_24 | 1.6 | 1.32 | 0.71 | 0.43 |
-| 22-level testdata total | 35.2 | 24.3 (0.69x) | see bottom | ~0.37x |
+| 24-level testdata total (CPU s) | 35.0 | 24.3 (0.69x) | 12.5 | 0.36 |
 
 Allocation: the 20k-node runs used to allocate 14-460 MB in the AOT build (`alloc_mb`); now 5-8 MB total (solver construction), and
 the steady state is 0 B/node of garbage. What still grows with the node count is *retained* data only (the `macros` / `nodeMacros`

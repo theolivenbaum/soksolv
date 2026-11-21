@@ -440,10 +440,10 @@ public sealed unsafe class ClusterChecker
         int p0 = Region(side);
         for (int i = 0; i < n; i++) Unblock(start[i]);
 
-        int tsize = 8192;
-        while (tsize < capStates * 4 + 128) tsize <<= 1;
+        int tsize = 2048;
+        while (tsize < capStates * 2 + 64) tsize <<= 1;   // load <= ~0.5 at the cap; small enough to stay in L1
         if (seenSlots.Length < tsize) seenSlots = new ulong[tsize];
-        int tmask = seenSlots.Length - 1;
+        int tmask = tsize - 1;
         if (++seenStamp == 0) { Array.Clear(seenSlots); seenStamp = 1; }
         uint ss = seenStamp;
         int qn = 0;
@@ -551,10 +551,10 @@ public sealed unsafe class ClusterChecker
         int p0 = Region(side);
         for (int i = 0; i < n; i++) Unblock(start[i]);
 
-        int tsize = 8192;
-        while (tsize < capStates * 4 + 128) tsize <<= 1;
+        int tsize = 2048;
+        while (tsize < capStates * 2 + 64) tsize <<= 1;   // load <= ~0.5 at the cap; small enough to stay in L1
         if (seenSlots.Length < tsize) seenSlots = new ulong[tsize];
-        int tmask = seenSlots.Length - 1;
+        int tmask = tsize - 1;
         if (++seenStamp == 0) { Array.Clear(seenSlots); seenStamp = 1; }
         uint ss = seenStamp;
         int qn = 0; openN = 0;
