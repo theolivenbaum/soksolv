@@ -6,6 +6,17 @@ public sealed unsafe partial class FullSolver
     // ---- features ---------------------------------------------------------------------------------------------------
     int PackedCount()
     {
+        int gw = packWords;
+        int maxR = -1;
+        for (int r = nRounds - 1; r >= 0 && maxR < 0; r--)
+            for (int w = 0; w < gw; w++)
+                if ((rdMask[r * gw + w] & ~gOcc[w]) != 0) { maxR = r; break; }
+        int cnt = 0, k = maxR < 0 ? 0 : maxR;
+        for (int w = 0; w < gw; w++) cnt += BitOperations.PopCount(gOcc[w] & geMask[k * gw + w]);
+        return cnt;
+    }
+    int PackedCountSlow()
+    {
         int maxR = -1;
         foreach (int g in goals) if (!occ[g]) maxR = Math.Max(maxR, round[g]);
         int c = 0;
@@ -13,11 +24,56 @@ public sealed unsafe partial class FullSolver
         return c;
     }
 
+    /// <summary>Counts the connected components of free cells with word-parallel row floods (boards up to 64 wide).</summary>
+    int RegionsBits()
+    {
+        int rows = frRows;
+        ulong* rem = frRem; ulong* reg = frReg; ulong* fr = frR;
+        for (int r = 0; r < rows; r++) rem[r] = fr[r];
+        int cnt = 0, last = rows - 2;
+        for (int r0 = 1; r0 <= last; )
+        {
+            if (rem[r0] == 0) { r0++; continue; }
+            cnt++;
+            int cp = BitOperations.TrailingZeroCount(rem[r0]);
+            int lo = r0, hi = r0;
+            ulong y0 = FillRowB(1UL << cp, rem[r0]);
+            reg[r0] = y0;
+            ulong dirty = 0;
+            if ((y0 & rem[r0 - 1]) != 0) dirty |= 1UL << (r0 - 1);
+            if ((y0 & rem[r0 + 1]) != 0) dirty |= 1UL << (r0 + 1);
+            while (dirty != 0)
+            {
+                int r = BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
+                ulong cur = reg[r];
+                ulong y = cur | (reg[r - 1] | reg[r + 1]) & rem[r];
+                if (y == cur) continue;
+                y = FillRowB(y, rem[r]);
+                reg[r] = y;
+                ulong nw = y & ~cur;
+                if (r < lo) lo = r; if (r > hi) hi = r;
+                if ((nw & rem[r - 1] & ~reg[r - 1]) != 0) dirty |= 1UL << (r - 1);
+                if ((nw & rem[r + 1] & ~reg[r + 1]) != 0) dirty |= 1UL << (r + 1);
+            }
+            for (int r = lo; r <= hi; r++) { rem[r] &= ~reg[r]; reg[r] = 0; }
+        }
+        return cnt;
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    static ulong FillRowB(ulong y, ulong f)
+    {
+        while (true)
+        {
+            ulong z = (y | y << 1 | y >> 1) & f;
+            if (z == y) return y;
+            y = z;
+        }
+    }
     /// <summary>Go regions() under target pockets (exp-460): components made only of pocket cells do not count.</summary>
     int RegionsRel()
     {
         if (tgtPocket == null) return Regions();
-        if (floorCells.Length == 0) Regions();
+        FloorCells();
         uint rs = ++rstamp;
         int cnt = 0, w = W;
         int* q = cqueueP;
@@ -43,6 +99,7 @@ public sealed unsafe partial class FullSolver
 
     int Regions()
     {
+        if (fbits) return RegionsBits();
         if (floorCells.Length == 0)
         {
             var l = new List<int>();
@@ -86,45 +143,55 @@ public sealed unsafe partial class FullSolver
             artDisc = new int[cells]; artLow = new int[cells]; artPieces = new int[cells]; artSeen = new uint[cells];
             artStackC = new int[cells + 1]; artStackP = new int[cells + 1]; artStackNext = new sbyte[cells + 1];
         }
-        var disc = artDisc; var low = artLow!; var pieces = artPieces!; var seen = artSeen!;
-        var sc = artStackC!; var sp = artStackP!; var sn = artStackNext!;
         uint st = ++artStamp;
         artComps = 0;
-        int timer = 0;
-        foreach (int root in FloorCells())
+        int timer = 0, comps = 0;
+        int w = W;
+        fixed (int* disc = artDisc, low = artLow, pieces = artPieces, sc = artStackC, sp = artStackP)
+        fixed (uint* seen = artSeen)
+        fixed (sbyte* sn = artStackNext)
+        fixed (int* fcs = FloorCells())
         {
-            if (blk[root] != 0 || seen[root] == st) continue;
-            artComps++;
-            timer++;
-            disc[root] = timer; low[root] = timer; pieces[root] = 0; seen[root] = st;
-            int sz = 0; sc[0] = root; sp[0] = -1; sn[0] = 0; sz = 1;
-            while (sz > 0)
+            int nf = floorCells.Length;
+            for (int fi = 0; fi < nf; fi++)
             {
-                int top = sz - 1;
-                if (sn[top] < 4)
+                int root = fcs[fi];
+                if (blk[root] != 0 || seen[root] == st) continue;
+                comps++;
+                timer++;
+                disc[root] = timer; low[root] = timer; pieces[root] = 0; seen[root] = st;
+                sc[0] = root; sp[0] = -1; sn[0] = 0; int sz = 1;
+                while (sz > 0)
                 {
-                    int y = sc[top] + dirs[sn[top]++];
-                    if (blk[y] != 0) continue;
-                    if (seen[y] != st)
+                    int top = sz - 1;
+                    int c = sc[top];
+                    int k = sn[top];
+                    if (k < 4)
                     {
-                        timer++;
-                        disc[y] = timer; low[y] = timer; pieces[y] = 1; seen[y] = st;
-                        sc[sz] = y; sp[sz] = sc[top]; sn[sz] = 0; sz++;
+                        sn[top] = (sbyte)(k + 1);
+                        int y = k == 0 ? c - w : k == 1 ? c + w : k == 2 ? c - 1 : c + 1;
+                        if (blk[y] != 0) continue;
+                        if (seen[y] != st)
+                        {
+                            timer++;
+                            disc[y] = timer; low[y] = timer; pieces[y] = 1; seen[y] = st;
+                            sc[sz] = y; sp[sz] = c; sn[sz] = 0; sz++;
+                        }
+                        else if (y != sp[top])
+                        {
+                            if (disc[y] < low[c]) low[c] = disc[y];
+                        }
+                        continue;
                     }
-                    else if (y != sp[top])
-                    {
-                        int c = sc[top];
-                        if (disc[y] < low[c]) low[c] = disc[y];
-                    }
-                    continue;
+                    int pp = sp[top];
+                    sz--;
+                    if (pp < 0) continue;
+                    if (low[c] < low[pp]) low[pp] = low[c];
+                    if (low[c] >= disc[pp]) pieces[pp]++;
                 }
-                int cc = sc[top], pp = sp[top];
-                sz--;
-                if (pp < 0) continue;
-                if (low[cc] < low[pp]) low[pp] = low[cc];
-                if (low[cc] >= disc[pp]) pieces[pp]++;
             }
         }
+        artComps = comps;
     }
 
     int ChildRegions(int t) => artComps - 1 + artPieces![t];
@@ -244,9 +311,74 @@ public sealed unsafe partial class FullSolver
     ulong* bbFloor, bbFree, bbReg, bbRem; int bbRows;
     public static bool PairBitsOff, PairBitsCheck;   // test hooks
 
-    static void FloodRows(ulong* free, ulong* reg, int rows, int rp, int cp)
+    /// <summary>Row flood with a dirty-row worklist (rows ≤ 64): a row is re-examined only when a neighbouring row changed; passes alternate up/down like the sweeps they replace.</summary>
+    static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp)
     {
         for (int i = 0; i < rows; i++) reg[i] = 0;
+        reg[rp] = FillRow(1UL << cp, free[rp]);
+        int last = rows - 2;
+        ulong valid = ((1UL << last) - 1) << 1;   // bits 1..last
+        ulong cur = ((1UL << (rp - 1)) | (1UL << (rp + 1))) & valid;
+        bool up = true;
+        while (cur != 0)
+        {
+            ulong nxt = 0, m = cur;
+            if (up)
+                while (m != 0)
+                {
+                    int r = BitOperations.TrailingZeroCount(m);
+                    m &= m - 1;
+                    ulong cr = reg[r], f = free[r];
+                    ulong y = cr | (reg[r - 1] | reg[r + 1]) & f;
+                    if (y == cr) continue;
+                    y = FillRow(y, f);
+                    if (y == cr) continue;
+                    reg[r] = y;
+                    m |= (1UL << (r + 1)) & valid; nxt |= (1UL << (r - 1)) & valid;
+                }
+            else
+                while (m != 0)
+                {
+                    int r = 63 - BitOperations.LeadingZeroCount(m);
+                    m &= ~(1UL << r);
+                    ulong cr = reg[r], f = free[r];
+                    ulong y = cr | (reg[r - 1] | reg[r + 1]) & f;
+                    if (y == cr) continue;
+                    y = FillRow(y, f);
+                    if (y == cr) continue;
+                    reg[r] = y;
+                    m |= (1UL << (r - 1)) & valid; nxt |= (1UL << (r + 1)) & valid;
+                }
+            cur = nxt; up = !up;
+        }
+    }
+
+    static void FloodRows(ulong* free, ulong* reg, int rows, int rp, int cp)
+    {
+        if (rows <= 64) { FloodRowsDirty(free, reg, rows, rp, cp); return; }
+        for (int i = 0; i < rows; i++) reg[i] = 0;
+        if (rows <= 64)
+        {
+            // dirty-row worklist (no whole-board sweeps)
+            ulong y0 = FillRow(1UL << cp, free[rp]);
+            reg[rp] = y0;
+            ulong dirty = 0;
+            if ((y0 & free[rp - 1]) != 0) dirty |= 1UL << (rp - 1);
+            if ((y0 & free[rp + 1]) != 0) dirty |= 1UL << (rp + 1);
+            while (dirty != 0)
+            {
+                int r = BitOperations.TrailingZeroCount(dirty); dirty &= dirty - 1;
+                ulong cur = reg[r];
+                ulong y = cur | (reg[r - 1] | reg[r + 1]) & free[r];
+                if (y == cur) continue;
+                y = FillRow(y, free[r]);
+                reg[r] = y;
+                ulong nw = y & ~cur;
+                if ((nw & free[r - 1] & ~reg[r - 1]) != 0) dirty |= 1UL << (r - 1);
+                if ((nw & free[r + 1] & ~reg[r + 1]) != 0) dirty |= 1UL << (r + 1);
+            }
+            return;
+        }
         reg[rp] = FillRow(1UL << cp, free[rp]);
         int last = rows - 2;
         while (true)
@@ -563,31 +695,36 @@ public sealed unsafe partial class FullSolver
         if (maxR < 0 || nodes.Parent(id) < 0) return null;
         int moved = nodes.From(id) + dirs[nodes.Dir(id)];
         if (macros.TryGetValue(id, out var seq0)) { var last = seq0[^1]; moved = last.From + dirs[last.Dir]; }
-        List<Push[]>? res = null;
+        int nres = 0;
+        mmScratch ??= new Push[]?[Math.Max(1, cur.Length)];
         foreach (int b in cur)
         {
             if (b != moved || !entrance[b]) continue;
             var seq = BoxPath(b, maxR, st);
-            if (seq != null) { stats.Macros++; (res ??= new()).Add(seq); }
+            if (seq != null) { stats.Macros++; mmScratch[nres++] = seq; }
         }
-        return res?.ToArray();
+        if (nres == 0) return null;
+        var res = new Push[nres][];
+        for (int k = 0; k < nres; k++) { res[k] = mmScratch[k]!; mmScratch[k] = null; }
+        return res;
     }
 
+    Push[]?[]? mmScratch; int[]? bpQ;
     Push[]? BoxPath(int b, int maxR, uint st)
     {
         const int limit = 500;
         if (pstamp > 1u << 31 || bstamp > 1u << 31) { Array.Clear(mark3); Array.Clear(bseenStamp); pstamp = bstamp = 0; }
         uint bs = ++bstamp;
-        var q = new List<int>();
+        var q = bpQ ??= new int[4 * 500 + 8]; int qn = 0;
         for (int di = 0; di < 4; di++)
         {
             int d = dirs[di];
-            if (mark[b - d] == st) { int k = b * 4 + di; bseenStamp[k] = bs; bprev[k] = -1; q.Add(k); }
+            if (mark[b - d] == st) { int k = b * 4 + di; bseenStamp[k] = bs; bprev[k] = -1; q[qn++] = k; }
         }
         SetOcc(b, false);
         try
         {
-            for (int i = 0; i < q.Count && i < limit; i++)
+            for (int i = 0; i < qn && i < limit; i++)
             {
                 int k = q[i];
                 int c = k / 4, di = k % 4;
@@ -595,10 +732,11 @@ public sealed unsafe partial class FullSolver
                 if (wall[nc] || occ[nc] || dist[nc] < 0) continue;
                 if (goal[nc] && round[nc] == maxR)
                 {
-                    var seq = new List<Push>();
-                    for (; k >= 0; k = bprev[k]) seq.Add(new Push(k / 4, (sbyte)(k % 4)));
-                    seq.Reverse();
-                    return seq.ToArray();
+                    int len = 0;
+                    for (int kk = k; kk >= 0; kk = bprev[kk]) len++;
+                    var seq = new Push[len];
+                    for (int j = len - 1; k >= 0; k = bprev[k], j--) seq[j] = new Push(k / 4, (sbyte)(k % 4));
+                    return seq;
                 }
                 SetOcc(nc, true);
                 uint ps = ++pstamp;
@@ -616,7 +754,7 @@ public sealed unsafe partial class FullSolver
                 for (int d2i = 0; d2i < 4; d2i++)
                 {
                     int k2 = nc * 4 + d2i;
-                    if (mark3[nc - dirs[d2i]] == ps && bseenStamp[k2] != bs) { bseenStamp[k2] = bs; bprev[k2] = k; q.Add(k2); }
+                    if (mark3[nc - dirs[d2i]] == ps && bseenStamp[k2] != bs) { bseenStamp[k2] = bs; bprev[k2] = k; q[qn++] = k2; }
                 }
             }
             return null;
@@ -666,7 +804,7 @@ public sealed unsafe partial class FullSolver
             {
                 int b = cur[i];
                 if (corral != 0 && cmark[b] != corral) continue;
-                int cands = 0;
+                int cands = 0, pend = -1, pendT = 0; // first candidate's region count is deferred: a 2nd candidate gives it via articulation, a lone one needs a flood
                 for (int di = 0; di < 4; di++)
                 {
                     int d = dirs[di], t = b + d;
@@ -689,13 +827,14 @@ public sealed unsafe partial class FullSolver
                         int r;
                         switch (++cands)
                         {
-                            case 1: r = Regions(); break;
+                            case 1: r = 0; pend = np; pendT = t; break;
                             case 2:
                                 SetOcc(t, false); ComputeArticulation(); SetOcc(t, true);
-                                r = ChildRegions(t); break;
+                                r = ChildRegions(t);
+                                pushes1[pend].R = ChildRegions(pendT); pend = -1; break;
                             default: r = ChildRegions(t); break;
                         }
-                        if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
+                        if (CheckRegions && cands > 1 && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
                         Prof.Stop(1, t0);
                         int pen = 0;
                         if (opt.Penalties && cl != null && noise == null)
@@ -704,11 +843,19 @@ public sealed unsafe partial class FullSolver
                             if (pen > 0) stats.Penalized++;
                         }
                         pushes1[np++] = new Push1 { I = i, B = b, T = t, Dir = (sbyte)di, R = r, Pen = pen };
-                        if (r < best) { best = r; bestK = np - 1; }
                     }
                     SetOcc(b, true); SetOcc(t, false);
                 }
+                if (pend >= 0)
+                {
+                    long t1 = Prof.Start();
+                    SetOcc(b, false); SetOcc(pendT, true);
+                    pushes1[pend].R = Regions();
+                    SetOcc(b, true); SetOcc(pendT, false);
+                    Prof.Stop(1, t1);
+                }
             }
+            for (int k = 0; k < np; k++) if (pushes1[k].R < best) { best = pushes1[k].R; bestK = k; }
             int last = -1;
             if (nodes.Parent(id) >= 0)
             {
@@ -836,6 +983,7 @@ public sealed unsafe partial class FullSolver
         if (reg < 0) reg = Regions();
         nodes.Reg(id) = (sbyte)Math.Min(reg, 127);
         int onGoal = PackedCount();
+        if (CheckRegions && onGoal != PackedCountSlow()) throw new InvalidOperationException("packed count mismatch");
         int bucket = onGoal * MaxRegions + Math.Min(reg, MaxRegions - 1);
         nodes.Bucket(id) = (ushort)bucket;
         PushNode(h, w, id, bucket);

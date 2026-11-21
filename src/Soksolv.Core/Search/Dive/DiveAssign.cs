@@ -1,3 +1,5 @@
+using System.Runtime.Intrinsics;
+
 namespace Soksolv.Search;
 
 /// <summary>
@@ -8,7 +10,7 @@ namespace Soksolv.Search;
 public sealed unsafe partial class FullSolver
 {
     int[] dhU = [], dhV = [], dhP = [], dhWay = [], dhMinv = [];
-    bool[] dhUsed = [];
+    int[] dhUsed = [];
     int[] dhUl = [], dhUd = []; int dhN;
     // box-major transposes of the two distance tables a dive alternates (Go distT with dtSrc/dtSrc2)
     int[]? dtSrc, dtT, dtSrc2, dtT2;
@@ -18,7 +20,7 @@ public sealed unsafe partial class FullSolver
     {
         int m = n + 1;
         if (dhU.Length == m) return;
-        dhU = new int[m]; dhV = new int[m]; dhP = new int[m]; dhWay = new int[m]; dhMinv = new int[m]; dhUsed = new bool[m];
+        dhU = new int[m]; dhV = new int[m]; dhP = new int[m]; dhWay = new int[m]; dhMinv = new int[m]; dhUsed = new int[m];
         dhUl = new int[m + 1]; dhUd = new int[m + 1];
     }
 
@@ -56,6 +58,29 @@ public sealed unsafe partial class FullSolver
         return total < AssignmentInf ? (int)total : -1;
     }
 
+    /// <summary>
+    /// AssignTo warm-started from the column potentials of the previous prime on the same distance table: each row's potential is set to
+    /// its cheapest reduced edge (a feasible dual), so the row insertions find short augmenting paths. The minimum cost is unique, so the
+    /// result equals the cold run; only which optimal assignment/dual is left in dhU/dhV/dhP may differ.
+    /// </summary>
+    int AssignWarm(ReadOnlySpan<int> boxes, int[] dist, int[] prev)
+    {
+        AssignInit();
+        int m = n + 1;
+        Array.Clear(dhU); Array.Clear(dhP);
+        Array.Copy(prev, m, dhV, 0, m); dhV[0] = 0;
+        var v = dhV; var u = dhU;
+        for (int row = 1; row <= n; row++)
+        {
+            int box = boxes[row - 1], best = int.MaxValue;
+            for (int j = 1; j <= n; j++) { int r = AssignEdge(dist, box, j) - v[j]; if (r < best) best = r; }
+            u[row] = best;
+        }
+        for (int row = 1; row <= n; row++) AugmentAssignment(boxes, dist, row);
+        long total = AssignmentCost(boxes, dist);
+        return total < AssignmentInf ? (int)total : -1;
+    }
+
     long AssignmentCost(ReadOnlySpan<int> boxes, int[] dist)
     {
         long cost = 0;
@@ -82,35 +107,61 @@ public sealed unsafe partial class FullSolver
         int[]? dt = dist.Length == n * cells ? DistT(dist) : null;
         p[0] = row;
         int j0 = 0;
-        for (int j = 0; j < minv.Length; j++) { minv[j] = int.MaxValue; used[j] = false; }
+        for (int j = 0; j < minv.Length; j++) { minv[j] = int.MaxValue; used[j] = 0; }
         // Lazy duals: minv holds each unused column's true value plus D, the sum of the deltas so far
         int D = 0;
         dhN = 0;
         while (true)
         {
-            used[j0] = true;
+            used[j0] = 1;
             dhUl[dhN] = j0; dhUd[dhN] = D; dhN++;
             int i0 = p[j0], ms = int.MaxValue, j1 = 0;
             int ui0 = u[i0] - D;
             if (dt != null)
             {
                 int eo = boxes[i0 - 1] * n;
-                for (int j = 1; j <= n; j++)
+                int j = 1;
+                if (Vector128.IsHardwareAccelerated && n >= 8)
                 {
-                    if (used[j]) continue;
+                    // 4 columns per step: minv/way update and the running minimum over unused columns
+                    var vui0 = Vector128.Create(ui0); var vInf = Vector128.Create(AssignmentInf); var vMax = Vector128.Create(int.MaxValue);
+                    var vj0 = Vector128.Create(j0); var zero = Vector128<int>.Zero; var vms = vMax;
+                    ref int rUsed = ref used[0]; ref int rDt = ref dt[0]; ref int rV = ref v[0]; ref int rMinv = ref minv[0]; ref int rWay = ref way[0];
+                    for (; j + 3 <= n; j += 4)
+                    {
+                        var nu = Vector128.Equals(Vector128.LoadUnsafe(ref rUsed, (nuint)j), zero);
+                        var e = Vector128.LoadUnsafe(ref rDt, (nuint)(eo + j - 1));
+                        e = Vector128.ConditionalSelect(Vector128.LessThan(e, zero), vInf, e);
+                        var cur = e - vui0 - Vector128.LoadUnsafe(ref rV, (nuint)j);
+                        var mv = Vector128.LoadUnsafe(ref rMinv, (nuint)j);
+                        var lt = Vector128.LessThan(cur, mv) & nu;
+                        mv = Vector128.ConditionalSelect(lt, cur, mv);
+                        mv.StoreUnsafe(ref rMinv, (nuint)j);
+                        Vector128.ConditionalSelect(lt, vj0, Vector128.LoadUnsafe(ref rWay, (nuint)j)).StoreUnsafe(ref rWay, (nuint)j);
+                        vms = Vector128.Min(vms, Vector128.ConditionalSelect(nu, mv, vMax));
+                    }
+                    ms = Math.Min(Math.Min(vms[0], vms[1]), Math.Min(vms[2], vms[3]));
+                }
+                for (; j <= n; j++)
+                {
+                    if (used[j] != 0) continue;
                     int e = dt[eo + j - 1];
                     if (e < 0) e = AssignmentInf;
                     int cur = e - ui0 - v[j];
                     if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
-                    int mj = minv[j];
-                    if (mj < ms || (mj == ms && p[j] == 0)) { ms = mj; j1 = j; }
+                    if (minv[j] < ms) ms = minv[j];
                 }
+                // tie-break as the scalar scan: the last free column at the minimum, else the first column at the minimum
+                int first = 0, last0 = 0;
+                for (j = 1; j <= n; j++)
+                    if (used[j] == 0 && minv[j] == ms) { if (first == 0) first = j; if (p[j] == 0) last0 = j; }
+                j1 = last0 != 0 ? last0 : first;
             }
             else
             {
                 for (int j = 1; j <= n; j++)
                 {
-                    if (used[j]) continue;
+                    if (used[j] != 0) continue;
                     int cur = AssignEdge(dist, boxes[i0 - 1], j) - ui0 - v[j];
                     if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
                     int mj = minv[j];

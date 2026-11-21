@@ -170,6 +170,7 @@ public sealed unsafe partial class FullSolver : IDisposable
         ComputeDistances();
         ComputeGoalDistances();
         ComputePackingOrder();
+        InitBitRows();
         PerturbInit(opt.Seed);
     }
 
@@ -280,7 +281,48 @@ public sealed unsafe partial class FullSolver : IDisposable
         return false;
     }
 
-    void SetOcc(int c, bool v) { occ[c] = v; blk[c] = (byte)(v ? 1 : 0); }
+    // ---- bit-row mirror of blk (boards up to 64 wide): frR[row] has a bit per free (non-wall, non-box) cell -------------------
+    bool fbits; int frRows;
+    ulong* frR, frRem, frReg;
+    byte* frRow, frCol;
+    short[]? goalIdxA; short* goalIdx; ulong[]? gOccA; ulong* gOcc; ulong[]? geMaskA; ulong* geMask; ulong[]? rdMaskA; ulong* rdMask; int nRounds;
+
+    void InitBitRows()
+    {
+        fbits = W <= 64 && cells / W <= 64 && cells % W == 0;
+        // goal occupancy bitset + per-round masks for PackedCount (valid for any board size)
+        int gwords = Math.Max(1, (goals.Length + 63) / 64);
+        nRounds = 0; foreach (int g in goals) nRounds = Math.Max(nRounds, round[g] + 1);
+        goalIdxA = GC.AllocateArray<short>(cells, pinned: true); gOccA = GC.AllocateArray<ulong>(gwords, pinned: true);
+        geMaskA = GC.AllocateArray<ulong>((nRounds + 1) * gwords, pinned: true); rdMaskA = GC.AllocateArray<ulong>((nRounds + 1) * gwords, pinned: true);
+        goalIdx = (short*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref goalIdxA[0]); gOcc = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref gOccA[0]);
+        geMask = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref geMaskA[0]); rdMask = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rdMaskA[0]);
+        for (int c = 0; c < cells; c++) goalIdx[c] = -1;
+        packWords = gwords;
+        for (int gi = 0; gi < goals.Length; gi++)
+        {
+            goalIdx[goals[gi]] = (short)gi;
+            int r = round[goals[gi]];
+            rdMask[r * gwords + (gi >> 6)] |= 1UL << (gi & 63);
+            for (int k = 0; k <= r; k++) geMask[k * gwords + (gi >> 6)] |= 1UL << (gi & 63); // goals with round >= k
+        }
+        if (!fbits) return;
+        frRows = cells / W;
+        var fa = frKeepA = GC.AllocateArray<ulong>(frRows * 3 + 8, pinned: true);
+        frR = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref fa[0]); frRem = frR + frRows + 2; frReg = frRem + frRows + 2;
+        var ra = frKeepB = GC.AllocateArray<byte>(2 * cells, pinned: true);
+        frRow = (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref ra[0]); frCol = frRow + cells;
+        for (int c = 0; c < cells; c++) { frRow[c] = (byte)(c / W); frCol[c] = (byte)(c % W); if (!wall[c]) frR[c / W] |= 1UL << (c % W); }
+    }
+    int packWords; ulong[]? frKeepA; byte[]? frKeepB; // keep the pinned arrays alive
+
+    void SetOcc(int c, bool v)
+    {
+        occ[c] = v; blk[c] = (byte)(v ? 1 : 0);
+        if (fbits) { if (v) frR[frRow[c]] &= ~(1UL << frCol[c]); else frR[frRow[c]] |= 1UL << frCol[c]; }
+        int gi = goalIdx[c];
+        if (gi >= 0) { if (v) gOcc[gi >> 6] |= 1UL << (gi & 63); else gOcc[gi >> 6] &= ~(1UL << (gi & 63)); }
+    }
 
     /// <summary>Marks cells reachable from p (not crossing walls or boxes) in mk with a fresh stamp; returns the minimum cell.</summary>
     int Reach(int p, uint[] mk) => ReachP(p, ReferenceEquals(mk, mark) ? markP : mark2P);
