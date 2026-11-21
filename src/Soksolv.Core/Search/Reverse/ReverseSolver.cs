@@ -143,14 +143,14 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         }
         matchOf = new int[n]; gseen = new uint[n];
         Perturb(opt.Phase);
-        if (opt.Supply > 0 && n <= 256) sup = new Supply(this, opt.Supply);
+        if (opt.Supply > 0 && n <= 256) { sup = new Supply(opt.Supply, cells, n, wall, dirs, dist, startIdx); if (!sup.Ok) { sup.Dispose(); sup = null; } }
         if (opt.Cells) cellq = new CellQueue();
         if (opt.Types) types = new TypeQueue();
     }
 
     public void Dispose()
     {
-        store.Dispose(); q.Dispose(); nq.Dispose(); cellq?.Dispose();
+        store.Dispose(); sup?.Dispose(); sup = null; q.Dispose(); nq.Dispose(); cellq?.Dispose();
         System.Runtime.InteropServices.NativeMemory.Free(key); System.Runtime.InteropServices.NativeMemory.Free(pkey);
     }
 
@@ -381,7 +381,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         var res = Search(timeLimitSec);
         res.TimeMs = sw.Elapsed.TotalMilliseconds;
         Prof.Report(res.TimeMs);
-        if (Prof.On && sup != null) Console.Error.WriteLine($"supply: evals {sup.Evals} deferred {sup.Deferred} cache-misses {sup.Misses} graphs {sup.Graphs} macros {sup.Macros} ok {sup.MacroOK}; stored {store.Count}");
+        if (Prof.On && sup != null) Console.Error.WriteLine($"supply: evals {sup.Evals} deferred {sup.Deferred} graphs {sup.Graphs} hits {sup.Hits} macros {sup.Macros} ok {sup.MacroOK}; stored {store.Count} supBytes {sup.Bytes()}");
         res.PeakBytes = (long)TrackedBytes();
         Stats.Stored = store.Count;
         res.Stats = Stats;

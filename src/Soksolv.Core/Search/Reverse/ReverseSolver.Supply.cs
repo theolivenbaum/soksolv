@@ -10,181 +10,350 @@ public struct Set256
     ulong e0;
     public Span<ulong> S => MemoryMarshal.CreateSpan(ref e0, 4);
     public void Set(int j) => S[j >> 6] |= 1UL << (j & 63);
-    public bool SameAs(in Set256 o) { var a = S; var b = MemoryMarshal.CreateReadOnlySpan(in o.e0, 4); return a.SequenceEqual(b); }
 }
 
-/// <summary>DFS forest of the free cells for one obstacle set (Tarjan lowpoints); see Go supGraph.</summary>
-public sealed class SupGraph
+/// <summary>
+/// DFS forest of the free cells for one obstacle set (Tarjan lowpoints), in compact floor indices, one unmanaged block per slot.
+/// Besides the forest it stores, per box-capable cell, the canonical piece id of each neighbour in the graph without that cell
+/// (Cn: four nibbles, 15 = neighbour not in the graph) and the SCC memo of the pull-state graph (see Go supGraph).
+/// </summary>
+public sealed unsafe class SupSlot : IDisposable
 {
-    public Set256 Key;
-    public uint Epoch;
-    public int[] Disc, End, Low, Par, Top;
-    public sbyte[] Nl; public uint[] NlStamp;
+    public ulong H, Lru, K0, K1, K2, K3;
     public int N;
-    public int[] SccOf, SccStamp;
-    public List<Set256> SccR = new();
-    public bool Allocated;
-    public SupGraph() { Disc = End = Low = Par = Top = SccOf = SccStamp = []; Nl = []; NlStamp = []; }
-    public void Alloc(int c)
+    public int SccCount, SccCap;
+    public ulong* SccR;
+    public ushort* Disc, End, Par, Top, Cn, SccOf;
+    public byte* Pc;
+    byte* block;
+    public long Bytes;
+
+    public SupSlot(int f1)
     {
-        Disc = new int[c]; End = new int[c]; Low = new int[c]; Par = new int[c]; Top = new int[c];
-        Nl = new sbyte[4 * c]; NlStamp = new uint[c]; SccOf = new int[4 * c]; SccStamp = new int[4 * c];
-        Allocated = true;
+        long sz = 5L * 2 * f1 + ((f1 + 1) & ~1) + 8L * f1;
+        block = (byte*)NativeMemory.AlignedAlloc((nuint)sz, 16);
+        Disc = (ushort*)block; End = Disc + f1; Par = End + f1; Top = Par + f1; Cn = Top + f1;
+        Pc = (byte*)(Cn + f1);
+        SccOf = (ushort*)(Pc + ((f1 + 1) & ~1));
+        Bytes = sz;
     }
+
+    public void EnsureScc(int nwS, int f1)
+    {
+        if (SccCount < SccCap) return;
+        int nc = SccCap == 0 ? Math.Max(8, f1 / 4) : SccCap * 2;
+        SccR = (ulong*)NativeMemory.Realloc(SccR, (nuint)nc * (nuint)nwS * 8);
+        Bytes += (long)(nc - SccCap) * nwS * 8;
+        SccCap = nc;
+    }
+
+    public void Dispose() { NativeMemory.AlignedFree(block); NativeMemory.Free(SccR); block = null; SccR = null; }
 }
 
-public struct SupEntry { public ulong Fp; public Set256 R; }
-
-/// <summary>Supply-aware ordering state (port of Go supply struct, exp-707).</summary>
-public sealed class Supply
+/// <summary>Supply-aware ordering state (port of Go supply struct, exp-707), compact reimplementation (same results).</summary>
+public sealed unsafe class Supply : IDisposable
 {
     public readonly int W; // key penalty per unit of U (x8)
-    public readonly int Cells;
-    public uint Epoch;
-    public readonly bool[] Obst;
-    public readonly SupGraph[] Slots;
-    public readonly SupGraph Scratch;
-    public SupEntry[]? Cache;
-    public readonly sbyte[] It;
-    public readonly int[] TIdx, TLow; public readonly uint[] TStamp; public uint Tst;
-    public List<int> TStk = new(), TFr = new();
-    public readonly uint[] Seen; public readonly int[] Prev;
-    public uint Stamp;
-    public List<int> Q = new();
-    public int Target;
+    public readonly int Cells, F, F1, NwS, Nbox;
+    public readonly int[] CellOf, Fi;
+    public readonly int* Nb;          // (F1) x 4 neighbour floor indices (walls and the sentinel row -> F)
+    public readonly byte* BoxOk;      // dist >= 0
+    public readonly short* Sidx;      // start index or -1
+    public readonly int[] Dirs;
+    // slot cache
+    SupSlot?[] tab; readonly int tabMask; int slotCount; readonly int maxSlots; ulong clock;
+    public readonly SupSlot Scratch;
+    // dfs scratch
+    readonly int* low, stk; readonly byte* it, chm;
+    // tarjan scratch
+    readonly int* tIdx, tLow, tStk, fv; readonly uint* tStamp; readonly byte* fk; uint tst;
+    // pull BFS scratch (macros)
+    public readonly uint* Seen; public readonly int* Prev, Q; uint stamp; public int Target;
+    // matching scratch
     public Set256[] ReachOf = new Set256[16];
-    public List<int> Off = new(), Left = new();
+    public int[] OffFi = new int[16], Left = new int[16];
     public readonly int[] MatchOf; public readonly uint[] Gs; public uint Gstamp;
     public List<int> PathBuf = new();
-    public long Evals, Deferred, Misses, Graphs, Macros, MacroOK;
-    public const int SupSlotBytes = 5 * 4 + 4 + 4 + 32;
-    public const int SupCache = 1 << 19;
+    public long Evals, Deferred, Graphs, Macros, MacroOK, Hits;
+    public bool Ok = true;
+    long fixedBytes;
+    public const int SlotBudget = 24 << 20;
 
-    public Supply(ReverseSolver s, int w)
+    public Supply(int w, int cells, int n, bool[] wall, int[] dirs, int[] dist, int[] startIdx)
     {
-        W = w; Cells = s.CellsCount;
-        int nslots = 16;
-        while (nslots < 1024 && 2L * nslots * Cells * SupSlotBytes <= 8 << 20) nslots *= 2;
-        Obst = new bool[Cells]; Slots = new SupGraph[nslots];
-        for (int i = 0; i < nslots; i++) Slots[i] = new SupGraph();
-        StkArr = new int[Cells + 1]; OrderArr = new int[Cells + 1];
-        It = new sbyte[Cells]; TIdx = new int[4 * Cells]; TLow = new int[4 * Cells]; TStamp = new uint[4 * Cells];
-        Seen = new uint[Cells * 4]; Prev = new int[Cells * 4];
-        MatchOf = new int[s.BoxCount]; Gs = new uint[s.BoxCount];
-        Scratch = new SupGraph(); Scratch.Alloc(Cells);
+        W = w; Cells = cells; Nbox = n; Dirs = dirs; NwS = (n + 63) / 64;
+        Fi = new int[cells]; var co = new List<int>();
+        for (int c = 0; c < cells; c++) { Fi[c] = -1; if (!wall[c]) { Fi[c] = co.Count; co.Add(c); } }
+        F = co.Count; F1 = F + 1; CellOf = [.. co];
+        if (F > 12000) { Ok = false; F1 = 1; F = 0; CellOf = []; }
+        int f1 = F1;
+        Nb = (int*)NativeMemory.AllocZeroed((nuint)(f1 * 4 * 4));
+        BoxOk = (byte*)NativeMemory.AllocZeroed((nuint)f1 + 8);
+        Sidx = (short*)NativeMemory.AllocZeroed((nuint)f1 * 2 + 8);
+        if (Ok)
+        {
+            for (int i = 0; i < F; i++)
+            {
+                int c = CellOf[i];
+                for (int k = 0; k < 4; k++) { int d = c + dirs[k]; Nb[i * 4 + k] = wall[d] ? F : Fi[d]; }
+                BoxOk[i] = (byte)(dist[c] >= 0 ? 1 : 0); Sidx[i] = (short)startIdx[c];
+            }
+            for (int k = 0; k < 4; k++) Nb[F * 4 + k] = F;
+            Sidx[F] = -1;
+        }
+        int slotBytes = f1 * 18 + 256;
+        maxSlots = Math.Clamp(SlotBudget / slotBytes, 16, 1 << 16);
+        int tn = 64; while (tn < maxSlots) tn *= 2;
+        tab = new SupSlot?[tn]; tabMask = tn - 1;
+        Scratch = new SupSlot(f1);
+        low = (int*)NativeMemory.Alloc((nuint)f1 * 4); stk = (int*)NativeMemory.Alloc((nuint)f1 * 4);
+        it = (byte*)NativeMemory.Alloc((nuint)f1); chm = (byte*)NativeMemory.Alloc((nuint)f1);
+        int ns = 4 * f1 + 4;
+        tIdx = (int*)NativeMemory.Alloc((nuint)ns * 4); tLow = (int*)NativeMemory.Alloc((nuint)ns * 4); tStk = (int*)NativeMemory.Alloc((nuint)ns * 4);
+        fv = (int*)NativeMemory.Alloc((nuint)ns * 4); fk = (byte*)NativeMemory.Alloc((nuint)ns);
+        tStamp = (uint*)NativeMemory.AllocZeroed((nuint)ns * 4);
+        Seen = (uint*)NativeMemory.AllocZeroed((nuint)ns * 4); Prev = (int*)NativeMemory.Alloc((nuint)ns * 4); Q = (int*)NativeMemory.Alloc((nuint)ns * 4);
+        MatchOf = new int[n]; Gs = new uint[n];
+        fixedBytes = (long)f1 * (16 + 3 + 1 + 1 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2) * 1 + Scratch.Bytes + (long)ns * 28;
     }
 
     public long Bytes()
     {
-        int used = 1; foreach (var g in Slots) if (g.Allocated) used++;
-        return (long)used * Cells * SupSlotBytes + (long)Cells * (1 + 1 + 4 + 4 + 4) * 4 + (Cache?.Length ?? 0) * 40L;
-    }
-
-    public void Reset(SupGraph g)
-    {
-        if (!g.Allocated) g.Alloc(Cells);
-        Array.Clear(g.Disc);
-        g.N = 0; g.SccR.Clear();
-        Epoch++;
-        g.Epoch = Epoch;
-    }
-
-    public readonly int[] StkArr, OrderArr; public int OrderN;
-
-    /// <summary>Extends g's forest with the component of root (obstacles in Obst); returns its smallest cell; OrderArr[0..OrderN) lists the component.</summary>
-    public unsafe int Dfs(ReverseSolver s, SupGraph g, int root)
-    {
-        int m = root;
-        fixed (int* disc = g.Disc, low = g.Low, par = g.Par, top = g.Top, end = g.End, stk = StkArr, ord = OrderArr, dr = s.Dirs)
-        fixed (sbyte* it = It)
-        fixed (bool* obst = Obst)
-        {
-            int on = 0, sn = 0, gn = g.N;
-            ord[on++] = root;
-            gn++;
-            disc[root] = gn; low[root] = gn; par[root] = -1; top[root] = root;
-            it[root] = 0;
-            stk[sn++] = root;
-            while (sn > 0)
-            {
-                int v = stk[sn - 1];
-                int k = it[v];
-                if (k < 4)
-                {
-                    it[v]++;
-                    int w = v + dr[k];
-                    if (obst[w]) continue;
-                    if (disc[w] == 0)
-                    {
-                        gn++;
-                        disc[w] = gn; low[w] = gn; par[w] = v; top[w] = root;
-                        it[w] = 0;
-                        stk[sn++] = w; ord[on++] = w;
-                        if (w < m) m = w;
-                    }
-                    else if (w != par[v]) { if (disc[w] < low[v]) low[v] = disc[w]; }
-                    continue;
-                }
-                sn--;
-                end[v] = gn + 1;
-                int p = par[v];
-                if (p >= 0 && low[v] < low[p]) low[p] = low[v];
-            }
-            g.N = gn; OrderN = on;
-        }
-        return m;
-    }
-
-    /// <summary>Extends g's forest with the component of p, rooted at its smallest cell.</summary>
-    public void Tree(ReverseSolver s, SupGraph g, int p)
-    {
-        int n0 = g.N;
-        int m = Dfs(s, g, p);
-        if (m == p) return;
-        for (int i = 0; i < OrderN; i++) g.Disc[OrderArr[i]] = 0;
-        g.N = n0;
-        Dfs(s, g, m);
-    }
-
-    /// <summary>Piece code of w (a cell of z's tree, w != z) in the graph without z.</summary>
-    public static sbyte Lab(int[] dirs, SupGraph g, int z, int w)
-    {
-        int dw = g.Disc[w], dz = g.Disc[z];
-        if (dw <= dz || dw >= g.End[z]) return 0;
-        for (int k = 0; k < 4; k++)
-        {
-            int c = z + dirs[k];
-            int dc = g.Disc[c];
-            if (dc > dz && dc <= dw && dw < g.End[c] && g.Par[c] == z)
-            {
-                if (g.Par[z] >= 0 && g.Low[c] < dz) return 0;
-                return (sbyte)(k + 1);
-            }
-        }
-        return 0;
-    }
-
-    /// <summary>Index into g.Nl of z's four neighbour piece codes (computed on demand; -1 = not a cell of the graph).</summary>
-    public static int NLab(int[] dirs, SupGraph g, int z)
-    {
-        int b = z * 4;
-        if (g.NlStamp[z] != g.Epoch)
-        {
-            g.NlStamp[z] = g.Epoch;
-            for (int k = 0; k < 4; k++)
-            {
-                g.Nl[b + k] = -1;
-                if (g.Disc[z + dirs[k]] != 0) g.Nl[b + k] = Lab(dirs, g, z, z + dirs[k]);
-            }
-        }
+        long b = fixedBytes + (long)tab.Length * 8;
+        foreach (var s in tab) if (s != null) b += s.Bytes + 80;
         return b;
     }
 
-    public static int Canon(int[] dirs, SupGraph g, int y, int l)
+    public void Dispose()
     {
-        int nb = NLab(dirs, g, y);
-        for (int e = 0; e < 4; e++) if (g.Nl[nb + e] == l) return y * 4 + e;
+        foreach (var s in tab) s?.Dispose();
+        Scratch.Dispose();
+        NativeMemory.Free(Nb); NativeMemory.Free(BoxOk); NativeMemory.Free(Sidx); NativeMemory.Free(low); NativeMemory.Free(stk); NativeMemory.Free(it); NativeMemory.Free(chm);
+        NativeMemory.Free(tIdx); NativeMemory.Free(tLow); NativeMemory.Free(tStk); NativeMemory.Free(fv); NativeMemory.Free(fk); NativeMemory.Free(tStamp);
+        NativeMemory.Free(Seen); NativeMemory.Free(Prev); NativeMemory.Free(Q);
+        Array.Clear(tab);
+    }
+
+    /// <summary>Clears a slot for a new obstacle set: obstacles (floor indices) and the sentinel get disc 0xFFFF.</summary>
+    public void Reset(SupSlot g, ReadOnlySpan<int> obstacles)
+    {
+        new Span<ushort>(g.Disc, F1).Clear();
+        g.Disc[F] = 0xFFFF;
+        foreach (int o in obstacles) g.Disc[o] = 0xFFFF;
+        new Span<ushort>(g.SccOf, 4 * F1).Clear();
+        g.N = 0; g.SccCount = 0;
+    }
+
+    /// <summary>Slot for key words k (hash h): a hit, or a recycled / new slot (fresh = true) to be Reset by the caller.</summary>
+    public SupSlot Acquire(ulong h, ulong k0, ulong k1, ulong k2, ulong k3, out bool fresh)
+    {
+        int b0 = (int)(h >> 24) & tabMask & ~3;
+        SupSlot? victim = null; int empty = -1; ulong best = ulong.MaxValue;
+        for (int w = 0; w < 4; w++)
+        {
+            var s = tab[b0 + w];
+            if (s == null) { if (empty < 0) empty = b0 + w; continue; }
+            if (s.H == h && s.K0 == k0 && s.K1 == k1 && s.K2 == k2 && s.K3 == k3) { s.Lru = ++clock; fresh = false; Hits++; return s; }
+            if (s.Lru < best) { best = s.Lru; victim = s; }
+        }
+        fresh = true;
+        SupSlot r;
+        if (empty >= 0 && (slotCount < maxSlots || victim == null)) { r = new SupSlot(F1); tab[empty] = r; slotCount++; }
+        else r = victim!;
+        r.H = h; r.K0 = k0; r.K1 = k1; r.K2 = k2; r.K3 = k3; r.Lru = ++clock;
+        Graphs++;
+        return r;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool InGraph(ushort d) => (uint)(d - 1) < 0xFFFE;
+
+    /// <summary>Extends g's forest with the component of floor index root and labels every box-capable cell of it.</summary>
+    public void Build(SupSlot g, int root)
+    {
+        ushort* disc = g.Disc, end = g.End, par = g.Par, top = g.Top, cn = g.Cn; byte* pc = g.Pc;
+        int* nb = Nb; byte* boxOk = BoxOk;
+        int* lab = stackalloc int[8]; int* can = lab + 4;
+        int sn = 0, gn = g.N;
+        gn++;
+        disc[root] = (ushort)gn; low[root] = gn; par[root] = 0xFFFF; top[root] = (ushort)root; it[root] = 0; chm[root] = 0;
+        stk[sn++] = root;
+        while (sn > 0)
+        {
+            int v = stk[sn - 1];
+            int k = it[v], lv = low[v], pv = par[v];
+            int* nv = nb + v * 4;
+            bool desc = false;
+            for (; k < 4; k++)
+            {
+                int w = nv[k]; int dw = disc[w];
+                if (dw == 0)
+                {
+                    it[v] = (byte)(k + 1); low[v] = lv; chm[v] |= (byte)(1 << k);
+                    gn++;
+                    disc[w] = (ushort)gn; low[w] = gn; par[w] = (ushort)v; top[w] = (ushort)root; it[w] = 0; chm[w] = 0;
+                    stk[sn++] = w; desc = true;
+                    break;
+                }
+                if (dw < lv && w != pv) lv = dw;
+            }
+            if (desc) continue;
+            low[v] = lv;
+            end[v] = (ushort)(gn + 1);
+            sn--;
+            if (pv != 0xFFFF && lv < low[pv]) low[pv] = lv;
+            if (boxOk[v] == 0) continue;
+            // piece code of each neighbour in the graph without v: -1 absent, 0 parent side, k+1 separate child subtree in direction k
+            int dv = disc[v]; int cm = chm[v];
+            for (int kk = 0; kk < 4; kk++)
+            {
+                int dw = disc[nv[kk]];
+                if (dw == 0xFFFF) { lab[kk] = -1; continue; }
+                if (dw < dv) { lab[kk] = 0; continue; }
+                int code = 0;
+                for (int c4 = 0; c4 < 4; c4++)
+                {
+                    if ((cm >> c4 & 1) == 0) continue;
+                    int c = nv[c4];
+                    if (dw >= disc[c] && dw < end[c]) { code = (pv != 0xFFFF && low[c] < dv) ? 0 : c4 + 1; break; }
+                }
+                lab[kk] = code;
+            }
+            uint cw = 0; int up = 7;
+            for (int kk = 0; kk < 4; kk++)
+            {
+                int l = lab[kk];
+                if (l < 0) { can[kk] = 15; cw |= 15u << (4 * kk); continue; }
+                int e = kk; for (int j = 0; j < kk; j++) if (lab[j] == l) { e = j; break; }
+                can[kk] = e; cw |= (uint)e << (4 * kk);
+                if (l == 0 && up == 7) up = e;
+            }
+            cn[v] = (ushort)cw;
+            pc[v] = (byte)(up << 4);
+            for (int c4 = 0; c4 < 4; c4++)
+                if ((cm >> c4 & 1) != 0) { int c = nv[c4]; pc[c] = (byte)((pc[c] & 0xF0) | can[c4]); }
+        }
+        g.N = gn;
+    }
+
+    /// <summary>Canonical state (box b, player p's piece of the graph without b) as b*4+e; b and p must lie in one built component.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int StateOf(SupSlot g, int* nb, int b, int p)
+    {
+        int db = g.Disc[b], dp = g.Disc[p];
+        if (dp < db || dp >= g.End[b]) return b * 4 + (g.Pc[b] >> 4);
+        for (int k = 0; k < 4; k++)
+        {
+            int c = nb[b * 4 + k]; int dc = g.Disc[c];
+            if (InGraph((ushort)dc) && g.Par[c] == b && dp >= dc && dp < g.End[c]) return b * 4 + (g.Pc[c] & 15);
+        }
         return -1;
+    }
+
+    /// <summary>Next pull state of v in direction k (the box moves one cell, the player follows) or -1.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    int Succ(SupSlot g, int v, int k)
+    {
+        int y = v >> 2;
+        if (((g.Cn[y] >> (4 * k)) & 15) != (v & 3)) return -1;
+        int w = Nb[y * 4 + k];
+        if (BoxOk[w] == 0) return -1;
+        int c = (g.Cn[w] >> (4 * k)) & 15;
+        if (c == 15) return -1;
+        return w * 4 + c;
+    }
+
+    /// <summary>Start squares reachable from pull state root (Tarjan SCCs; kept in the slot for reuse). Returns a pointer to NwS words.</summary>
+    public ulong* Closure(SupSlot g, int root)
+    {
+        int sc = g.SccOf[root];
+        if (sc != 0) return g.SccR + (long)(sc - 1) * NwS;
+        if (++tst == 0) { new Span<uint>(tStamp, 4 * F1 + 4).Clear(); tst = 1; }
+        uint ts = tst;
+        int counter = 0, sn = 0, fn = 0;
+        int nws = NwS;
+        tStamp[root] = ts; tIdx[root] = counter; tLow[root] = counter; counter++;
+        tStk[sn++] = root; fv[fn] = root; fk[fn++] = 0;
+        while (fn > 0)
+        {
+            int v = fv[fn - 1]; int k = fk[fn - 1];
+            if (k < 4)
+            {
+                fk[fn - 1] = (byte)(k + 1);
+                int w = Succ(g, v, k);
+                if (w < 0 || g.SccOf[w] != 0) { }
+                else if (tStamp[w] != ts)
+                {
+                    tStamp[w] = ts; tIdx[w] = counter; tLow[w] = counter; counter++;
+                    tStk[sn++] = w; fv[fn] = w; fk[fn++] = 0;
+                }
+                else if (tIdx[w] < tLow[v]) tLow[v] = tIdx[w];
+                continue;
+            }
+            fn--;
+            if (fn > 0) { int u = fv[fn - 1]; if (tLow[v] < tLow[u]) tLow[u] = tLow[v]; }
+            if (tLow[v] != tIdx[v]) continue;
+            int i = sn - 1;
+            while (tStk[i] != v) i--;
+            g.EnsureScc(nws, F1);
+            int sid = g.SccCount++;
+            ulong* r = g.SccR + (long)sid * nws;
+            for (int a = 0; a < nws; a++) r[a] = 0;
+            ushort tag = (ushort)(sid + 1);
+            for (int x = i; x < sn; x++) g.SccOf[tStk[x]] = tag;
+            for (int x = i; x < sn; x++)
+            {
+                int m = tStk[x];
+                int j = Sidx[m >> 2];
+                if (j >= 0) r[j >> 6] |= 1UL << (j & 63);
+                for (int kk = 0; kk < 4; kk++)
+                {
+                    int w = Succ(g, m, kk);
+                    if (w >= 0 && g.SccOf[w] != tag)
+                    {
+                        ulong* xr = g.SccR + (long)(g.SccOf[w] - 1) * nws;
+                        for (int a = 0; a < nws; a++) r[a] |= xr[a];
+                    }
+                }
+            }
+            sn = i;
+        }
+        return g.SccR + (long)(g.SccOf[root] - 1) * NwS;
+    }
+
+    // ---- placement-macro BFS over pull states ----
+    void Visit(SupSlot g, int state, int from, uint st, ref int qn)
+    {
+        if (Seen[state] == st) return;
+        Seen[state] = st; Prev[state] = from; Q[qn++] = state;
+    }
+
+    /// <summary>First start square (and its state in Target) a box pulled off cell bf can reach in g, player in g's component of pf; false if none.</summary>
+    public bool PullFirst(SupSlot g, int bf, int pf)
+    {
+        if (++stamp == 0) { new Span<uint>(Seen, 4 * F1 + 4).Clear(); stamp = 1; }
+        uint st = stamp; int qn = 0; Target = -1;
+        int l = g.Top[pf];
+        for (int e = 0; e < 4; e++)
+        {
+            int w = Nb[bf * 4 + e];
+            if (!InGraph(g.Disc[w]) || g.Top[w] != l || BoxOk[w] == 0) continue;
+            int c = (g.Cn[w] >> (4 * e)) & 15;
+            if (c == 15) continue;
+            Visit(g, w * 4 + c, -1, st, ref qn);
+        }
+        for (int i = 0; i < qn; i++)
+        {
+            int s = Q[i];
+            int y = s >> 2;
+            if (Sidx[y] >= 0 && y != bf) { Target = s; return true; }
+            for (int k = 0; k < 4; k++)
+            {
+                int w = Succ(g, s, k);
+                if (w >= 0) Visit(g, w, s, st, ref qn);
+            }
+        }
+        return false;
     }
 }
 
@@ -194,100 +363,89 @@ public sealed unsafe partial class ReverseSolver
     public int BoxCount => n;
     public int[] Dirs => dirs;
 
-    static ulong GoHash(ReadOnlySpan<ulong> boxes, int player)
+    static ulong GoHash(ulong k0, ulong k1, ulong k2, ulong k3)
     {
-        ulong h = (ulong)player * 0x9E3779B97F4A7C15UL + 1;
-        foreach (ulong b in boxes) { h = (h ^ b) * 0xBF58476D1CE4E5B9UL; h ^= h >> 31; }
+        ulong h = 1;
+        h = (h ^ k0) * 0xBF58476D1CE4E5B9UL; h ^= h >> 31;
+        h = (h ^ k1) * 0xBF58476D1CE4E5B9UL; h ^= h >> 31;
+        h = (h ^ k2) * 0xBF58476D1CE4E5B9UL; h ^= h >> 31;
+        h = (h ^ k3) * 0xBF58476D1CE4E5B9UL; h ^= h >> 31;
         return h;
-    }
-
-    SupGraph GraphFor(in Set256 f, int p)
-    {
-        var sp = sup!;
-        var fs = f; // copy for span
-        var g = sp.Slots[(int)(GoHash(fs.S, 0) >> 40) & (sp.Slots.Length - 1)];
-        if (!g.Allocated || !g.Key.SameAs(f))
-        {
-            sp.Reset(g);
-            g.Key = f;
-            sp.Graphs++;
-        }
-        if (g.Disc[p] == 0) sp.Tree(this, g, p);
-        return g;
     }
 
     /// <summary>Supply count U for boxes cur (ascending) with the player's normalized cell p, and k = boxes on start squares.</summary>
     (int u, int k) SupplyU(ReadOnlySpan<int> cur, int p)
     {
         var sp = sup!;
-        Set256 f = default, free = default;
-        for (int j = 0; j < n; j++) free.Set(j);
-        sp.Off.Clear();
+        ulong f0 = 0, f1 = 0, f2 = 0, f3 = 0;
+        Span<int> obst = stackalloc int[cur.Length];
+        int no = 0, noff = 0;
+        if (sp.OffFi.Length < cur.Length) { sp.OffFi = new int[cur.Length * 2]; sp.Left = new int[cur.Length * 2]; }
+        var offFi = sp.OffFi;
         int k = 0;
         foreach (int b in cur)
         {
             int j = startIdx[b];
-            if (j >= 0) { f.Set(j); free.S[j >> 6] &= ~(1UL << (j & 63)); k++; }
-            else sp.Off.Add(b);
-        }
-        if (sp.Off.Count == 0) return (0, k);
-        sp.Evals++;
-        ulong hf = GoHash(f.S, 0);
-        var g = sp.Slots[(int)(hf >> 40) & (sp.Slots.Length - 1)];
-        if (!g.Allocated || !g.Key.SameAs(f) || g.Disc[p] == 0)
-        {
-            Array.Copy(wall, sp.Obst, cells);
-            foreach (int b in cur) if (startIdx[b] >= 0) sp.Obst[b] = true;
-            g = GraphFor(f, p);
-        }
-        if (sp.ReachOf.Length < sp.Off.Count) Array.Resize(ref sp.ReachOf, sp.Off.Count * 2);
-        // the reach cache is a pure memo (results never depend on it): start small, double while misses outgrow it
-        if (sp.Cache == null) sp.Cache = new SupEntry[1 << 12];
-        else if (sp.Misses > (long)sp.Cache.Length * 2 && sp.Cache.Length < Supply.SupCache) sp.Cache = new SupEntry[sp.Cache.Length * 2];
-        for (int oi = 0; oi < sp.Off.Count; oi++)
-        {
-            int b = sp.Off[oi];
-            Set256 r = default;
-            if (g.Disc[b] != 0 && g.Top[b] == g.Top[p]) // b in the player's component
+            if (j >= 0)
             {
-                sbyte l = Supply.Lab(dirs, g, b, p);
-                ulong fp = (hf ^ (ulong)b << 3 ^ (ulong)l) * 0x9E3779B97F4A7C15UL | 1;
-                fp ^= fp >> 29;
-                fp |= 1;
-                ref var e = ref sp.Cache[(int)(fp & (ulong)(sp.Cache.Length - 1))];
-                if (e.Fp == fp) r = e.R;
-                else
-                {
-                    sp.Misses++;
-                    r = Closure(g, Supply.Canon(dirs, g, b, l));
-                    e.Fp = fp; e.R = r;
-                }
+                ulong bit = 1UL << (j & 63);
+                switch (j >> 6) { case 0: f0 |= bit; break; case 1: f1 |= bit; break; case 2: f2 |= bit; break; default: f3 |= bit; break; }
+                obst[no++] = sp.Fi[b]; k++;
             }
-            for (int w = 0; w < 4; w++) r.S[w] &= free.S[w];
+            else offFi[noff++] = sp.Fi[b];
+        }
+        if (noff == 0) return (0, k);
+        sp.Evals++;
+        ulong hf = GoHash(f0, f1, f2, f3);
+        var g = sp.Acquire(hf, f0, f1, f2, f3, out bool fresh);
+        if (fresh) sp.Reset(g, obst[..no]);
+        int pf = sp.Fi[p];
+        if (g.Disc[pf] == 0) sp.Build(g, pf);
+        if (sp.ReachOf.Length < noff) Array.Resize(ref sp.ReachOf, noff * 2);
+        int nws = sp.NwS;
+        int tp = g.Top[pf];
+        ulong free0 = n >= 64 ? ~0UL : (1UL << n) - 1, free1 = 0, free2 = 0, free3 = 0;
+        if (n > 64) free1 = n >= 128 ? ~0UL : (1UL << (n - 64)) - 1;
+        if (n > 128) free2 = n >= 192 ? ~0UL : (1UL << (n - 128)) - 1;
+        if (n > 192) free3 = n >= 256 ? ~0UL : (1UL << (n - 192)) - 1;
+        free0 &= ~f0; free1 &= ~f1; free2 &= ~f2; free3 &= ~f3;
+        for (int oi = 0; oi < noff; oi++)
+        {
+            int b = offFi[oi];
+            Set256 r = default;
+            if (InGraphFast(g.Disc[b]) && g.Top[b] == tp) // b in the player's component
+            {
+                int st = Supply.StateOf(g, sp.Nb, b, pf);
+                if (st >= 0) { ulong* src = sp.Closure(g, st); for (int a = 0; a < nws; a++) r[a] = src[a]; }
+            }
+            r[0] &= free0; r[1] &= free1; r[2] &= free2; r[3] &= free3;
             sp.ReachOf[oi] = r;
         }
         Array.Fill(sp.MatchOf, -1);
         // Greedy pass (a free square nobody holds yet), then augmenting paths.
         Set256 taken = default;
-        sp.Left.Clear();
-        for (int i = 0; i < sp.Off.Count; i++)
+        int nl = 0;
+        for (int i = 0; i < noff; i++)
         {
-            var r = sp.ReachOf[i];
+            ref var r = ref sp.ReachOf[i];
             int w = 0;
-            while (w < 4 && (r.S[w] & ~taken.S[w]) == 0) w++;
-            if (w == 4) { sp.Left.Add(i); continue; }
-            int j = w * 64 + BitOperations.TrailingZeroCount(r.S[w] & ~taken.S[w]);
-            taken.Set(j);
+            while (w < 4 && (r[w] & ~taken[w]) == 0) w++;
+            if (w == 4) { sp.Left[nl++] = i; continue; }
+            int j = w * 64 + BitOperations.TrailingZeroCount(r[w] & ~taken[w]);
+            taken[j >> 6] |= 1UL << (j & 63);
             sp.MatchOf[j] = i;
         }
         int u = 0;
-        foreach (int i in sp.Left)
+        for (int li = 0; li < nl; li++)
         {
             if (++sp.Gstamp == 0) { Array.Clear(sp.Gs); sp.Gstamp = 1; }
-            if (!Augment(i)) u++;
+            if (!Augment(sp.Left[li])) u++;
         }
         return (u, k);
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static bool InGraphFast(ushort d) => (uint)(d - 1) < 0xFFFE;
 
     bool Augment(int i)
     {
@@ -295,7 +453,7 @@ public sealed unsafe partial class ReverseSolver
         var r = sp.ReachOf[i];
         for (int w = 0; w < 4; w++)
         {
-            ulong x = r.S[w];
+            ulong x = r[w];
             while (x != 0)
             {
                 int j = w * 64 + BitOperations.TrailingZeroCount(x);
@@ -308,76 +466,18 @@ public sealed unsafe partial class ReverseSolver
         return false;
     }
 
-    /// <summary>State (box on y, player in y's piece l) enqueued once per piece.</summary>
-    void SupVisit(SupGraph g, int y, int l, int from, uint st)
-    {
-        var sp = sup!;
-        int nb = Supply.NLab(dirs, g, y);
-        int e0 = -1;
-        for (int e = 0; e < 4; e++)
-        {
-            if (g.Nl[nb + e] != l) continue;
-            if (sp.Seen[y * 4 + e] == st) return;
-            sp.Seen[y * 4 + e] = st;
-            if (e0 < 0) e0 = e;
-        }
-        if (e0 >= 0) { sp.Prev[y * 4 + e0] = from; sp.Q.Add(y * 4 + e0); }
-    }
-
-    /// <summary>Start squares a box on b can be pulled onto, the player in piece l (or, with stop, the first one: leaves BFS parents in Prev and the state in Target).</summary>
-    Set256 PullReach(SupGraph g, int b, int l, bool stop)
-    {
-        var sp = sup!;
-        Set256 r = default;
-        if (++sp.Stamp == 0) { Array.Clear(sp.Seen); sp.Stamp = 1; }
-        uint st = sp.Stamp;
-        sp.Q.Clear();
-        sp.Target = -1;
-        if (stop)
-        {
-            for (int e = 0; e < 4; e++)
-            {
-                int d = dirs[e], w = b + d, w2 = b + 2 * d;
-                if (g.Disc[w] != 0 && g.Top[w] == l && g.Disc[w2] != 0 && dist[w] >= 0)
-                    SupVisit(g, w, g.Nl[Supply.NLab(dirs, g, w) + e], -1, st);
-            }
-        }
-        else SupVisit(g, b, (sbyte)l, -1, st);
-        var q = sp.Q;
-        for (int i = 0; i < q.Count; i++)
-        {
-            int y = q[i] >> 2;
-            int nb = Supply.NLab(dirs, g, y);
-            int l2 = g.Nl[nb + (q[i] & 3)];
-            int j = startIdx[y];
-            if (j >= 0 && y != b)
-            {
-                r.Set(j);
-                if (stop) { sp.Target = q[i]; break; }
-            }
-            for (int e = 0; e < 4; e++)
-            {
-                if (g.Nl[nb + e] != l2) continue;
-                int d = dirs[e], w = y + d, w2 = y + 2 * d;
-                if (g.Disc[w2] == 0 || dist[w] < 0) continue;
-                SupVisit(g, w, g.Nl[Supply.NLab(dirs, g, w) + e], q[i], st);
-            }
-        }
-        return r;
-    }
-
     /// <summary>Fewest-pull path of box b to a free start square in the real state's graph; returns (from cell, direction) pairs in order, or empty.</summary>
-    void MacroPath(SupGraph g, int b, int p, List<int> outp)
+    void MacroPath(SupSlot g, int b, int p, List<int> outp)
     {
         var sp = sup!;
         outp.Clear();
-        PullReach(g, b, g.Top[p], true);
-        if (sp.Target < 0) return;
+        if (!sp.PullFirst(g, sp.Fi[b], sp.Fi[p])) return;
+        var cof = sp.CellOf;
         for (int x = sp.Target; x >= 0; x = sp.Prev[x])
         {
-            int y = x >> 2, from = b;
+            int y = cof[x >> 2], from = b;
             int px = sp.Prev[x];
-            if (px >= 0) from = px >> 2;
+            if (px >= 0) from = cof[px >> 2];
             for (int di = 0; di < 4; di++)
                 if (from + dirs[di] == y) { outp.Add(from); outp.Add(di); }
         }
@@ -388,90 +488,16 @@ public sealed unsafe partial class ReverseSolver
         }
     }
 
-    int Succ(SupGraph g, int v, int k)
-    {
-        int y = v >> 2;
-        int nb = Supply.NLab(dirs, g, y);
-        if (g.Nl[nb + k] != g.Nl[nb + (v & 3)]) return -1;
-        int d = dirs[k];
-        int w = y + d, w2 = y + 2 * d;
-        if (g.Disc[w2] == 0 || dist[w] < 0) return -1;
-        return Supply.Canon(dirs, g, w, g.Nl[Supply.NLab(dirs, g, w) + k]);
-    }
-
-    /// <summary>Start squares reachable from pull state root in g (Tarjan SCCs; kept in the slot for reuse).</summary>
-    Set256 Closure(SupGraph g, int root)
-    {
-        if (root < 0) return default;
-        if (g.SccStamp[root] == (int)g.Epoch) return g.SccR[g.SccOf[root]];
-        var sp = sup!;
-        if (++sp.Tst == 0) { Array.Clear(sp.TStamp); sp.Tst = 1; }
-        uint ts = sp.Tst; int ep = (int)g.Epoch;
-        int counter = 0;
-        var stk = sp.TStk; var fr = sp.TFr;
-        stk.Clear(); fr.Clear();
-        void Visit(int v)
-        {
-            sp.TStamp[v] = ts; sp.TIdx[v] = counter; sp.TLow[v] = counter;
-            counter++;
-            stk.Add(v); fr.Add(v); fr.Add(0);
-        }
-        Visit(root);
-        while (fr.Count > 0)
-        {
-            int v = fr[^2], k = fr[^1];
-            if (k < 4)
-            {
-                fr[^1]++;
-                int w = Succ(g, v, k);
-                if (w < 0 || g.SccStamp[w] == ep) { }
-                else if (sp.TStamp[w] != ts) Visit(w);
-                else sp.TLow[v] = Math.Min(sp.TLow[v], sp.TIdx[w]);
-                continue;
-            }
-            fr.RemoveRange(fr.Count - 2, 2);
-            if (fr.Count > 0)
-            {
-                int u = fr[^2];
-                sp.TLow[u] = Math.Min(sp.TLow[u], sp.TLow[v]);
-            }
-            if (sp.TLow[v] != sp.TIdx[v]) continue;
-            int i = stk.Count - 1;
-            while (stk[i] != v) i--;
-            int sid = g.SccR.Count;
-            for (int x = i; x < stk.Count; x++) { g.SccOf[stk[x]] = sid; g.SccStamp[stk[x]] = ep; }
-            Set256 r = default;
-            for (int x = i; x < stk.Count; x++)
-            {
-                int m = stk[x];
-                int j = startIdx[m >> 2];
-                if (j >= 0) r.Set(j);
-                for (int kk = 0; kk < 4; kk++)
-                {
-                    int w = Succ(g, m, kk);
-                    if (w >= 0 && g.SccOf[w] != sid)
-                    {
-                        var xr = g.SccR[g.SccOf[w]];
-                        for (int a = 0; a < 4; a++) r.S[a] |= xr.S[a];
-                    }
-                }
-            }
-            g.SccR.Add(r);
-            stk.RemoveRange(i, stk.Count - i);
-        }
-        return g.SccR[g.SccOf[root]];
-    }
-
     /// <summary>Adds, for an expanded node id with U = 0, one child per off-start box: pulled along a fewest-pull path to the nearest free start square.</summary>
     void PlacementMacros(int id, int[] cur, int[] child)
     {
         var sp = sup!;
         int p = store.PlayerOf(id);
         var g = sp.Scratch;
-        Array.Copy(wall, sp.Obst, cells);
-        foreach (int b in cur) sp.Obst[b] = true;
-        sp.Reset(g);
-        sp.Dfs(this, g, p);
+        Span<int> obst = stackalloc int[cur.Length];
+        for (int i = 0; i < cur.Length; i++) obst[i] = sp.Fi[cur[i]];
+        sp.Reset(g, obst);
+        sp.Build(g, sp.Fi[p]);
         var path = sp.PathBuf;
         foreach (int b in cur)
         {
