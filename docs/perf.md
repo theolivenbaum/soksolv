@@ -278,3 +278,59 @@ What did not work / not worth it
 * Pair floods across the pair search cannot all be skipped: the memo only helps for repeated states; the remaining 50k floods are first visits.
 Remaining (not in this area): plan4/cut scan setup dominates the Sasquatch wide levels (12 s of 13 s on Sasquatch_IV#32); cluster/dead-zone proofs dominate the testdata macro/novelty
 profile (~35%); pull is now spread flat over MArtic 9%, MBoxSearch 8%, RoomBroken 7%, floods 7%, MVisit 6%, move access 6%.
+
+## hub/toward (hub-gen generator, hub-pull, hf / toward glue: `Search/Hub/*`, `Search/Toward/*`)
+
+Equal-work CPU time (child user+sys, AOT, best of 3, Go and C# back to back, nice, 4 shared cores). Go = the patched copies used by the parity scripts
+(`bench/hubgen-ref`, `bench/hub-ref`, `bench/hf-ref`, deterministic): hub-gen `-hub-gen-only -nodes 20000`, hub-pull `-hub-node-slices 1000 -nodes 20000` (Go
+`SOKSOLV_NODESLICES=1000`), hf `-nodes 10000 -parity`; 7 testdata levels (Holland_81_27/43, Sasquatch_IV_50_42, Sasquatch_VI_50_24, SokHard_163_13, Grigr2002_40_24, SokEvo_107_55).
+
+| lane | before (C#/Go) | after (C#/Go) | per level after |
+|---|---|---|---|
+| hub-gen generator | 1.03 | **0.36** | 0.31-0.43 |
+| hub-pull (node-slice) | 0.74 | **0.53** | 0.31-0.63 |
+| hf / toward | 0.80 | **0.61** | 0.40-0.66 (Sasquatch_VI 0.93: 0.14 s runs, start-up bound) |
+
+Parity (all exact, after every step): `bench/hubgen-parity.py` 24/24 at N = 1000 / 3000 / 5000 / 6000 / 20000, `bench/hub-parity.py` hub-gen 24/24 (256/20000, 256/15000, 256/8000)
+and hub-pull 24/24 (1000/20000, 512/12000, 512/6000), pull `-pf-on` vs `soksolv-pf` 24/24 (2000, 3000), `bench/hf-parity.py` 24/24 (3000, 6000, 15000; also `-hf-festival=false`,
+`-hf-fest-corral=false -hf-no-return`), `dotnet test` green (the HubPull node-slice test is load-sensitive, passes alone). Self checks added (each compares every call with the old code,
+`SOKSOLV_CHECK_BIC=1`, `SOKSOLV_CHECK_FESTROOMS=1`, `SOKSOLV_CHECK_MATCH=1`) plus `HubTests.BiconBits_MatchesDfs_OnRandomBoards`.
+
+Allocation (`bench/alloctrace`, modes `hubgen|hubpull|hf`, JIT; AOT `alloc_mb` agrees): no per-node garbage left in these lanes. What still grows with the node count is retained data only
+(hub-gen: nodes/boxes/seen/heap arrays ~0.4 KB per expansion; hub-pull ~0.35 KB/node, hf ~0.1 KB/node: stored nodes, edges, aux words, frontier entries). Found and fixed on the way:
+a closure + delegate per `MOpen` (`PackingObligationAdvice(k => MChoose(ref pk, k))`, now a cached delegate on fields), `new List<int>` per hub `Score`, per-call `List<bool>/List<ulong>` in `FestCorral`.
+
+### What won (instruction counts from callgrind on the AOT binary; Ir of 3000-node hub-gen on Holland_81_27: 818M -> 268M)
+
+1. **Bicon (Festival biconnect_score) by planar duality** (`Hub/BiconBits.cs`; was a DFS over the board per generated node = 36% of hub-gen, per candidate in `Score`). A free cell is on a cycle iff
+   it has a non-bridge edge; an edge of the free-cell grid graph is a bridge iff both sides lie in the same *face*, and the faces other than the 2x2 free squares are exactly the **8-connected components
+   of the blocked cells** (walls + boxes). So: bit-row 8-connected flood of the blocked cells (single blocked cells are dropped in one word-parallel pass: they cannot bridge), per component its
+   "dual square" rows (`q = (c | c>>1)`, `c = row_i | row_{i+1}`), bridges = horizontal `q[i-1] & q[i]`, vertical `q<<1 & q`, non-bridge edges -> cell masks -> popcount. ~4.5k instructions per call for a 13x13 board
+   with 15 boxes vs ~35k for the DFS. `Score` counts only the player's region (a component's cycles do not depend on other components), so the pocket cells are no longer blocked/listed.
+   An earlier version with static wall-component masks + a union-find over boxes was *slower* than the DFS (K wall components x rows per call); the plain per-call flood wins.
+2. **Generator region flood on bit rows** (`Hub/RowFlood.cs`, `HubGen.Flood`): player region as one flood, other components counted by repeated floods (labels only when `Expand` needs them for `DReg`); region 1 rows
+   serve `MacroBfs`, `Score`, `InPlayerRegion`. 21k -> ~3k instr per flood.
+3. **Pool signatures cached** in `HubCand.Sig` (`Admit` recomputed `BoxSig` of every pool entry on every admit: 8.6%).
+4. **Festival score_rooms on bit rows, incremental and memoised** (`Hub/FullSolver.PfRooms.cs`): per room one dirty-row flood over `free & (room | room-less cells)` and a dilation test against the neighbour rooms'
+   row masks instead of a queue walk per start cell (2.2x); room r only depends on the occupancy of D_r (its walk plus the walk's neighbours), so a state that differs from the last full evaluation (the expanded parent, found by an
+   O(n) diff of the box list, no hook in MacroOpen) in one box re-walks only the rooms whose D_r holds the old or new cell, and the pair count is updated only for pairs touching them; each room walk is additionally
+   memoised in a direct-mapped table keyed by the Zobrist xor of the boxes inside D_r (pure function of that local occupancy). FestRooms: 16% -> 1.7% of hub-pull Holland, 11% -> 1.7% on Sasquatch_IV.
+5. **Matching distance**: edge table transposed per box cell (`tgtDistT[cell * P + j]`, AssignmentInf folded in; the old per-goal rows were a stride-`cells` gather), the e-maxx augment with **lazy duals**
+   (minv kept as minv+D, used columns get `v -= D - D_j` once at the end) over Vector128 (4 columns per step; `Vector256` is *not* hardware accelerated in the default AOT target - AVX2 code silently took the
+   scalar fallback), first-minimal-column tie-break kept; `MatchChild` cost in closed form from the dual objective (`hfCost - old edge + u + v[goalCol] + sum of deltas`, no O(n) re-summation);
+   and **memoisation by the Zobrist hash of the box set** (only the optimum value is observable: duplicate children / revisited parents skip the solve, the parent's duals are computed lazily on the first child miss,
+   rebuilt from the child's boxes). ~45% of child matchings hit. MatchChild+AugmentRow: 17% -> 6% of hub-pull Sasquatch_IV.
+6. **Toward mode skips the dead room-connectivity of children** (`MacroOpen`: `room` is overwritten by `HotRel` in hf/toward, `MRoomConnChild` was 9-12% of hf and of the forward trials of hub-pull; hf Sasquatch_IV -23%).
+   The parent side (`MRoomConnParent`: corridor labelling used by the corridor-flow deadlock check) and `HotCounts` / `MMoveAccess` must stay: skipping them changes the search (hf-parity differs), tried and reverted.
+7. **hub-gen glue**: `blk` byte mirror (wall|box) padded by two rows, branch-free `MobOf`, tighter `Local` (24% -> 14%).
+
+### What did not work
+* HotRel (hf hotspot count) as bit rows (1.7k instr vs 0.85k scalar at 15 boxes: fixed per-row cost beats the 4-neighbour scalar loop below ~30 boxes) and as an incremental delta around the moved box (1.5k, the 10+10 cell
+  re-evaluation in two states costs as much as the full count). Reverted.
+* Warm-starting `MatchDist` from the previous solve's column potentials: -12M +14M Ir, no gain (rows still need 3-4 steps); reverted.
+* Dedicated dilate-once component test in the room walk (slower than the per-neighbour row-range test: components span many rows, neighbours few).
+* `Vector256` Hungarian (see 5), kept `Vector128`. Fusing the first-min-index into the update pass: not worth the extra lane bookkeeping.
+
+### Remaining (not in this area)
+hub-pull/hf are now dominated by the macro engine and the proofs: `MPushDead` + dead-zone (11-16%), box-search floods (`BbFlood` 13%), `MArtic` 6%, `MMoveAccessDelta` 3-7%, `RoomBroken`/`MRoomConnChild` in the pull phase (5-8%);
+mine: remaining Hungarian augments of the missed children (5%), `PfFill` 2%, `FestCorral` 3% (the whole-board component labelling per expanded node), hub-gen `Local` 14% / `BiconBits` 18% / flood 15%.
