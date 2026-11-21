@@ -64,7 +64,7 @@ public sealed unsafe partial class FullSolver
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
         m3P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref m3[0]);
         mpost = new uint[4 * cells]; mseen = new uint[4 * cells]; mtseen = new uint[4 * cells];
-        mbprev = new int[4 * cells]; mbq = new int[4 * cells + 4];
+        mbprev = new int[4 * cells]; mbdep = new int[4 * cells]; mbq = new int[4 * cells + 4];
         PairOffsets();
         fa2Zb = new ulong[cells]; fa2Zp = new ulong[cells];
         ulong seed = 0x491fa2;

@@ -294,8 +294,11 @@ public sealed unsafe partial class FullSolver
         }
         if (noveltyN > 0) MNoveltyBlock(id, cur, nm, noveltyN, parentConn);
         bool useTier = noveltyN > 0 && AccessNovelty;
+        if (!pfOn && TryPackedSort(nm, useTier)) { }
+        else {
         for (int k = 0; k < nm; k++) mKeys[k] = new MKey { Tier = useTier ? mCands[k].Tier : 0, Bad = Feat(6) && mCands[k].RevBad ? 1 : 0, W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = pfOn ? mCands[k].B : mCands[k].Plen, Y = pfOn ? mCands[k].T : 0, Idx = k };
         MSortKeys(nm);
+        }
         int off = (int)Math.Min(maux[id].MvOff, (uint)nm);
         int win = nm - off;
         if (MoveWindow > 0 && win > MoveWindow) win = MoveWindow;
@@ -454,6 +457,56 @@ public sealed unsafe partial class FullSolver
         return x.Idx < y.Idx ? -1 : 1;
     }
 
+    struct PKey { public ulong Hi, Lo; public int Idx; }
+    PKey[] mPKey = new PKey[64], mPKeyTmp = new PKey[64];
+
+    /// <summary>
+    /// The move order of MKeyCmp on two packed words (high: bad, weight, tier, oop, -packed, conn; low: room, hot, -mobility, path length) with the
+    /// candidate index as the last tie-break. Only when every field fits its 14/16-bit lane; false = use the general comparator.
+    /// Result: mKeys[0..nm).Idx in sorted order.
+    /// </summary>
+    bool TryPackedSort(int nm, bool useTier)
+    {
+        if (mPKey.Length < nm) { mPKey = new PKey[nm * 2]; mPKeyTmp = new PKey[nm * 2]; }
+        var a = mPKey; bool f6 = Feat(6);
+        for (int k = 0; k < nm; k++)
+        {
+            ref var m = ref mCands[k];
+            int tier = useTier ? m.Tier : 0, w = mWeights[k];
+            if ((uint)w > 3 || (uint)tier > 3 || (uint)m.Oop > 0x3FFF || (uint)m.Packed > 0xFFFF || (uint)m.R > 0xFFFF || (uint)m.Room > 0xFFFF
+                || (uint)m.Hot > 0xFFFF || (uint)m.Mobility > 0xFFFF || (uint)m.Plen > 0xFFFF) return false;
+            a[k].Hi = (f6 && m.RevBad ? 1UL << 50 : 0UL) | (ulong)w << 48 | (ulong)tier << 46 | (ulong)m.Oop << 32 | (ulong)(0xFFFF - m.Packed) << 16 | (ulong)m.R;
+            a[k].Lo = (ulong)m.Room << 48 | (ulong)m.Hot << 32 | (ulong)(0xFFFF - m.Mobility) << 16 | (ulong)m.Plen;
+            a[k].Idx = k;
+        }
+        var src = a; var dst = mPKeyTmp;
+        for (int i = 0; i < nm; i += 8)
+        {
+            int e = Math.Min(i + 8, nm);
+            for (int j = i + 1; j < e; j++)
+            {
+                var x = src[j]; int k = j - 1;
+                while (k >= i && PLess(x, src[k])) { src[k + 1] = src[k]; k--; }
+                src[k + 1] = x;
+            }
+        }
+        for (int w = 8; w < nm; w <<= 1)
+        {
+            for (int lo = 0; lo < nm; lo += 2 * w)
+            {
+                int mid = Math.Min(lo + w, nm), hi = Math.Min(lo + 2 * w, nm), i = lo, j = mid, o = lo;
+                while (i < mid && j < hi) dst[o++] = PLess(src[j], src[i]) ? src[j++] : src[i++];
+                while (i < mid) dst[o++] = src[i++];
+                while (j < hi) dst[o++] = src[j++];
+            }
+            (src, dst) = (dst, src);
+        }
+        for (int j = 0; j < nm; j++) mKeys[j].Idx = src[j].Idx;
+        return true;
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    static bool PLess(in PKey x, in PKey y) => x.Hi != y.Hi ? x.Hi < y.Hi : x.Lo != y.Lo ? x.Lo < y.Lo : x.Idx < y.Idx;
+
     MKey[] mKeyTmp = [];
     /// <summary>Bottom-up merge sort of mKeys[0..n) (a total order: Idx breaks ties), no delegate.</summary>
     void MSortKeys(int n)
@@ -513,8 +566,7 @@ public sealed unsafe partial class FullSolver
         if (dead == 0)
         {
             stats.Generated++;
-            int plen = 1;
-            for (int x = mbprev[k]; x >= 0; x = mbprev[x]) plen++;
+            int plen = mbdep[k];
             tp = Prof.Start();
             CandMemo* cm = null;
             if (CandMemoOn)

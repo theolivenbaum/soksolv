@@ -463,8 +463,7 @@ public sealed unsafe partial class FullSolver
         SetOcc(t, true);
         if (MPushDead(cur, i, t, canonical) == 0)
         {
-            int plen = 1;
-            for (int x = mbprev[k]; x >= 0; x = mbprev[x]) plen++;
+            int plen = mbdep[k];
             diveCands.Add(new DiveCand { I = i, T = t, Side = k % 4, Plen = plen });
             stats.Generated++;
         }
@@ -581,7 +580,7 @@ public sealed unsafe partial class FullSolver
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
         m3P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref m3[0]);
         mpost = new uint[4 * cells]; mseen = new uint[4 * cells]; mtseen = new uint[4 * cells];
-        mbprev = new int[4 * cells]; mbq = new int[4 * cells + 4];
+        mbprev = new int[4 * cells]; mbdep = new int[4 * cells]; mbq = new int[4 * cells + 4];
         mCur = new int[n]; mChild = new int[n];
         if (MExpired()) return Fin(new SolveResult { Reason = "timeout" }, sw);
         var start = (int[])lv.Boxes.Clone();

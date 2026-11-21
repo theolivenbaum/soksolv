@@ -26,7 +26,7 @@ public sealed unsafe partial class FullSolver
     int mNext, mTurn, mBest = -1, mLastAdded = -1, mReopen = -1, mRetargetNodes;
     bool mCancelled, mSetupDone, mStarted;
     long mExpandedN, mNodeLimit;
-    uint[] m3 = [], mpost = [], mseen = [], mtseen = []; int[] mbprev = [], mbq = [];
+    uint[] m3 = [], mpost = [], mseen = [], mtseen = []; int[] mbprev = [], mbdep = [], mbq = [];   // mbdep: number of pushes on the BFS path to a state
     uint mpstamp, mbstamp, mtst; int mCandNP;
     uint* m3P;
     int[] mCur = [], mChild = [];
@@ -118,7 +118,7 @@ public sealed unsafe partial class FullSolver
         m3 = GC.AllocateArray<uint>(cells, pinned: true);
         m3P = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref m3[0]);
         mpost = new uint[4 * cells]; mseen = new uint[4 * cells]; mtseen = new uint[4 * cells];
-        mbprev = new int[4 * cells]; mbq = new int[4 * cells + 4];
+        mbprev = new int[4 * cells]; mbdep = new int[4 * cells]; mbq = new int[4 * cells + 4];
         mCur = new int[n]; mChild = new int[n];
         }
         var res = MacroSearch(timeLimitSec, sw);
@@ -525,7 +525,7 @@ public sealed unsafe partial class FullSolver
         for (int di = 0; di < 4; di++)
         {
             int d = dirs[di];
-            if (mark[Front(b, d)] == st && (!pull || !wall[b + 2 * d] && !occ[b + 2 * d])) { int k = b * 4 + di; mseen[k] = bs; mbprev[k] = -1; mbq[qn++] = k; }
+            if (mark[Front(b, d)] == st && (!pull || !wall[b + 2 * d] && !occ[b + 2 * d])) { int k = b * 4 + di; mseen[k] = bs; mbprev[k] = -1; mbdep[k] = 1; mbq[qn++] = k; }
         }
         bool bbOnLocal = BbEnsure(), bbBuilt = false; int pushes = 0;
         bool node = bbOnLocal && bbNode;
@@ -593,7 +593,7 @@ public sealed unsafe partial class FullSolver
                     if (mBitsOnly ? InPR(Front(nc, dirs[d2i])) : m3[Front(nc, dirs[d2i])] == ps)
                     {
                         mpost[k2] = bs;
-                        if (mseen[k2] != bs) { mseen[k2] = bs; mbprev[k2] = k; mbq[qn++] = k2; }
+                        if (mseen[k2] != bs) { mseen[k2] = bs; mbprev[k2] = k; mbdep[k2] = mbdep[k] + 1; mbq[qn++] = k2; }
                     }
                 }
             }
