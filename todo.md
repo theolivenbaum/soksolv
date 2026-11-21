@@ -111,4 +111,6 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [x] hubstrata (`-strategy hub-strata -hub-strata-dump`): byte-identical dumps
 - [x] `-strategy hub-pull` (raceAlternate; wall clock default, `-hub-node-slices K` deterministic): exact vs node-slice Go reference (bench/hub-ref)
 - [x] retarget reuse (RetargetTo, reuse branch of add/open), deferReopen/resumeWindow in the macro engine; Portfolio `-hub-pull` lane (opt-in)
-- [ ] hub-gen / hub (hubgen.go 1037, hub.go 1112, festbAlternate/prevTrees, toward meet hooks + Back/Fwd owners 4/5, regRel pockets)
+- [x] hub-gen / hub (hubgen.go generator exact vs patched Go incl. checksum of every node: 24/24 testdata, 42/42 LTS, 28/28 hard; hub lane exact in node-slice mode 24/24 x3 settings; festbAlternate; regRel pockets; owners 4/5; wall-clock default) — docs/lanes.md 'hub-gen / hub ported'
+- [x] Portfolio: hub-gen + hub-pull default on (`-no-hub-gen`, `-no-hub-pull`), `toward` lane (`-no-toward`), Go lane memory weights, pull best publishing
+- [ ] toward lane meetings, RetainFwdMail/prevTrees, elastic memory shares
