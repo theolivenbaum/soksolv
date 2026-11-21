@@ -7,11 +7,14 @@ namespace Soksolv.Search.Reverse;
 public unsafe struct IntBuf
 {
     public int* P; public int Len, Cap;
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public void Add(int v)
     {
-        if (Len == Cap) { Cap = Cap == 0 ? 4 : Cap * 2; P = (int*)NativeMemory.Realloc(P, (nuint)Cap * 4); }
+        if (Len == Cap) Grow();
         P[Len++] = v;
     }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    void Grow() { Cap = Cap == 0 ? 4 : Cap * 2; P = (int*)NativeMemory.Realloc(P, (nuint)Cap * 4); }
     public void Free() { NativeMemory.Free(P); P = null; Len = Cap = 0; }
 }
 
@@ -120,6 +123,7 @@ public sealed unsafe class TypeQueue : IDisposable
     IntBuf[] nodes = new IntBuf[64]; int nTypes;
     readonly List<int> live = new();
     int[] pos = new int[64];
+    int[] typeH = new int[64];     // the payload (h) of every node of a type is the h part of the type key
     ulong rng = 0x9E3779B97F4A7C15UL;
     public int N;
 
@@ -143,12 +147,12 @@ public sealed unsafe class TypeQueue : IDisposable
         {
             i = nTypes++;
             if (h < 4096 && k < 256) dense[(int)h]![k] = i; else idx[key] = i;
-            if (i >= nodes.Length) { Array.Resize(ref nodes, nodes.Length * 2); Array.Resize(ref pos, pos.Length * 2); }
-            pos[i] = -1;
+            if (i >= nodes.Length) { Array.Resize(ref nodes, nodes.Length * 2); Array.Resize(ref pos, pos.Length * 2); Array.Resize(ref typeH, typeH.Length * 2); }
+            pos[i] = -1; typeH[i] = payload;
         }
         ref var b = ref nodes[i];
         if (b.Len == 0) { pos[i] = live.Count; live.Add(i); }
-        b.Add(id); b.Add(payload);
+        b.Add(id);
         N++;
     }
 
@@ -158,10 +162,10 @@ public sealed unsafe class TypeQueue : IDisposable
         if (live.Count == 0) return false;
         int i = live[(int)(Next() % (ulong)live.Count)];
         ref var b = ref nodes[i];
-        int j = (int)(Next() % (ulong)(b.Len >> 1));
-        id = b.P[2 * j]; payload = b.P[2 * j + 1];
-        b.Len -= 2;
-        b.P[2 * j] = b.P[b.Len]; b.P[2 * j + 1] = b.P[b.Len + 1];
+        int j = (int)(Next() % (ulong)b.Len);
+        id = b.P[j]; payload = typeH[i];
+        b.Len -= 1;
+        b.P[j] = b.P[b.Len];
         N--;
         if (b.Len == 0)
         {
@@ -172,7 +176,7 @@ public sealed unsafe class TypeQueue : IDisposable
         }
         return true;
     }
-    public long Bytes { get { long t = 64; for (int i = 0; i < nTypes; i++) t += (long)nodes[i].Cap * 4; return t; } }
+    public long Bytes { get { long t = 64 + (long)nodes.Length * 24; for (int i = 0; i < nTypes; i++) t += (long)nodes[i].Cap * 4; return t; } }
     public void Dispose() { for (int i = 0; i < nTypes; i++) nodes[i].Free(); nTypes = 0; N = 0; }
 
 }
