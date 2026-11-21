@@ -40,7 +40,7 @@ public sealed unsafe partial class FullSolver
     void PfFill(ref PfFest.Tuple pt, ReadOnlySpan<int> boxes)
     {
         pt = pt with { Rooms = FestRooms() };
-        if (pt.Dist >= 0) pt = pt with { Dist = pff!.SpreadSum(boxes) }; // festXStyle: spread
+        if (opt.PfSpread && pt.Dist >= 0) pt = pt with { Dist = pff!.SpreadSum(boxes) }; // festXStyle: spread
         if (pt.Reg != 1) return;
         pt = pt with { Hot = pff!.Hot(boxes, occ) };
     }

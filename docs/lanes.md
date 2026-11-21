@@ -385,19 +385,38 @@ pull slice before the pull tree runs again; `pullSlice = max(festbUnit, fwdT/2)`
 in node-slice mode), memory: every tree counts the lane's other trees (`FullOptions.PeerBytes`) against `BudgetBytes`, lane revive ring (`memory` / `festb ended`
 -> fresh pull tree, `RngSeed = RevSeed(k)`).
 
-### Next steps for `hub-gen` / `hub` (exact list, in order)
-1. **`hubgen.go` generator** (self-contained: own node store, no macro engine): `genNode/genEnt/hubGen` (`newHubGen` incl. the fixed splitmix zobrist and `gd` = nearest-goal push
-   distance from `PfFest.PfDist`; `flood/mobOf/local/fullEval/key`, `addRoot/create/expand/macroBFS` (48-state pull walks per box), the cell-alternating heap `push/pop/run`,
-   `cand` = one-region nodes, `nearDup`, `tail`). It is deterministic: port it with the harness `-strategy hub-gen -hub-gen-only -nodes N` (Go `genOnly`, prints the best hubs) and compare
-   the printed hubs/counters (`expanded/created/dupes/cand`) against Go before touching hub.go. Needs `HubReach.Counts` (class counts of a box set; `Search/Hub/HubReach.cs` already has `Feasible`/`Ok`).
-2. **`hub.go` lane**: pool (`hubCand`, `admit`, `nominate`, `hubTier`, `score`), forward contexts (`hubCtx`, 2 slots, windows that double while the context keeps closing; with `-hub-race`
-   the window is already in forward expansions: `winExp`), `harvestG`, idle ring (`HubIdleRing`, `HubIdleK`), `hubUnit(T)` = clamp(T/12, 2 s, 30 s) (10 s unlimited), `hubGenInit` burst.
-   Needs the toward engine's **regions relative to the target** (`setTargetPockets` / `tgtPocket`, `hubRegRel = true`: `Regions()` in toward mode ignores components made only of
-   pocket cells) and the strata/tried table (`raceShared`, exists). Patch Go like `bench/hub-ref` (`SOKSOLV_NODESLICES`: the hub's wall-clock `U`, `q`, burst and slices -> expansions).
-3. **`festbAlternate`** (`-strategy hub-gen` odd configs of the idle ring; `RetainFwdMail`/`prevTrees` are mail-only and can be skipped without Net) and the portfolio lane
-   `hub-gen` (`laneShares`: weight 1, FestB slot `Budget7/Tracked7/8/11`).
-4. **Meetings for the hub lanes**: `Back`/`Fwd` owners 4 (festb) and 5 (festx) in `MeetNet`, `meet` hooks in the toward engine (forward adds probe `Back`, posts to the pull mailbox),
-   `pullCheckMail` drain while the forward trees run (Go `startDrain`), `publishPullBest` for the `toward` lane.
+### hub-gen / hub ported (16th fork) — `-strategy hub-gen|hub`
+
+Files: `Search/Hub/FullSolver.HubGen.cs` (hubgen.go generator: `HubGen`, own node store, cell-alternating heap, 48-state pull walks, `Tail`), `FullSolver.Hub.cs` (hub.go: pool,
+`HarvestG/HarvestOne`, `Score`, `Admit`, `Nominate`, forward contexts `HubCtx`, `WindowCheck`, idle ring), `FullSolver.HubEntry.cs` (`SolveHub` = Go `festbRun`: ring of configs, hub
+configs and — after a config ended `hub idle` — odd configs `FestbConfig` = `festbAlternate`; revive on `memory`/`hub idle`/`festb ended`/`hub ended`; `SolveHubGenOnly`).
+Engine support: `RegionsRel` + `SetTargetPockets` (Go `regRel`/`tgtPocket`: `Regions()` in a hub forward context ignores components made only of target-sealed pocket cells; used for the
+root and for children with > 1 regions), `NewTowardReal(regRel: true)`, `FullOptions.PfSpread` (hub-gen's pull solver has no spread key; hub-pull's festXStyle D has).
+
+**Parity (exact).**
+* Generator (`bench/hubgen-ref/build.sh` -> `$SCRATCH/soksolv-hubgen`; `bench/hubgen-parity.py N [list]`; `-strategy hub-gen -hub-gen-only -nodes N -lane-revive=false`, `SOKSOLV_GENDET=1`):
+  the fingerprint line = expansions/created/dupes/nodes/candidates/best id, an FNV checksum over **every node** (parent, move, player, regions, trapped, mobility, bicon, far, on-goal, depth),
+  the exact-reach class count, pool size after an unbounded harvest, per-tier counts, and the top-5 pool hubs (cut, pinned, trapped, dist, tier, pocket flag, node counts, reach-feasible):
+  testdata 24/24 at N = 50 / 1000 / 20000, LTS-42 list 42/42 at 3000, hard.tsv (28 levels) 28/28 at 20000. This also covers `HubReach.Counts/Ok/Feasible` in the generator, `pfInefficient`,
+  `harvest`, `score`, `admit` (strata signatures), `hubTier`.
+* Lane (`SOKSOLV_NODESLICES=K` in the same patched Go: forward slice = K expansions, generator burst 4K, generator slice = half the round's forward expansions, unbounded harvest, no idle sleeping,
+  `-nodes N` caps generator + forward expansions; `bench/hub-parity.py` with `HUB_STRATEGY=hub-gen GO_HUB=.../soksolv-hubgen`, C# `-hub-node-slices K`): compared solved, pushes and 23 counters
+  (nominated/committed/reached/abandoned/extensions/memfull/exhausted/tail/infeasible/reachrej/fallbackrej, generator expanded/created/dupes, forward expansions, rounds, idle rounds, rescans, pool,
+  scanned, seen, eligible, best_on): testdata 24/24 at slice/nodes 256/60000, 1000/150000, 64/20000. Goldens in `tests/Soksolv.Tests/golden/hubgen_1500.txt`, `hub_slices512.txt` (`HubTests`).
+
+**Timing (default).** Wall clock, mirroring Go: `hubUnit(T)` = clamp(T/12, 2 s, 30 s) (10 s unlimited), forward slice q = U/4, generator burst `T * 0.15`, harvest budget `lastRound/20` (first 1.5 s, rescans 0.5 s),
+backward slice = half the round's forward time, idle back-off 1..64 ms doubling and `HubIdleK = 4` rounds at the cap end a config (`hub idle`), `StallScale = t/600` reaches the forward trees (stall finishing only
+in timed mode). Windows are expansion budgets (`HubRaceUnit` 4096, doubling while the context improved in the window's second half). Memory: generator cap 0.75 x lane budget, pause the generator at half the
+budget, forward trees count the generator and the other context against `BudgetBytes` (`PeerBytes`).
+
+**Portfolio.** Lanes `hub-pull` (default ON now; `-no-hub-pull`), `hub-gen` (default on; `-no-hub-gen`), `toward` (`-no-toward`; needs the pull lane). Memory weights as Go's `laneShares`
+(reverse 3, full 3, every other lane 1). `toward` = `SolveTowardLane` (Go main.go "toward": waits for the pull lane's published best state — `FullOptions.PublishBest`, Go `publishPullBest`, at most
+every 100 ms — builds a target-mode macro engine, retargets (`RetargetTo`, tree <= 16384 nodes) after a doubling minimum slice 500 ms << (runs-1) when a newer target exists). Meetings: the hub lanes'
+forward trees probe/post on `Net` (`MeetOwner` 4 = hub-gen, 5 = hub-pull; `MeetNet` has 6 mailboxes), hub-pull's pull tree and `festbAlternate`'s pull tree add to `Net.Back` (`BackOwner` 5 / 4) and
+complete meetings between forward slices (`PullDrain`; Go: a drain goroutine). The toward lane itself does not meet (Go does) and `RetainFwdMail`/`prevTrees` are not ported.
+
+**Not ported / known gaps.** The generator-only config of the lane never runs the pull search (as Go); `-hub-inject`, `relayBack`, the idle-ring record keeping (`hubRec`, trace extras), `RetainFwdMail`
+(mail-only), elastic memory (`budgetP` shares by lane), the toward lane's meetings and `towardStop` mid-slice polling (here: 50 ms slices).
 
 ### hub-pull results (15th fork; machine: shared 4-core Xeon, JIT build, `-strategy hub-pull -procs 1 -t 10`, 3 runs per level)
 * **Node-slice parity** (`bench/hub-parity.py`, retarget reuse on, vs the patched Go): testdata (24 files) 24/24 identical at slice/nodes 256/100k, 1000/120k, 4000/150k, 1000/20k;
