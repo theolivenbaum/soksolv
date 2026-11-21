@@ -10,7 +10,8 @@ public sealed unsafe partial class FullSolver
     // novelty lane (Go exp-192/194/289): per-FESS-cell novelty memory
     const bool AccessNovelty = true, Novelty2 = true;
     readonly List<ulong[]?> mNovSeen = new(), mNovPushSeen = new();
-    readonly HashSet<ulong> mNovPairs = new(), mNovAccess = new();
+    readonly FlatSet64 mNovAccess = new();
+    PairBook? mNovBook; nint[] mNovRows = new nint[64];
     readonly List<ulong> mNovWords = new(), mNovT0 = new(), mNovT1 = new();
     long mParentSpread; bool mParentFrozen;
     int mOpenId, mOpenCands, mParentOop, mParentRoom, mParentConn, mParentPackedF; uint mOpenSt; int[]? mHotCounts;
@@ -326,6 +327,13 @@ public sealed unsafe partial class FullSolver
                 while (mNovPushSeen.Count <= bk) mNovPushSeen.Add(null);
                 pushSeen = mNovPushSeen[bk] ??= new ulong[(4 * cells + 63) / 64];
             }
+            ulong hiKey = (ulong)bk << 20;
+            if (Novelty2)
+            {
+                mNovBook ??= new PairBook(nodes.Nw);
+                if (mNovRows.Length < cur.Length) mNovRows = new nint[cur.Length * 2];
+                for (int j = 0; j < cur.Length; j++) mNovRows[j] = (nint)mNovBook.Find(hiKey | (uint)cur[j]);
+            }
             int nov = 0, nwd = (nm + 63) / 64, novOff = mNovWords.Count;
             for (int x = 0; x < nwd; x++) { mNovWords.Add(0); if (AccessNovelty) { mNovT0.Add(0); mNovT1.Add(0); } }
             maux[id].NovOffset = novOff + 1;
@@ -333,17 +341,11 @@ public sealed unsafe partial class FullSolver
             {
                 ref var m = ref mCands[k];
                 int w = m.T / 64; ulong bit = 1UL << (m.T % 64);
-                bool w1Novel = (seen[w] & bit) == 0, w2Novel = false;
-                if (Novelty2)
-                    for (int j = 0; j < cur.Length; j++)
-                    {
-                        if (j == m.I) continue;
-                        int a = m.T, c = cur[j];
-                        if (a > c) (a, c) = (c, a);
-                        if (!mNovPairs.Contains((ulong)bk << 40 | (ulong)a << 20 | (ulong)c)) { w2Novel = true; break; }
-                    }
+                // the novelty facts only matter for a move that can still take a free slot (budget left, not a rev-group undo)
+                bool canNovel = nov < novelty && !(Feat(6) && m.RevBad);
+                bool w1Novel = canNovel && (seen[w] & bit) == 0, w2Novel = false;
                 bool accessNovel = false;
-                if (AccessNovelty && m.AccLen > 0)
+                if (canNovel && AccessNovelty && m.AccLen > 0)
                     for (int e = m.AccStart; e < m.AccStart + m.AccLen; e++)
                     {
                         ulong raw = mAccBuf[e];
@@ -351,19 +353,35 @@ public sealed unsafe partial class FullSolver
                         if (tag == 0) { if ((pushSeen![raw / 64] & 1UL << (int)(raw % 64)) == 0) { accessNovel = true; break; } }
                         else if (!mNovAccess.Contains((ulong)bk << 44 | raw)) { accessNovel = true; break; }
                     }
+                if (canNovel && Novelty2 && !w1Novel && !accessNovel)   // the pair test only decides when neither of the others already made the move novel
+                {
+                    // one bit test per box in the box's row of the book: pair {T, c} seen <=> bit floorIdx(T) in row(bk, c)
+                    int ft = nodes.Fidx[m.T], fw = ft >> 6; ulong fbit = 1UL << (ft & 63);
+                    for (int j = 0; j < cur.Length; j++)
+                    {
+                        if (j == m.I) continue;
+                        ulong* row = (ulong*)mNovRows[j];
+                        if (row == null || (row[fw] & fbit) == 0) { w2Novel = true; break; }
+                    }
+                }
                 bool novel = w1Novel || w2Novel || accessNovel;
-                if (Feat(6) && m.RevBad) novel = false;
-                if (novel && nov < novelty)
+                if (novel)
                 {
                     seen[w] |= bit;
                     if (Novelty2)
+                    {
+                        int ft = nodes.Fidx[m.T];
+                        ulong* trow = mNovBook!.GetOrAdd(hiKey | (uint)m.T);
                         for (int j = 0; j < cur.Length; j++)
                         {
                             if (j == m.I) continue;
-                            int a = m.T, c = cur[j];
-                            if (a > c) (a, c) = (c, a);
-                            mNovPairs.Add((ulong)bk << 40 | (ulong)a << 20 | (ulong)c);
+                            ulong* xr = (ulong*)mNovRows[j];
+                            if (xr == null) { xr = mNovBook.GetOrAdd(hiKey | (uint)cur[j]); mNovRows[j] = (nint)xr; }
+                            xr[ft >> 6] |= 1UL << (ft & 63);
+                            int fx = nodes.Fidx[cur[j]];
+                            trow[fx >> 6] |= 1UL << (fx & 63);
                         }
+                    }
                     if (AccessNovelty && m.AccLen > 0)
                         for (int e = m.AccStart; e < m.AccStart + m.AccLen; e++)
                         {

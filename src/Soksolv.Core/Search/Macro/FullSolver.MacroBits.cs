@@ -168,28 +168,33 @@ public sealed unsafe partial class FullSolver
     /// 4+4 supports of the lifted and the landed box that lie in the child's region, with D = child region \ parent region, E = parent \ child;
     /// explorer = an unchanged box with a legal push whose support lies in D. Returns mobility -1 when D/E are too large (the row kernel runs instead).
     /// </summary>
-    (int mobility, bool explorer, int accStart, int accLen) MMoveAccessDelta(ReadOnlySpan<int> cur, int target, int origB)
+    (int mobility, bool explorer, int accStart, int accLen) MMoveAccessDelta(ReadOnlySpan<int> cur, int target, int origB, bool rec = false)
     {
         const int Lim = 160;
-        ulong* reg = bbNRegP, par = bbParP, free = bbNFreeP, wallR = bbWallP;
+        ulong* reg = bbNRegP, par = bbParP, free = bbNFreeP, wallR = bbWallP, alive = bbAliveP;
         int lo = Math.Min(bbRegLo, accParLo), hi = Math.Max(bbRegHi, accParHi);
         int w = W; uint dm = divM;
         byte* cnt = accCnt;
         int mob = accMp, nb = 0;
         bool explorer = false;
+        // fact recording (novelty lane): the facts of the row kernel, enumerated over the same D cells
+        int accStart = rec ? mAccN : 0;
+        bool vacated = rec && ((mCmdMask | mUnpinMask) != 0 || (goal[origB] && !goal[target]));
+        bool displaced = rec && (mUnpackedRegime || vacated);
         for (int r = lo; r <= hi; r++)
         {
             ulong d = reg[r] & ~par[r], e = par[r] & ~reg[r];
             if ((d | e) == 0) continue;
             nb += BitOperations.PopCount(d) + BitOperations.PopCount(e);
-            if (nb > Lim) return (-1, false, 0, 0);
+            if (nb > Lim) { if (rec) mAccN = accStart; return (-1, false, 0, 0); }
             int baseC = (r - 1) * w;
             for (ulong x = e; x != 0; x &= x - 1) mob -= cnt[baseC + BitOperations.TrailingZeroCount(x)];
             for (ulong x = d; x != 0; x &= x - 1)
             {
                 int sc = baseC + BitOperations.TrailingZeroCount(x);
                 mob += cnt[sc];
-                if (explorer) continue;
+                if (explorer && !rec) continue;
+                if (cnt[sc] == 0) continue;   // no (box, direction) is supported by this cell
                 for (int k = 0; k < 4; k++)
                 {
                     int cb = sc - accSupOff[k];
@@ -202,7 +207,13 @@ public sealed unsafe partial class FullSolver
                     int rt = (int)(((ulong)(uint)to * dm) >> 32);
                     if ((free[rt + 1] >> (to - rt * w) & 1) == 0) continue;
                     if (dist[cb + dk] < 0) continue;
-                    explorer = true; break;
+                    explorer = true;
+                    if (!rec) break;
+                    ulong psi = (uint)(cb * 4 + k);
+                    AccPush(psi);
+                    AccPush((1UL << 40) | (psi << 20) | (uint)target);
+                    if (displaced) AccPush((2UL << 40) | (psi << 20) | (uint)origB);
+                    if (vacated) AccPush((4UL << 40) | ((ulong)(uint)origB << 20) | psi);
                 }
             }
         }
@@ -211,9 +222,28 @@ public sealed unsafe partial class FullSolver
             int sb = origB + accSupOff[k], st = target + accSupOff[k];
             int rb = (int)(((ulong)(uint)sb * dm) >> 32), rs = (int)(((ulong)(uint)st * dm) >> 32);
             if ((reg[rb + 1] >> (sb - rb * w) & 1) != 0) mob--;
-            if ((reg[rs + 1] >> (st - rs * w) & 1) != 0) mob++;
+            bool tIn = (reg[rs + 1] >> (st - rs * w) & 1) != 0;
+            if (tIn) mob++;
+            if (vacated && tIn)
+            {
+                // the moved box itself: a legal push from a support in the child's region (fact 4 covers it even when the support is not fresh)
+                int dk = dirs[k];
+                int to = pull ? target + 2 * dk : target + dk;
+                if ((uint)to < (uint)cells && dist[target + dk] >= 0)
+                {
+                    int rt = (int)(((ulong)(uint)to * dm) >> 32);
+                    if ((free[rt + 1] >> (to - rt * w) & 1) != 0)
+                        AccPush((4UL << 40) | ((ulong)(uint)origB << 20) | (uint)(target * 4 + k));
+                }
+            }
         }
-        return (mob, explorer, 0, 0);
+        int accLen = 0;
+        if (rec)
+        {
+            if (mCandNP >= 0 && mark[mCandNP] != mOpenSt) AccPush((3UL << 40) | ((ulong)(uint)mCandNP << 20) | (uint)target);
+            accLen = mAccN - accStart;
+        }
+        return (mob, explorer, accStart, accLen);
     }
 
     /// <summary>Go moveAccessBits: every term is a row-bitset expression over the rows holding boxes.</summary>
@@ -223,9 +253,9 @@ public sealed unsafe partial class FullSolver
         if (accGeoA == null) BbGeoInit();
         int origB = cur[moved];
         bool recordAcc = AccessNovelty && NoveltyBudget() > 0;
-        if (!recordAcc && !AccessRowsOnly)
+        if (!AccessRowsOnly)
         {
-            var dr = MMoveAccessDelta(cur, target, origB);
+            var dr = MMoveAccessDelta(cur, target, origB, recordAcc);
             if (dr.mobility >= 0) return dr;
         }
         int accStart = recordAcc ? mAccN : 0;
