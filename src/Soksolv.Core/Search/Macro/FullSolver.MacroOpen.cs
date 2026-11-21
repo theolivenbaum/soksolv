@@ -303,7 +303,7 @@ public sealed unsafe partial class FullSolver
         {
             int k = mKeys[j].Idx;
             ref var m = ref mCands[k];
-            ulong word = (ulong)m.I | (ulong)m.T << 15 | (ulong)mWeights[k] << 30 | (ulong)m.Side << 31 | (ulong)m.R << 33;
+            ulong word = (ulong)m.I | (ulong)m.T << 15 | (ulong)mWeights[k] << 30 | (ulong)m.Side << 31 | (ulong)m.R << 33 | (m.Plen < 0x8000 ? (ulong)m.Plen << 48 : 0UL);
             mmv.Add(m.AlreadyUsed ? word | MMoveUsed : word);
             mmvScore.Add(new MoveScore { Oop = (ushort)m.Oop, Packed = (ushort)m.Packed, Conn = (ushort)m.R, Hot = (ushort)Math.Min(m.Hot, 65535), Room = (uint)m.Room, Mobility = (uint)m.Mobility });
         }
@@ -719,15 +719,21 @@ public sealed unsafe partial class FullSolver
         mLastAdded = -1;
         int i = (int)(m & 0x7FFF), t = (int)(m >> 15 & 0x7FFF), wd = (int)(m >> 30 & 1), r = (int)(m >> 33 & 0x7FFF), side = (int)(m >> 31 & 3);
         int b = cur[i];
-        var seq = MBoxPathTo(b, t, st, side, cur);
         ch = h;
-        if (seq.Count == 0) return -1;
-        var last = seq[^1];
+        // the move word carries the path length of the box search that generated it (the last push direction is `side`): no second box search
+        int plenW = (int)(m >> 48 & 0x7FFF), pathLen, lastDir;
+        if (plenW > 0) { pathLen = plenW; lastDir = side; }
+        else
+        {
+            var seq = MBoxPathTo(b, t, st, side, cur);
+            if (seq.Count == 0) return -1;
+            pathLen = seq.Count; lastDir = seq[^1].Dir;
+        }
         cur.AsSpan().CopyTo(child);
         child[i] = t;
         SortUtil.Insertion(child);
         SetOcc(b, false); SetOcc(t, true);
-        int sideC = PlayerAfter(t, dirs[last.Dir]);
+        int sideC = PlayerAfter(t, dirs[lastDir]);
         int np = Reach(sideC, mark2);
         long tcl = Prof.Start();
         bool clDead = cl != null && cl.Dead(occ, t, sideC, mark2, stamp, -1);
@@ -753,7 +759,7 @@ public sealed unsafe partial class FullSolver
         for (int x = 0; x < nodes.Nw; x++) ckey[x] = pk[x];
         ulong zh = parentHash ^ nodes.ZPlayer(nodes.Player(id)) ^ nodes.ZPlayer(np);
         if (b != t) { Flip(b); Flip(t); zh ^= nodes.ZBox(b) ^ nodes.ZBox(t); }
-        int cid = MAdd(zh, np, id, b, t, last.Dir, nodes.G(id) + seq.Count, ch, w, r, child);
+        int cid = MAdd(zh, np, id, b, t, lastDir, nodes.G(id) + pathLen, ch, w, r, child);
         SetOcc(t, false); SetOcc(b, true);
         return cid;
     }
