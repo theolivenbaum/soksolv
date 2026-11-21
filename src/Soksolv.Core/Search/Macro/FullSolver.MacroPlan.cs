@@ -18,7 +18,8 @@ public sealed unsafe partial class FullSolver
         public int InW;
         public bool Complete; public int Expanded, Parkings, Remaining;
         public FestPlan? Fest; public bool FestPacked; // plan4: Festival-prefix packed feature (Go plan.fest / plan.festPacked)
-        public ulong[] OccBits = []; public int[] Miss = [];
+        public ulong[] OccBits = []; public int[] Miss = []; public int[] Cand = []; public int CandN;   // phases (best first) with at most one missing cell
+        public int[] OopCache = []; public int FestMiss;
 
         public void Prepare()
         {
@@ -65,14 +66,22 @@ public sealed unsafe partial class FullSolver
                 for (int w = 0; w < InW; w++) m += BitOperations.PopCount(In[i * InW + w] & ~OccBits[w]);
                 Miss[i] = m;
             }
+            if (Cand.Length != Required.Length) Cand = new int[Required.Length];
+            CandN = 0;
+            for (int i = Required.Length - 1; i >= 0; i--) if (Miss[i] <= 1) Cand[CandN++] = i;
+            if (OopCache.Length != Required.Length + 1) OopCache = new int[Required.Length + 1];
+            Array.Fill(OopCache, -1);
         }
 
         int InBit(int i, int c) { int w = c >> 6; return w < InW ? (int)(In[i * InW + w] >> (c & 63) & 1) : 0; }
 
         public (int phase, int packed) ChildStatus(int b, int t)
         {
-            for (int i = Required.Length - 1; i >= 0; i--)
+            for (int ci = 0; ci < CandN; ci++)
+            {
+                int i = Cand[ci];
                 if (Miss[i] + InBit(i, b) - InBit(i, t) == 0) return (i, Required[i].Length);
+            }
             if (Required.Length > 0) return (-1, Required[0].Length - (Miss[0] + InBit(0, b) - InBit(0, t)));
             return (-1, 0);
         }
@@ -206,16 +215,23 @@ public sealed unsafe partial class FullSolver
         int Regions()
         {
             uint st = ++stamp; int n = 0;
+            int[] q = regQ ??= new int[s.cells];
             foreach (int c in floor)
             {
                 if (occ[c] || mark[c] == st) continue;
                 n++; mark[c] = st;
-                var q = new List<int> { c };
-                for (int i = 0; i < q.Count; i++)
-                    foreach (int d in s.dirs) { int y = q[i] + d; if (mark[y] != st && !s.wall[y] && !occ[y]) { mark[y] = st; q.Add(y); } }
+                int tail = 0; q[tail++] = c;
+                for (int i = 0; i < tail; i++)
+                    foreach (int d in s.dirs) { int y = q[i] + d; if (mark[y] != st && !s.wall[y] && !occ[y]) { mark[y] = st; q[tail++] = y; } }
             }
             return n;
         }
+        int[]? regQ;
+
+        // cut scan over G0 (every box placed): queries of "player region with box b lifted and a box on `to`" without a flood per pull state
+        CutScan? cut; byte[]? cblk;
+        readonly List<PMove> pmMoves = new(), pmRemovals = new(); readonly HashSet<(int, int)> pmEnds = new(); readonly List<int> pmQ = new(), pmRb = new();
+        void SetBlk(int c, bool v) { occ[c] = v; cblk![c] = (byte)(v || s.wall[c] ? 1 : 0); }
 
         static void StableSort(List<PMove> l, Comparison<PMove> cmp)
         {
@@ -230,18 +246,25 @@ public sealed unsafe partial class FullSolver
         PMove[] PullMoves(int[] boxes, int player)
         {
             var dirs = s.dirs;
+            if (cut == null)
+            {
+                cblk = new byte[s.cells]; cut = new CutScan(s.cells, dirs, cblk);
+            }
+            for (int c = 0; c < cblk!.Length; c++) cblk[c] = (byte)(s.wall[c] ? 1 : 0);
+            foreach (int bx in boxes) cblk[bx] = 1;
             var (_, parentStamp) = Flood(player);
             pg++;
             foreach (int c in queue) if (mark[c] == parentStamp) pgen[c] = pg;
-            var moves = new List<PMove>(); var removals = new List<PMove>();
-            var ends = new HashSet<(int, int)>();
-            var q = new List<int>();
+            var moves = pmMoves; moves.Clear(); var removals = pmRemovals; removals.Clear();
+            var ends = pmEnds; var q = pmQ; var rbOf = pmRb; rbOf.Clear();
+            int baseR = Regions();
+            cut.CutNewNode();
             foreach (int b in boxes)
             {
                 if (Stopped()) break;
                 if (sink[b])
                 {
-                    occ[b] = false; var (np0, _) = Flood(player); occ[b] = true;
+                    SetBlk(b, false); var (np0, _) = Flood(player); SetBlk(b, true);
                     removals.Add(new PMove { From = b, To = b, Player = np0, Remove = true });
                     continue;
                 }
@@ -250,7 +273,9 @@ public sealed unsafe partial class FullSolver
                 q.Clear();
                 for (int di = 0; di < 4; di++)
                     if (pgen[b + dirs[di]] == pg) { int k = b * 4 + di; q.Add(k); pseen[k] = g; }
-                occ[b] = false;
+                cut.CutBegin(b);
+                SetBlk(b, false);
+                int rb = -1;
                 for (int qi = 0; qi < q.Count; qi++)
                 {
                     if ((qi & 31) == 0 && Stopped()) break;
@@ -258,39 +283,43 @@ public sealed unsafe partial class FullSolver
                     int c = k / 4, d = dirs[k % 4];
                     int to = c + d, pl = c + 2 * d;
                     if (s.wall[to] || occ[to] || s.wall[pl] || occ[pl]) continue;
-                    // player's region with the box on `to`: flood from pl with `to` blocked
-                    occ[to] = true;
-                    var (np, st2) = Flood(pl);
-                    int sides = 0;
-                    for (int di = 0; di < 4; di++) if (mark[to + dirs[di]] == st2) sides |= 1 << di;
-                    occ[to] = false;
+                    // player's region with the box on `to`: flood from pl with `to` blocked (cut scan answer)
+                    var (np, sides) = cut.CutQuery(to, pl);
                     for (int di = 0; di < 4; di++)
                     {
                         int k2 = to * 4 + di;
                         if ((sides & (1 << di)) != 0 && pseen[k2] != g) { pseen[k2] = g; q.Add(k2); }
                     }
                     bool remove = sink[to];
-                    if (remove) { var (cm, _) = Flood(to); np = cm; }
+                    if (remove) np = cut.CutCompMin(to);
                     if (!ends.Add((to, np))) continue;
                     var m = new PMove { From = b, To = to, Player = np, Remove = remove, Weight = 1, Score = distance[to] - distance[b] };
-                    if (remove) { m.Weight = 0; m.Score = -distance[b]; removals.Add(m); } else moves.Add(m);
+                    if (remove) { m.Weight = 0; m.Score = -distance[b]; removals.Add(m); }
+                    else
+                    {
+                        moves.Add(m);
+                        if (rb < 0) rb = baseR + 1 - cut.LiftNeighbourComps;
+                        rbOf.Add(rb);
+                    }
                 }
-                occ[b] = true;
+                SetBlk(b, true);
             }
             if (removals.Count > 0)
             {
                 StableSort(removals, (a, b2) => b2.Score - a.Score);
                 return removals.ToArray();
             }
-            int parentRegions = Regions();
+            int parentRegions = baseR;
             int advisor = -1; int bestScore = int.MinValue;
             for (int i = 0; i < moves.Count; i++)
             {
                 var m = moves[i];
                 if (!s.goal[m.From] || !(pushable[m.To] || start[m.To])) continue;
-                occ[m.From] = false; occ[m.To] = true;
-                int regions = Regions();
-                occ[m.To] = false; occ[m.From] = true;
+                cut.CutBegin(m.From);
+                SetBlk(m.From, false);
+                int regions = rbOf[i] - 1 + cut.CutPieces(m.To);
+                if (FullSolver.CheckCut) { SetBlk(m.To, true); int f = Regions(); SetBlk(m.To, false); if (f != regions) throw new InvalidOperationException($"v1 planner regions: scan {regions} != flood {f}"); }
+                SetBlk(m.From, true);
                 if (regions <= parentRegions && m.Score > bestScore) { advisor = i; bestScore = m.Score; }
             }
             if (advisor >= 0) { var m = moves[advisor]; m.Weight = 0; moves[advisor] = m; }
@@ -374,7 +403,7 @@ public sealed unsafe partial class FullSolver
                 var boxes = (int[])n.Boxes.Clone();
                 int i = Array.BinarySearch(boxes, m.From);
                 if (m.Remove) boxes = boxes.Where((_, j) => j != i).ToArray();
-                else { boxes[i] = m.To; Array.Sort(boxes); }
+                else { boxes[i] = m.To; SortUtil.Insertion(boxes); }
                 int weight = n.Weight + m.Weight;
                 expanded++;
                 Add(boxes, m.Player, e.Node, m, weight);

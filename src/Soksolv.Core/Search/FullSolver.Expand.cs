@@ -311,8 +311,51 @@ public sealed unsafe partial class FullSolver
     ulong* bbFloor, bbFree, bbReg, bbRem; int bbRows;
     public static bool PairBitsOff, PairBitsCheck;   // test hooks
 
+    /// <summary>Row flood with a dirty-row worklist (rows ≤ 64): a row is re-examined only when a neighbouring row changed; passes alternate up/down like the sweeps they replace.</summary>
+    static void FloodRowsDirty(ulong* free, ulong* reg, int rows, int rp, int cp)
+    {
+        for (int i = 0; i < rows; i++) reg[i] = 0;
+        reg[rp] = FillRow(1UL << cp, free[rp]);
+        int last = rows - 2;
+        ulong valid = ((1UL << last) - 1) << 1;   // bits 1..last
+        ulong cur = ((1UL << (rp - 1)) | (1UL << (rp + 1))) & valid;
+        bool up = true;
+        while (cur != 0)
+        {
+            ulong nxt = 0, m = cur;
+            if (up)
+                while (m != 0)
+                {
+                    int r = BitOperations.TrailingZeroCount(m);
+                    m &= m - 1;
+                    ulong cr = reg[r], f = free[r];
+                    ulong y = cr | (reg[r - 1] | reg[r + 1]) & f;
+                    if (y == cr) continue;
+                    y = FillRow(y, f);
+                    if (y == cr) continue;
+                    reg[r] = y;
+                    m |= (1UL << (r + 1)) & valid; nxt |= (1UL << (r - 1)) & valid;
+                }
+            else
+                while (m != 0)
+                {
+                    int r = 63 - BitOperations.LeadingZeroCount(m);
+                    m &= ~(1UL << r);
+                    ulong cr = reg[r], f = free[r];
+                    ulong y = cr | (reg[r - 1] | reg[r + 1]) & f;
+                    if (y == cr) continue;
+                    y = FillRow(y, f);
+                    if (y == cr) continue;
+                    reg[r] = y;
+                    m |= (1UL << (r - 1)) & valid; nxt |= (1UL << (r + 1)) & valid;
+                }
+            cur = nxt; up = !up;
+        }
+    }
+
     static void FloodRows(ulong* free, ulong* reg, int rows, int rp, int cp)
     {
+        if (rows <= 64) { FloodRowsDirty(free, reg, rows, rp, cp); return; }
         for (int i = 0; i < rows; i++) reg[i] = 0;
         if (rows <= 64)
         {
