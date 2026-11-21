@@ -262,3 +262,28 @@ filtering (`PFReach` exact reach, `PFZoneDead`), `pfBetter` best-so-far in the f
 **Suggested method for the engine hooks:** a patched Go copy (like `bench/hf-ref/build.sh`) that adds `SOKSOLV_PFON=1` to `-strategy pull`
 (sets `ps.pfOn=true`, `pfSty=festXStyle()`) so the Festival-order pull search can be fingerprint-compared under `-nodes N`, then `hubstrata`
 (deterministic), then the timed `raceAlternate`/`hubLane` with a documented solve-rate/time equivalence.
+
+### pfOn engine hooks — reference built, hook map for the next worker
+
+**Reference:** `bench/pf-ref/build.sh` builds `$SCRATCH/soksolv-pf` from a copy of `.reference` where `SOKSOLV_PFON=1` makes `-strategy pull`
+run the pull solver with `pfOn` + `festXStyle()` (exactly how `hub-pull` builds it, main.go:1093). It is deterministic under `-nodes`
+(two runs identical) and pfOn changes the search (Holland_81_43 at 2000 nodes: stored 690 / generated 11864 with pfOn vs 1038 / 11038 without).
+Compare with `bench/lane-parity.py pull "" N` after pointing GO_SOKSOLV at `soksolv-pf` with SOKSOLV_PFON=1 and adding a C# switch
+(suggested: `-pf-on`, set on `FullOptions` as `PfOn`, valid with `Pull`).
+
+**Hook map (Go site → C# analogue; each pfOn branch sits beside the existing hfRank branch):**
+| Go | what | C# place |
+|---|---|---|
+| solver.go:1658 / pullfest.go `pfAdd` | node tuple `pfOwn`, best-on-path `pfBest`, bucket = `project(oop=best.reg, connectivity=best.rooms)`; root scored on its own board (`rootBare`) | `Macro/FullSolver.Macro.cs:253-255` (hfRank bucket/cell) |
+| pullfest.go `pfReparent` | reparent keeps best-on-path | `Macro.cs:228` (`HfSchedReparent` analogue) |
+| fess_search.go:365 | frontier best-so-far uses `pfBetter(pfBest)` | `Macro.cs:374` |
+| fess_moves.go:77-90 | parent score = `pfScore(pfTuple{reg: s.reg[id], rooms: parent.room, dist: hfMatchParent})` filled by `pfFill`; `parent.conn = reg` (pfAdvFix) | `MacroOpen.cs:64-71` (hfRank parent block) |
+| fess_moves.go:304-325 | child score = `pfScore` of `{m.r, m.room, dist: hfMatchChild}` + `pfFill`; `rootBare` branch | `MacroOpen.cs:~469` (hfRank child block) |
+| advisors.go:104 | single advisor: best child better than parent, ties in board order (`m.b`, `m.t`), skips stored children (`PFFestAdv`) | `MacroOpen.cs:121` (hfRank one-advisor) |
+| fess_moves.go:464, 785 | no extra zero-weight advisor under `pfFestAdv`; sort keys `k.x,k.y = m.b,m.t` | `MacroOpen.cs` rev-group weight + sort key code |
+| fess_moves.go:948 | `PFIneff && pfOn` → `pfInefficient` dead reason | `MacroOpen.cs:558` (`FestInefficient`, already ported for hf) |
+| fess_search.go:535-538 | `PFReach` / `pfZoneDead` start-zone filtering of roots | pull root setup in `Pull/FullSolver.Pull.cs` |
+| fess_search.go:670, 826-831 | pfOn type-exploration period `pfSty.types` | Macro types code |
+| pullfest.go `pfFill`/`pfMatch`/`pfInit` | tuple completion (hot, bic, spread, rooms=`festRooms` when `PFFestRooms`) | **ported**: `Search/Hub/PfFest.cs` (+ port `festRooms`) |
+Ported leaf pieces are exact (PfFestTests). After the hooks: `hubstrata` (deterministic, ~255 lines), then add a node-slice switch to a patched
+Go (`SOKSOLV_NODESLICES`: replace the wall-clock slices of `raceAlternate`/`festbAlternate`/`hubLane` by expansion counts) for the timed lanes.
