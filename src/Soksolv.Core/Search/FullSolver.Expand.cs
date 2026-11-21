@@ -69,6 +69,33 @@ public sealed unsafe partial class FullSolver
             y = z;
         }
     }
+    /// <summary>Go regions() under target pockets (exp-460): components made only of pocket cells do not count.</summary>
+    int RegionsRel()
+    {
+        if (tgtPocket == null) return Regions();
+        FloorCells();
+        uint rs = ++rstamp;
+        int cnt = 0, w = W;
+        int* q = cqueueP;
+        var pk = tgtPocket;
+        foreach (int c in floorCells)
+        {
+            if (blk[c] != 0 || rmarkP[c] == rs) continue;
+            rmarkP[c] = rs;
+            int tail = 0; q[tail++] = c;
+            bool rel = !pk[c];
+            for (int i = 0; i < tail; i++)
+            {
+                int x = q[i];
+                int y = x - w; if (rmarkP[y] != rs && blk[y] == 0) { rmarkP[y] = rs; q[tail++] = y; rel = rel || !pk[y]; }
+                y = x + w; if (rmarkP[y] != rs && blk[y] == 0) { rmarkP[y] = rs; q[tail++] = y; rel = rel || !pk[y]; }
+                y = x - 1; if (rmarkP[y] != rs && blk[y] == 0) { rmarkP[y] = rs; q[tail++] = y; rel = rel || !pk[y]; }
+                y = x + 1; if (rmarkP[y] != rs && blk[y] == 0) { rmarkP[y] = rs; q[tail++] = y; rel = rel || !pk[y]; }
+            }
+            if (rel) cnt++;
+        }
+        return cnt;
+    }
 
     int Regions()
     {
