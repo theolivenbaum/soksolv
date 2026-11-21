@@ -307,7 +307,8 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     void BuildKey(ReadOnlySpan<int> boxes, ulong* k)
     {
         for (int w = 0; w < store.Nw; w++) k[w] = 0;
-        foreach (int b in boxes) { int f = fidx[b]; k[f >> 6] |= 1UL << (f & 63); }
+        int* fp = fidxP;
+        for (int i = 0; i < boxes.Length; i++) { int f = fp[boxes[i]]; k[f >> 6] |= 1UL << (f & 63); }
     }
 
     int Add(ReadOnlySpan<int> boxes, int player, int parent, int from, int dir, int h)
@@ -354,7 +355,13 @@ public sealed unsafe partial class ReverseSolver : IDisposable
     {
         int id = FindState(key, player, zh, out int slot, out uint fp);
         if (id >= 0 || memFull) return id;
-        id = store.Count;
+        return AddNew(boxes, player, parent, from, dir, h, k, kPar, moved, slot, fp);
+    }
+
+    /// <summary>Inserts the (known absent) state whose box bitset is in key; boxes is needed only for the novelty scan (k != kPar) and the meeting network.</summary>
+    int AddNew(ReadOnlySpan<int> boxes, int player, int parent, int from, int dir, int h, int k, int kPar, int moved, int slot, uint fp)
+    {
+        int id = store.Count;
         store.Append(parent, player, key, parent >= 0 ? fidx[from] : 0, dir, slot, fp);
         q.Push(h, id);
         if (opt.Types) types!.Push((ulong)h << 16 | (uint)k, id, h);
@@ -407,7 +414,7 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         {
             id = 0; h = 0;
             bool fromCells = false;
-            if (cellq != null && ((opt.NodeBudget == 0 && clock.Elapsed.TotalSeconds > opt.CellsAfterSec) || (opt.NodeBudget > 0 && expandedTotal > opt.CellsAfterExp)))
+            if (cellq != null && ((opt.NodeBudget == 0 && CellsAfterPassed()) || (opt.NodeBudget > 0 && expandedTotal > opt.CellsAfterExp)))
             {
                 cellq.Turn++;
                 switch (cellq.Turn % 4)
@@ -440,6 +447,15 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             expandedBits[w] |= bit;
             return true;
         }
+    }
+
+    bool cellsOn; int cellsTick;
+    /// <summary>The wall-clock switch to cell scheduling (latched; the clock is read every 64th pop only).</summary>
+    bool CellsAfterPassed()
+    {
+        if (cellsOn) return true;
+        if ((++cellsTick & 63) != 0) return false;
+        return cellsOn = clock.Elapsed.TotalSeconds > opt.CellsAfterSec;
     }
 
     void Unexpand(int id) { int w = id >> 6; if (w < expandedCap) expandedBits[w] &= ~(1UL << (id & 63)); }
@@ -639,7 +655,27 @@ public sealed unsafe partial class ReverseSolver : IDisposable
         int ncur = cur.Length, nw = store.Nw;
         blkp[b] = 0; blkp[p] = 1;
         int np = lazyNorm ? p + d : Normalize(b, p, pcPlayer, pcSt);
-        // child = cur with box i moved to p, kept ascending
+        int fb = fidxp[b], fp = fidxp[p];
+        for (int w = 0; w < nw; w++) key[w] = pkey[w];
+        key[fb >> 6] &= ~(1UL << (fb & 63));
+        key[fp >> 6] |= 1UL << (fp & 63);
+        int ch = pcH - key8p[b] + key8p[p];
+        if (pcCurU > 1 && sidxp[b] < 0)
+        {
+            provU = pcCurU - 1;
+            ch += provU * sup!.W * 8;
+        }
+        ulong zh = pcParentHash ^ store.ZFloor(fb) ^ store.ZFloor(fp);
+        if (!lazyNorm) zh ^= store.ZPlayer(pcPlayer) ^ store.ZPlayer(np);
+        int kc = pcKPar - (sidxp[b] >= 0 ? 1 : 0) + (sidxp[p] >= 0 ? 1 : 0);
+        int id = FindState(key, np, zh, out int slot, out uint fpr);
+        if (id < 0 && !memFull)
+        {
+            // the child's box list is only needed for the novelty scan (when the count of boxes at home changes) and the meeting network
+            ReadOnlySpan<int> boxes = default;
+            if ((opt.Novelty && kc != pcKPar) || opt.Net != null)
+            {
+                // child = cur with box i moved to p, kept ascending
         {
             ref int cr = ref System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(cur);
             ref int cd = ref System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference(child);
@@ -654,20 +690,10 @@ public sealed unsafe partial class ReverseSolver : IDisposable
             Unsafe.Add(ref cd, j++) = p;
             for (; x < ncur; x++) { if (x == i) continue; Unsafe.Add(ref cd, j++) = Unsafe.Add(ref cr, x); }
         }
-        int fb = fidxp[b], fp = fidxp[p];
-        for (int w = 0; w < nw; w++) key[w] = pkey[w];
-        key[fb >> 6] &= ~(1UL << (fb & 63));
-        key[fp >> 6] |= 1UL << (fp & 63);
-        int ch = pcH - key8p[b] + key8p[p];
-        if (pcCurU > 1 && sidxp[b] < 0)
-        {
-            provU = pcCurU - 1;
-            ch += provU * sup!.W * 8;
+                boxes = child.AsSpan(0, ncur);
+            }
+            AddNew(boxes, np, pcId, b, di, ch, kc, pcKPar, p, slot, fpr);
         }
-        ulong zh = pcParentHash ^ store.ZFloor(fb) ^ store.ZFloor(fp);
-        if (!lazyNorm) zh ^= store.ZPlayer(pcPlayer) ^ store.ZPlayer(np);
-        int kc = pcKPar - (sidxp[b] >= 0 ? 1 : 0) + (sidxp[p] >= 0 ? 1 : 0);
-        AddKeyed(child, np, pcId, b, di, ch, zh, kc, pcKPar, p);
         provU = 0;
         blkp[b] = 1; blkp[p] = 0;
     }
