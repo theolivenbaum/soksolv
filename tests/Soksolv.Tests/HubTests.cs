@@ -234,4 +234,48 @@ public class PfFestTests
         Assert.Equal(51, r.Solution.Count(char.IsUpper));
         Assert.Null(Verifier.CheckSolution(rows, r.Solution));
     }
+
+    // hub-gen generator + harvest + pool: fingerprint identical to the patched Go reference (bench/hubgen-ref, `-strategy hub-gen -hub-gen-only -nodes 1500`).
+    [Fact]
+    public void HubGen_GeneratorMatchesGo()
+    {
+        foreach (var line in File.ReadAllLines(Golden("hubgen_1500.txt")))
+        {
+            int sp = line.IndexOf(' ');
+            string level = line[..sp];
+            var o = new FullOptions { NodeBudget = 1500, SharedClusters = new ClusterTable(16), SharedPenalties = new ClusterTable(16) };
+            var r = FullSolver.SolveHubGenOnly(TestData.Rows(level), o);
+            Assert.Equal(line[(sp + 1)..], r.Fingerprint);
+        }
+    }
+
+    // hub lane in node-slice mode (forward slice 512, burst 2048): solved, pushes and every counter equal the patched Go (SOKSOLV_NODESLICES=512, -nodes 60000).
+    [Fact]
+    public void Hub_NodeSliceLaneMatchesGo()
+    {
+        foreach (var line in File.ReadAllLines(Golden("hub_slices512.txt")))
+        {
+            var parts = line.Split(' ', 3);
+            var rows = TestData.Rows(parts[0]);
+            int pushes = int.Parse(parts[1][7..]);
+            var o = new FullOptions { NodeBudget = 60000, HubNodeSlices = 512, SharedClusters = new ClusterTable(16), SharedPenalties = new ClusterTable(16) };
+            var r = FullSolver.SolveHub(rows, o, 0);
+            Assert.True(r.Solved, parts[0] + ": " + r.Reason);
+            Assert.Equal(parts[2], r.Fingerprint);
+            Assert.Equal(pushes, r.Solution.Count(char.IsUpper));
+            Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+        }
+    }
+
+    [Theory]
+    [InlineData("Microban_155_65")]
+    [InlineData("Sven_1623_100")]
+    public void Hub_WallClockSolvesAndVerifies(string level)
+    {
+        var rows = TestData.Rows(level);
+        var o = new FullOptions { SharedClusters = new ClusterTable(16), SharedPenalties = new ClusterTable(16) };
+        var r = FullSolver.SolveHub(rows, o, 30);
+        Assert.True(r.Solved, r.Reason);
+        Assert.Null(Verifier.CheckSolution(rows, r.Solution));
+    }
 }

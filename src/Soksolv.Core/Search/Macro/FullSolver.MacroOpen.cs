@@ -712,6 +712,7 @@ public sealed unsafe partial class FullSolver
         while (true)
         {
             if (MExpired()) return new SolveResult { Reason = "timeout", Nodes = expanded };
+            if (opt.PublishBest != null && pull && (expanded & 127) == 0) PublishPullBest();
             if (opt.Net != null && (expanded & 255) == 0 && (pull ? PullMeetCheckMail() : MeetCheckMail()) is { } met) return new SolveResult { Solved = true, Solution = met, Nodes = expanded };
             if (opt.StallFinish && opt.NodeBudget == 0 && mRows != null && mStallTries < 3 && mBest > 0)
             {

@@ -91,7 +91,6 @@ public sealed unsafe partial class FullSolver
         public string IdleEnd = "";
         public long FwdExpSum;
         double scanMs;
-        ulong[]? dummy;
         // v0 signature scratch
         int[]? sigBuf, sigCnt; bool[]? sigGoal;
 

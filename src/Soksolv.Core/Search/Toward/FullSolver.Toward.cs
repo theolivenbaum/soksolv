@@ -314,6 +314,19 @@ public sealed unsafe partial class FullSolver
     }
 
     /// <summary>The best node of a finished pull search as a toward target (Go bestTarget).</summary>
+    long mLastPubAt = -1000; int mLastPub = -1;
+    /// <summary>Go publishPullBest (occ must be clear).</summary>
+    void PublishPullBest()
+    {
+        int id = mBest;
+        long now = clock.ElapsedMilliseconds;
+        if (id < 0 || id == mLastPub || now - mLastPubAt < 100) return;
+        mLastPub = id; mLastPubAt = now;
+        var boxes = new int[n];
+        nodes.Unpack(id, boxes);
+        opt.PublishBest!(new TowardTarget { Boxes = boxes, Player = nodes.Player(id), Tail = ToMPush(PullTail(id)) });
+    }
+
     TowardTarget? BestTarget()
     {
         if (mBest < 0) return null;

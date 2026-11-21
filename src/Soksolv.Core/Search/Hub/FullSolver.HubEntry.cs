@@ -7,13 +7,14 @@ namespace Soksolv.Search;
 public sealed unsafe partial class FullSolver
 {
     /// <summary>The pull-view solver the hub-gen lane borrows its tables from (Go festbRun1: newPullSolver + pfOn; the hub never runs the pull search itself).</summary>
-    static FullSolver NewHubPull(Level lv, FullOptions opt, string[] rows, int cfg)
+    static FullSolver NewHubPull(Level lv, FullOptions opt, string[] rows, int cfg, bool meet = false)
     {
         var pv = PullView(lv, out var roots, out var spread);
         var po = opt.Clone();
-        po.Pull = true; po.PfOn = true; po.Penalties = false; po.MacroStage = 5; po.NodeBudget = 0; po.Net = null; po.StallFinish = false;
+        po.Pull = true; po.PfOn = true; po.Penalties = false; po.MacroStage = 5; po.NodeBudget = 0; po.Net = meet ? opt.Net : null; po.StallFinish = false;
         po.MacroFeatures = opt.MacroFeatures & (1 | 8 | 64 | 128);
-        po.RngSeed = RevSeed(cfg);
+        po.RngSeed = cfg == 0 ? 0 : RevSeed(cfg); // Go reviveDiversify: revival k seeds the exploration generator
+        po.PfSpread = false;                      // hub-gen's pull solver keeps newPullSolver's pfStyle{types}: no spread key (hub-pull: festXStyle D)
         po.PeerBytes = null;
         return new FullSolver(pv, po) { spreadDist = spread, realPlayer = lv.Player, pullRoots = roots, mRows = rows };
     }
@@ -70,7 +71,56 @@ public sealed unsafe partial class FullSolver
         return new SolveResult { Reason = "hub ended", Fingerprint = fp, Nodes = lane.gen.Expanded, TimeMs = sw.Elapsed.TotalMilliseconds };
     }
 
-    // festb alternation (odd configs of the idle ring): see FestbAlternate (not yet ported: the ring falls back to hub configs)
+    /// <summary>Go festbAlternate (festb.go, hub-gen's odd ring configs): the Festival-ordered pull tree and a forward toward search aimed at its best state alternate in doubling wall-clock rounds.</summary>
     static SolveResult FestbConfig(string[] rows, Level lv, FullOptions opt, double timeLimitSec, Stopwatch sw, int cfg, bool nodeMode)
-        => HubConfig(rows, lv, opt, timeLimitSec, sw, cfg, nodeMode);
+    {
+        FullSolver? fwd = null;
+        using var ps = NewHubPull(lv, opt, rows, cfg, true);
+        ps.opt.PeerBytes = () => fwd?.RaceBytes ?? 0;
+        TowardTarget? cur = null;
+        bool backDone = false, fwdDone = false;
+        long nodes = 0;
+        bool Live() => !(opt.Cancel?.Stopped ?? false) && (timeLimitSec <= 0 || sw.Elapsed.TotalSeconds < timeLimitSec);
+        double Left() => timeLimitSec > 0 ? Math.Max(0.001, timeLimitSec - sw.Elapsed.TotalSeconds) : 0;
+        SolveResult Done(SolveResult r) { fwd?.Dispose(); r.Nodes = nodes; return r; }
+        for (int round = 0; Live(); round++)
+        {
+            double sliceSec = FestbUnitMs / 1000.0 * (1L << Math.Min(round, 30));
+            if (!backDone)
+            {
+                var r = ps.RunMacro(timeLimitSec > 0 ? Math.Min(sliceSec, Left()) : sliceSec);
+                nodes = ps.mExpandedN + (fwd?.mExpandedN ?? 0);
+                if (r.Solved) return Done(r);
+                backDone = r.Reason != "timeout";
+            }
+            if (!ps.mStarted) return Done(new SolveResult { Reason = "festb: backward search did not start" });
+            if (!Live()) break;
+            var tgt = ps.BestTarget();
+            if (tgt != null && (cur == null || !SameTarget(tgt, cur)))
+            {
+                cur = tgt; fwdDone = false;
+                var old = fwd;
+                if (opt.RetargetReuse && old != null && !old.mMemFull && old.nodes.Count > 0 && old.nodes.Count <= 16384)
+                {
+                    string? rsol = old.RetargetTo(tgt);
+                    if (rsol != null) return Done(new SolveResult { Solved = true, Solution = rsol });
+                }
+                else
+                {
+                    fwd = NewTowardReal(rows, lv, opt, tgt, 0, false, () => ps.RaceBytes);
+                    old?.Dispose();
+                }
+            }
+            if (fwd != null && !fwdDone)
+            {
+                string? sol = fwd.TowardRun(timeLimitSec > 0 ? Math.Min(sliceSec * FestbFwdRatio, Left()) : sliceSec * FestbFwdRatio, out var r);
+                nodes = ps.mExpandedN + fwd.mExpandedN;
+                if (sol != null) return Done(new SolveResult { Solved = true, Solution = sol });
+                if (PullDrain(ps, rows) is { } d) return Done(new SolveResult { Solved = true, Solution = d });
+                fwdDone = r.Reason != "timeout";
+            }
+            if (backDone && (fwd == null || fwdDone)) break;
+        }
+        return Done(new SolveResult { Reason = "festb ended" });
+    }
 }

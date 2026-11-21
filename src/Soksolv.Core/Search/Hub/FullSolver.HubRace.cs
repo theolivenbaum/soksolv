@@ -40,7 +40,7 @@ public sealed unsafe partial class FullSolver
     static FullSolver NewTowardReal(string[] rows, Level lv, FullOptions opt, TowardTarget tgt, long nodeLimit, bool nodeMode, Func<ulong>? peerBytes, bool regRel = false)
     {
         var to = opt.Clone();
-        to.Pull = false; to.PfOn = false; to.NodeBudget = 0; to.Net = null; to.MacroAlt = false; to.Novelty = 0;
+        to.Pull = false; to.PfOn = false; to.NodeBudget = 0; to.Net = nodeMode ? null : opt.Net; to.MacroAlt = false; to.Novelty = 0; // forward trees of the hub lanes probe the backward perimeter (Go owners 4/5)
         to.StallFinish = !nodeMode && opt.StallFinish; // Go: stall finishing is a timed-run feature
         to.MacroFeatures = opt.MacroFeatures & ~(1 << 5); // no plan4
         to.PeerBytes = peerBytes;
@@ -89,9 +89,9 @@ public sealed unsafe partial class FullSolver
     {
         var pv = PullView(lv, out var roots, out var spread);
         var po = opt.Clone();
-        po.Pull = true; po.PfOn = true; po.Penalties = false; po.MacroStage = 5; po.NodeBudget = 0; po.Net = null; po.StallFinish = false;
+        po.Pull = true; po.PfOn = true; po.Penalties = false; po.MacroStage = 5; po.NodeBudget = 0; po.Net = nodeMode ? null : opt.Net; po.StallFinish = false;
         po.MacroFeatures = opt.MacroFeatures & (1 | 8 | 64 | 128);
-        po.RngSeed = RevSeed(cfg);
+        po.RngSeed = RevSeed(cfg); po.BackOwner = opt.BackOwner;
         FullSolver? baseF = null, trialF = null;
         po.PeerBytes = () => (baseF?.RaceBytes ?? 0) + (trialF?.RaceBytes ?? 0);
         using var ps = new FullSolver(pv, po) { spreadDist = spread, realPlayer = lv.Player, pullRoots = roots };
@@ -178,6 +178,7 @@ public sealed unsafe partial class FullSolver
                     fwdT += nodeMode ? used : (sw.Elapsed - t0).TotalMilliseconds;
                     nodesTotal += used;
                     if (sol != null) return Done(new SolveResult { Solved = true, Solution = sol }, "");
+                    if (PullDrain(ps, rows) is { } d1) return Done(new SolveResult { Solved = true, Solution = d1 });
                     baseDone = r.Reason != "timeout";
                     if (!Live()) break;
                 }
@@ -237,6 +238,7 @@ public sealed unsafe partial class FullSolver
             fwdT += nodeMode ? usedT : (sw.Elapsed - tt0).TotalMilliseconds;
             nodesTotal += usedT;
             if (tsol != null) return Done(new SolveResult { Solved = true, Solution = tsol });
+            if (PullDrain(ps, rows) is { } d2) return Done(new SolveResult { Solved = true, Solution = d2 });
             if (reached) S.Reached++;
             sl.Tip = tip; sl.Tries++; sl.Exp += usedT;
             sl.Prog = Math.Max(sl.Prog, prog);
@@ -245,6 +247,14 @@ public sealed unsafe partial class FullSolver
             lock (raceShared) { raceShared.TryGetValue(tkey, out var rec); raceShared[tkey] = (rec.tries + 1, Math.Max(rec.best, prog)); }
         }
         return Done(new SolveResult(), "festb ended");
+    }
+
+    /// <summary>Go startDrain(pullCheckMail): while the forward trees run the idle pull tree completes the meetings posted to its mailbox (checked between forward slices here).</summary>
+    internal static string? PullDrain(FullSolver ps, string[] rows)
+    {
+        if (ps.opt.Net == null) return null;
+        var sol = ps.PullMeetCheckMail();
+        return sol != null && Verifier.Check(rows, sol) == null ? sol : null;
     }
 
     static bool SameTarget(TowardTarget a, TowardTarget b) => a.Player == b.Player && a.Boxes.AsSpan().SequenceEqual(b.Boxes);

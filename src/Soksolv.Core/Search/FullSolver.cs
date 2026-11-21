@@ -34,6 +34,8 @@ public sealed class FullOptions
     /// <summary>Bidirectional meeting network (null: no meetings). Forward lanes add to Net.Fwd, probe Net.Back, read mailbox MeetOwner of Net.Fwd.</summary>
     public Meet.MeetNet? Net;
     public int MeetOwner;
+    /// <summary>Pull lanes: mailbox of Net.Back this search drains (Go PullLane 3, festb 4, festx 5).</summary>
+    public int BackOwner = 3;
     /// <summary>Macro lane: highest ported feature stage (1..5) and the stage-6 default-on feature mask (bit0 move windows, ...).</summary>
     public int MacroStage = 5, MacroFeatures = 255; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     /// <summary>Go StallFinish (timed runs only): when the best node stops improving, try a short private backward search toward it.
@@ -49,6 +51,10 @@ public sealed class FullOptions
     public long HubNodeSlices;
     /// <summary>The tried-strata table is shared with other hub lanes of the same run (portfolio): do not reset it at lane start.</summary>
     public bool SharedRace;
+    /// <summary>Pull lane (Go publishPullBest): offers the frontier's best state (boxes, player, backward tail) as a forward target at most every 100 ms; the portfolio's toward lane reads it.</summary>
+    public Action<TowardTarget>? PublishBest;
+    /// <summary>pfOn: the spread key (Go pfStyle.spread, festXStyle D: hub-pull) replaces the matching distance in the scored tuple.</summary>
+    public bool PfSpread = true;
     /// <summary>`-strategy hub-gen -hub-gen-only`: run the generator alone (harness).</summary>
     public bool HubGenOnly;
     /// <summary>Go RetargetReuse (exp-299, default on): a toward tree retargeted to a new target board keeps its stored nodes (active graph reuse).</summary>

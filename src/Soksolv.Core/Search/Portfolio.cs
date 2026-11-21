@@ -12,8 +12,8 @@ public sealed class PortfolioOptions
     public bool Full = true, Reverse = true, Macro = true;
     /// <summary>Novelty lane (forward FESS with the novelty advisor). Pull lane: on by default (Go's laneShares); it needs the meeting perimeter to finish levels.</summary>
     public bool Novelty = true, Pull = true;
-    /// <summary>hub-pull lane (Festival-ordered pull tree racing forward toward searches; wall-clock slices). Opt-in: the C# lane has no meetings with the other lanes yet.</summary>
-    public bool HubPull = false;
+    /// <summary>hub-pull and hub-gen lanes (Go laneShares: weight 1 each; wall-clock slices; no meetings with the other lanes yet), and the toward lane (retargeting forward search aimed at the pull lane's best state; needs the pull lane).</summary>
+    public bool HubPull = true, HubGen = true, Toward = true;
     /// <summary>fa2 lane (plan-guided forward FESS: own v2 plan; Go's anytime lane also runs a second engine on the macro lane's plan4 list — not ported).</summary>
     public bool Fa2 = true;
     /// <summary>factor lane (component planning; joins only boards with >= 2 non-trivial static box components, as Go's factorGate).</summary>
@@ -51,9 +51,14 @@ public static class Portfolio
         bool diveOn = po.Dive && lvForGates != null && FullSolver.DiveMaxPeel(lvForGates) >= 10;
         bool reverseOn = po.Reverse && !diveOn; // the dive takes the reverse lane's core on gated boards
         bool factorOn = po.Factor && lvForGates != null && Factor.FactorLane.Gate(lvForGates);
-        int lanes = (po.Full ? 1 : 0) + (reverseOn ? 1 : 0) + (diveOn ? 1 : 0) + (po.Macro ? 1 : 0) + (po.Novelty ? 1 : 0) + (po.Pull ? 1 : 0) + (po.HubPull ? 1 : 0) + (po.Fa2 ? 1 : 0) + (factorOn ? 1 : 0);
-        if (lanes == 0) return new SolveResult { Reason = "no lanes" };
-        ulong budget = po.MemBytes / 100 * 70 / (ulong)lanes;
+        bool towardOn = po.Toward && po.Pull;
+        // Go laneShares: reverse 3, full 3, every other lane 1 (the 70% of -mem split by weight)
+        int weights = (po.Full ? 3 : 0) + (reverseOn ? 3 : 0) + (diveOn ? 1 : 0) + (po.Macro ? 1 : 0) + (po.Novelty ? 1 : 0) + (po.Pull ? 1 : 0) + (po.HubPull ? 1 : 0) + (po.HubGen ? 1 : 0) + (towardOn ? 1 : 0) + (po.Fa2 ? 1 : 0) + (factorOn ? 1 : 0);
+        if (weights == 0) return new SolveResult { Reason = "no lanes" };
+        ulong unit = po.MemBytes / 100 * 70 / (ulong)weights;
+        ulong budget = unit, budget3 = unit * 3;
+        FullSolver.ResetRaceShared();
+        TowardTarget? pullBest = null;
         var shared = new ClusterTable(16); var sharedPen = new ClusterTable(16); var sharedDz = new Search.DeadZone.DeadZoneTable(18);
         SolveResult? winner = null; var all = new List<SolveResult>(); var gate = new object();
         var threads = new List<Thread>();
@@ -61,7 +66,7 @@ public static class Portfolio
         Meet.MeetNet? net = null;
         if (po.Meet && (reverseOn || po.Pull) && (po.Full || po.Macro || po.Novelty))
         {
-            try { net = new Meet.MeetNet(Level.Parse(rows).Cells); } catch (InvalidDataException) { }
+            try { net = new Meet.MeetNet(Level.Parse(rows).Cells, 6, 6); } catch (InvalidDataException) { }
         }
 
         void Lane(string name, Func<SolveResult> run)
@@ -85,7 +90,7 @@ public static class Portfolio
         if (po.Full)
             Lane("full", () => FullSolver.Solve(rows, new FullOptions
             {
-                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedPenalties = sharedPen, SharedDeadZone = sharedDz, Net = net, MeetOwner = 0,
+                NodeBudget = po.NodeBudget, BudgetBytes = budget3, Cancel = cancel, SharedClusters = shared, SharedPenalties = sharedPen, SharedDeadZone = sharedDz, Net = net, MeetOwner = 0,
             }, timeLimitSec));
         if (diveOn)
             Lane("dive", () => FullSolver.SolveDive(rows, new FullOptions
@@ -95,7 +100,7 @@ public static class Portfolio
         if (reverseOn)
         {
             var ro = ReverseRunner.Config(2, po.RevSupply);
-            ro.NodeBudget = po.NodeBudget; ro.BudgetBytes = budget; ro.MemLimitBytes = po.MemBytes; ro.Cancel = cancel; ro.Net = net; ro.BackOwner = 0;
+            ro.NodeBudget = po.NodeBudget; ro.BudgetBytes = budget3; ro.MemLimitBytes = po.MemBytes; ro.Cancel = cancel; ro.Net = net; ro.BackOwner = 0;
             Lane("reverse", () => ReverseRunner.Solve(rows, ro, timeLimitSec));
         }
         if (po.Macro)
@@ -126,12 +131,24 @@ public static class Portfolio
             Lane("hub-pull", () => FullSolver.SolveHubPull(rows, new FullOptions
             {
                 BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, NodeBudget = po.NodeBudget, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
-                HubNodeSlices = po.NodeBudget > 0 ? 1024 : 0,
+                HubNodeSlices = po.NodeBudget > 0 ? 1024 : 0, SharedRace = true, Net = net, MeetOwner = 5, BackOwner = 5,
             }, timeLimitSec));
+        if (po.HubGen)
+            Lane("hub-gen", () => FullSolver.SolveHub(rows, new FullOptions
+            {
+                BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, NodeBudget = po.NodeBudget, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
+                HubNodeSlices = po.NodeBudget > 0 ? 1024 : 0, SharedRace = true, Net = net, MeetOwner = 4, BackOwner = 4,
+            }, timeLimitSec));
+        if (towardOn)
+            Lane("toward", () => FullSolver.SolveTowardLane(rows, new FullOptions
+            {
+                BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, NodeBudget = po.NodeBudget, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
+            }, timeLimitSec, () => Volatile.Read(ref pullBest)));
         if (po.Pull)
             Lane("pull", () => FullSolver.SolvePull(rows, new FullOptions
             {
                 NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, Net = net,
+                PublishBest = towardOn ? t => Volatile.Write(ref pullBest, t) : null,
             }, timeLimitSec));
         foreach (var t in threads) t.Join();
         if (net != null && Environment.GetEnvironmentVariable("SOKSOLV_MEET_DEBUG") == "1")
