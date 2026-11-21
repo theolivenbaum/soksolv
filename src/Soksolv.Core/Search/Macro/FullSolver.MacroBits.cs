@@ -54,6 +54,12 @@ public sealed unsafe partial class FullSolver
     /// <summary>Fills the node's free rows from the occupancy (free = floor and not occupied).</summary>
     void BbBuild()
     {
+        if (fbits && !ReachRowsOff)
+        {
+            // frR mirrors blk (free = not wall, not box) row by row, kept current by SetOcc: copy instead of rebuilding from occ cell by cell
+            for (int r = 0; r < bbH; r++) bbNFreeP[r + 1] = frR[r];
+            return;
+        }
         for (int r = 0; r < bbH; r++)
         {
             ulong m = 0;
@@ -420,7 +426,7 @@ public sealed unsafe partial class FullSolver
         }
         // separator candidate. Node mode: the child's count is (components of the floor without t, learned from an earlier candidate) - 1 + pieces(t), and
         // pieces(t) is a local row flood (a handful of floods per box search) instead of the whole-board Tarjan pass.
-        if (bbNode && !RegionRingOff && !PiecesOff && !mArtDone && mPiecesUsed < PiecesLimit)
+        if (fbits && !RegionRingOff && !PiecesOff && !mArtDone && mPiecesUsed < PiecesLimit)
         {
             if (mCompsF < 0 && mSplitSeen == 0) { mSplitSeen = 1; return Regions(); }   // a lone separator candidate costs just one flood
             mPiecesUsed++;
@@ -435,22 +441,18 @@ public sealed unsafe partial class FullSolver
         return MChildRegions(t);
     }
 
-    ulong[]? bbPcA; ulong* bbPcP;
     /// <summary>Number of connected groups among the free neighbours of t (t occupied in <c>blk</c>), i.e. the pieces its component falls apart into when t is
-    /// blocked. Node mode only: the free rows (searched box lifted) are flooded from the neighbours; the last group needs no flood.</summary>
+    /// blocked: row floods over the free-row mirror <c>frR</c> from the neighbours (the last group needs no flood). Needs <c>fbits</c>.</summary>
     int MPieces(int t)
     {
         int w = W;
-        if (bbPcA == null) { bbPcA = GC.AllocateArray<ulong>(bbH + 2, pinned: true); bbPcP = (ulong*)Unsafe.AsPointer(ref bbPcA[0]); }
-        ulong* F = bbNFreeP; ulong* g = bbPcP;
-        int tr = t / w + 1; ulong tb = 1UL << (t - (tr - 1) * w);
-        F[tr] &= ~tb;
+        ulong* F = frR; ulong* g = frReg;
         int* nb = stackalloc int[4]; int cnt = 0;
         for (int k = 0; k < 4; k++) { int n = t + dirs[k]; if (blk[n] == 0) nb[cnt++] = n; }
-        int groups = 0, lo = bbH + 2, hi = -1;
+        int groups = 0, lo = frRows, hi = -1;
         for (int i = 0; i < cnt; i++)
         {
-            int n = nb[i]; int r = n / w + 1; ulong bit = 1UL << (n - (r - 1) * w);
+            int n = nb[i]; int r = frRow[n]; ulong bit = 1UL << frCol[n];
             if ((g[r] & bit) != 0) continue;
             groups++;
             if (i == cnt - 1) break;
@@ -459,7 +461,6 @@ public sealed unsafe partial class FullSolver
             if (l < lo) lo = l; if (h > hi) hi = h;
         }
         for (int r = lo; r <= hi; r++) g[r] = 0;
-        F[tr] |= tb;
         return groups;
     }
 }

@@ -189,7 +189,7 @@ public sealed unsafe class ClusterChecker
         if (RowK.Check) CheckRowK(fr, rg, rp, cp);
         fr[rp] = saved;
         lo0 = lo; hi0 = hi;
-        for (int r = lo; ; r++) if (rg[r] != 0) return r * b.W + System.Numerics.BitOperations.TrailingZeroCount(rg[r]);
+        return lo * b.W + System.Numerics.BitOperations.TrailingZeroCount(rg[lo]);   // the kernel's span starts at a written (non-empty) row
     }
 
     /// <summary>Row flood from the seed bits in row rp over free rows f into reg (cells of other closed components may be present); flood kernel v2.</summary>

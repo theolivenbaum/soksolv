@@ -26,12 +26,25 @@ unsafe class P
         "chain2add" => K.Chain2<FillAddLoop>,
         "chain2peel" => K.Chain2<FillAddPeel>,
         "chain2loop" => K.Chain2<FillLoop>,
+        "chainks3" => K.Chain<FillAddKS3>,
+        "chainks3p" => K.Chain<FillAddKS3p>,
+        "dirtyks3" => K.Dirty<FillAddKS3>,
+        "sweepks3" => K.Sweep<FillAddKS3>,
+        "altks3" => K.Alt<FillAddKS3>,
+        "chain3ks3" => K.Chain3<FillAddKS3>,
+        "chain4ks3" => K.Chain4<FillAddKS3>,
+        "chain5ks3" => K.Chain5<FillAddKS3>,
         "chainaddks" => K.Chain<FillAddKS>,
         _ => null,
     };
 
     static int Main(string[] a)
     {
+        if (a[0] == "isa")
+        {
+            Console.WriteLine($"Bmi1 {System.Runtime.Intrinsics.X86.Bmi1.IsSupported} Bmi2 {System.Runtime.Intrinsics.X86.Bmi2.IsSupported} Lzcnt {System.Runtime.Intrinsics.X86.Lzcnt.IsSupported} Popcnt {System.Runtime.Intrinsics.X86.Popcnt.IsSupported} Avx2 {System.Runtime.Intrinsics.X86.Avx2.IsSupported} Ssse3 {System.Runtime.Intrinsics.X86.Ssse3.IsSupported} Sse42 {System.Runtime.Intrinsics.X86.Sse42.IsSupported} Vector128 {System.Runtime.Intrinsics.Vector128.IsHardwareAccelerated} Vector256 {System.Runtime.Intrinsics.Vector256.IsHardwareAccelerated}");
+            return 0;
+        }
         string kn = a[0]; string path = a[1]; int reps = int.Parse(a[2]); int srcMask = a.Length > 3 ? int.Parse(a[3]) : 15;
         var raw = File.ReadAllBytes(path);
         // parse records
@@ -71,7 +84,7 @@ unsafe class P
                 }
                 Console.Error.WriteLine($"{kn}: {n} queries, mismatches {bad}, avg cells {cells / (double)n:F1}, avg span rows {rowsSum / (double)n:F1}; per src {srcN[1]} {srcN[2]} {srcN[3]} {srcN[4]}");
             }
-            if (kn == "chainstat") Console.Error.WriteLine($"visits/q {K.CVisit/(double)n:F2} pops {K.CPop/(double)n:F2} emptypops {K.CPopEmpty/(double)n:F2} both {K.CBoth/(double)n:F2} fillIters/visit {K.CFillIt/(double)K.CVisit:F2}");
+            if (kn == "chainstat") Console.Error.WriteLine($"visits/q {K.CVisit/(double)n:F2} pops {K.CPop/(double)n:F2} emptypops {K.CPopEmpty/(double)n:F2} both {K.CBoth/(double)n:F2} fillIters/visit {K.CFillIt/(double)K.CVisit:F2} pc1 {K.CPc1/(double)K.CVisit:F2} pc2 {K.CPc2/(double)K.CVisit:F2} same {K.CSame/(double)K.CVisit:F2} down0 {K.CDown0/(double)K.CVisit:F2}");
             ulong sink = 0;
             var sw = Stopwatch.StartNew();
             if (k != null)

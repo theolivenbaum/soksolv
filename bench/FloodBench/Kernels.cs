@@ -108,6 +108,59 @@ public struct FillAddPeel : IFill
     }
 }
 
+/// <summary>add up (exact) + doubling smear down for distances up to 7, and the longer steps only when the row has a run of 8+ free cells.</summary>
+public struct FillAddKS3 : IFill
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ulong Fill(ulong y, ulong f)
+    {
+        y &= f;
+        ulong a = ((f + y) ^ f) & f | y;
+        ulong q = f & (f >> 1);
+        ulong d = a | (a >> 1) & f;
+        d |= (d >> 2) & q;
+        ulong q2 = q & (q >> 2);
+        d |= (d >> 4) & q2;
+        ulong q4 = q2 & (q2 >> 4);
+        if (q4 != 0)
+        {
+            d |= (d >> 8) & q4;
+            ulong q8 = q4 & (q4 >> 8);
+            d |= (d >> 16) & q8;
+            ulong q16 = q8 & (q8 >> 16);
+            d |= (d >> 32) & q16;
+        }
+        return d;
+    }
+}
+
+/// <summary>as FillAddKS3 but peeling the common "nothing to extend downwards" case first (73% of fills).</summary>
+public struct FillAddKS3p : IFill
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ulong Fill(ulong y, ulong f)
+    {
+        y &= f;
+        ulong a = ((f + y) ^ f) & f | y;
+        ulong d = a | (a >> 1) & f;
+        if (d == a) return a;
+        ulong q = f & (f >> 1);
+        d |= (d >> 2) & q;
+        ulong q2 = q & (q >> 2);
+        d |= (d >> 4) & q2;
+        ulong q4 = q2 & (q2 >> 4);
+        if (q4 != 0)
+        {
+            d |= (d >> 8) & q4;
+            ulong q8 = q4 & (q4 >> 8);
+            d |= (d >> 16) & q8;
+            ulong q16 = q8 & (q8 >> 16);
+            d |= (d >> 32) & q16;
+        }
+        return d;
+    }
+}
+
 public static unsafe class K
 {
     // ---- current kernels (copied from the solver) ----
@@ -259,7 +312,7 @@ public static unsafe class K
         lo = l; hi = h;
     }
 
-    public static long CVisit, CPop, CPopEmpty, CBoth, CFillIt;
+    public static long CVisit, CPop, CPopEmpty, CBoth, CFillIt, CPc1, CPc2, CSame, CRuns1, CDown0;
     public static void ChainStat(ulong* f, ulong* reg, int rows, int rp, ulong seed, out int lo, out int hi)
     {
         int l = rp, h = rp;
@@ -270,7 +323,7 @@ public static unsafe class K
             ulong fr = f[r];
             ulong y = FillLoop.Fill(s, fr);
             { ulong a = s, ff = fr; while (true) { CFillIt++; ulong z = (a | a << 1 | a >> 1) & ff; if (z == a) break; a = z; } }
-            CVisit++;
+            CVisit++; { int pc = BitOperations.PopCount(s); if (pc == 1) CPc1++; else if (pc == 2) CPc2++; if (y == s) CSame++; ulong ff = fr; ulong up = ((ff + s) ^ ff) & ff | s; if (up == y) CDown0++; ulong ys = y; int runs = 0; while (ys != 0) { ulong lo1 = ys & (0UL - ys); ulong run = ((ff + lo1) ^ ff) & ff | lo1; ys &= ~((((ff + lo1) ^ ff) & ff) | lo1 | 0); runs++; if (runs > 8) break; } }
             reg[r] = y | reg[r];
             ulong nw = y;
             ulong fu = f[r + 1], fd = f[r - 1];
@@ -320,6 +373,95 @@ public static unsafe class K
                 s = (reg[r - 1] | reg[r + 1]) & fr & ~reg[r];
                 if (s != 0) { if (r < l) l = r; if (r > h) h = r; break; }
             }
+        }
+    }
+
+    /// <summary>chain with the touched-row mask (no per-visit span tracking) and a branchless pending-row update.</summary>
+    public static void Chain3<F>(ulong* f, ulong* reg, int rows, int rp, ulong seed, out int lo, out int hi) where F : IFill
+    {
+        nint r = rp; ulong s = seed;
+        ulong pend = 0, touched = 0;
+        while (true)
+        {
+            touched |= 1UL << (int)r;
+            ulong y = F.Fill(s, f[r]);
+            reg[r] |= y;
+            ulong su = y & f[r + 1] & ~reg[r + 1], sd = y & f[r - 1] & ~reg[r - 1];
+            if (su != 0)
+            {
+                pend |= (sd != 0 ? 1UL : 0UL) << (int)(r - 1);
+                r++; s = su; continue;
+            }
+            if (sd != 0) { r--; s = sd; continue; }
+            while (true)
+            {
+                if (pend == 0)
+                {
+                    lo = BitOperations.TrailingZeroCount(touched); hi = 63 - BitOperations.LeadingZeroCount(touched);
+                    return;
+                }
+                r = BitOperations.TrailingZeroCount(pend); pend &= pend - 1;
+                s = (reg[r - 1] | reg[r + 1]) & f[r] & ~reg[r];
+                if (s != 0) break;
+            }
+        }
+    }
+
+    /// <summary>same, branch on the pending-row pop result removed by always processing the popped row (fill of an empty seed is a no-op).</summary>
+    public static void Chain4<F>(ulong* f, ulong* reg, int rows, int rp, ulong seed, out int lo, out int hi) where F : IFill
+    {
+        nint r = rp; ulong s = seed;
+        ulong pend = 0, touched = 0;
+        while (true)
+        {
+            touched |= 1UL << (int)r;
+            ulong y = F.Fill(s, f[r]);
+            reg[r] |= y;
+            ulong su = y & f[r + 1] & ~reg[r + 1], sd = y & f[r - 1] & ~reg[r - 1];
+            if (su != 0)
+            {
+                pend |= (sd != 0 ? 1UL : 0UL) << (int)(r - 1);
+                r++; s = su; continue;
+            }
+            if (sd != 0) { r--; s = sd; continue; }
+            if (pend == 0)
+            {
+                lo = BitOperations.TrailingZeroCount(touched); hi = 63 - BitOperations.LeadingZeroCount(touched);
+                return;
+            }
+            r = BitOperations.TrailingZeroCount(pend); pend &= pend - 1;
+            s = (reg[r - 1] | reg[r + 1]) & f[r] & ~reg[r];
+            // an empty seed row: Fill(0) = 0, nothing written, falls through to the next pop
+            touched &= ~(0UL);
+        }
+    }
+
+    /// <summary>chain4 with the up/down choice as conditional moves (one branch: continue the chain or pop).</summary>
+    public static void Chain5<F>(ulong* f, ulong* reg, int rows, int rp, ulong seed, out int lo, out int hi) where F : IFill
+    {
+        nint r = rp; ulong s = seed;
+        ulong pend = 0, touched = 0;
+        while (true)
+        {
+            touched |= 1UL << (int)r;
+            ulong y = F.Fill(s, f[r]);
+            reg[r] |= y;
+            ulong su = y & f[r + 1] & ~reg[r + 1], sd = y & f[r - 1] & ~reg[r - 1];
+            bool up = su != 0;
+            ulong s2 = up ? su : sd;
+            pend |= ((up & (sd != 0)) ? 1UL : 0UL) << (int)(r - 1);
+            if (s2 != 0)
+            {
+                r = up ? r + 1 : r - 1; s = s2;
+                continue;
+            }
+            if (pend == 0)
+            {
+                lo = BitOperations.TrailingZeroCount(touched); hi = 63 - BitOperations.LeadingZeroCount(touched);
+                return;
+            }
+            r = BitOperations.TrailingZeroCount(pend); pend &= pend - 1;
+            s = (reg[r - 1] | reg[r + 1]) & f[r] & ~reg[r];
         }
     }
 }

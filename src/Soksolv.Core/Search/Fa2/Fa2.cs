@@ -351,7 +351,7 @@ public sealed unsafe partial class FullSolver
     // Region counts of the children of one box (b lifted): comps(b lifted) - 1 + pieces(t), where pieces(t) is how many pieces t's
     // component splits into once t holds the box. The local ring test settles pieces for non-articulation cells (0 or 1); only
     // when a candidate sits on a cell it cannot settle is the Tarjan pass over the board run (once per box).
-    int fa2ArtState, fa2Comps;
+    int fa2ArtState, fa2Comps, fa2PiecesUsed;
     // Late-death memo: whether the cluster/dead-zone proofs say a child (boxes + normalised player + last pushed cell) is dead is a
     // pure function of that triple, and the same child is reached again from other parents and again at pop time.
     readonly U64Set fa2LiveMemo = new(), fa2DeadMemo = new();
@@ -438,6 +438,14 @@ public sealed unsafe partial class FullSolver
                     if (pieces >= 0) { fa2Comps = c.Conn + 1 - pieces; fa2ArtState = 1; }
                 }
                 else if (fa2ArtState == 1 && pieces >= 0) c.Conn = fa2Comps - 1 + pieces;
+                else if (fbits && !PiecesOff && !RegionRingOff && fa2PiecesUsed < PiecesLimit)
+                {
+                    // separator candidate: components of the floor without t learned once (one flood), then pieces(t) by local row floods
+                    fa2PiecesUsed++;
+                    int pc = pieces >= 0 ? pieces : MPieces(t);
+                    if (fa2ArtState == 1) c.Conn = fa2Comps - 1 + pc;
+                    else { c.Conn = Regions(); fa2Comps = c.Conn + 1 - pc; fa2ArtState = 1; }
+                }
                 else
                 {
                     if (fa2ArtState != 2) { SetOcc(t, false); ComputeArticulation(); SetOcc(t, true); fa2ArtState = 2; }
@@ -500,7 +508,7 @@ public sealed unsafe partial class FullSolver
             int b = cur[i];
             if (corral != 0 && cmark[b] != corral) continue;
             fa2Ts = ++mtst;
-            fa2Cands = 0; fa2VisitI = i;
+            fa2Cands = 0; fa2PiecesUsed = 0; fa2VisitI = i;
             MBoxSearch(b, st, false, 0, 0, cur);
         }
         F2E(8, tBox);

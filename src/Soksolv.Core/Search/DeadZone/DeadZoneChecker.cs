@@ -679,7 +679,8 @@ public sealed unsafe class DeadZoneChecker
     {
         ulong* F = freeB; ulong* R = cbits; ulong* ainp = ain;
         ulong uP = F[r - 1] & ~R[r - 1], u0 = F[r] & ~R[r], uN = F[r + 1] & ~R[r + 1];
-        ulong fm = uP | uP << 1 | uP >> 1 | u0 | u0 << 1 | u0 >> 1 | uN | uN << 1 | uN >> 1;
+        ulong ua = uP | u0 | uN;
+        ulong fm = ua | ua << 1 | ua >> 1;   // 3x3 dilation of the free cells outside the region (OR the rows first: dilation distributes over OR)
         ulong sure = B & (~ainp[r] | ~fm);
         ulong need = B & ~sure;
         if (need == 0) return sure;

@@ -20,69 +20,88 @@ public static unsafe class RowK
 
     public static readonly bool Check = Environment.GetEnvironmentVariable("SOKSOLV_CHECK_FLOOD") == "1";
 
-    /// <summary>All cells of <paramref name="f"/>'s horizontal runs that contain a seed bit of <paramref name="y"/> (y need not be a subset of f).</summary>
+    /// <summary>All cells of <paramref name="f"/>'s horizontal runs that contain a seed bit of <paramref name="y"/> (y &amp; ~f is ignored). Branch-light: one carry-propagating
+    /// add fills towards the high bits; towards the low bits a doubling (Kogge-Stone) smear covers distances up to 7, and the longer steps run only for rows holding a run
+    /// of 8+ free cells (predictable per row type). Mispredicted branches, not instructions, dominated the per-cell smear loops this replaces.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong Fill(ulong y, ulong f)
     {
         y &= f;
         ulong a = ((f + y) ^ f) & f | y;                      // seeds towards the high bits to the end of their runs (carry chain)
-        while (true) { ulong z = (a | a >> 1) & f; if (z == a) return a; a = z; }   // and towards the low bits
+        ulong q = f & (f >> 1);
+        ulong d = a | (a >> 1) & f;
+        d |= (d >> 2) & q;
+        ulong q2 = q & (q >> 2);
+        d |= (d >> 4) & q2;
+        ulong q4 = q2 & (q2 >> 4);
+        if (q4 != 0)
+        {
+            d |= (d >> 8) & q4;
+            ulong q8 = q4 & (q4 >> 8);
+            d |= (d >> 16) & q8;
+            ulong q16 = q8 & (q8 >> 16);
+            d |= (d >> 32) & q16;
+        }
+        return d;
     }
 
     /// <summary>Component of the seed bits (cells of f[rp]; may contain several) over the free rows f into reg (rows outside the written span untouched; reg must hold no cells of
     /// this component). lo/hi are widened to cover every row written.</summary>
     public static void Flood(ulong* f, ulong* reg, int rp, ulong seed, ref int lo, ref int hi)
     {
-        nint l = lo, h = hi;
         nint r = rp; ulong s = seed;
         AssertSubset(seed, f[rp], "Flood seed");
-        ulong pend = 0;
+        ulong pend = 0, touched = 0;
         while (true)
         {
+            touched |= 1UL << (int)r;
             ulong y = Fill(s, f[r]);
             reg[r] |= y;
             ulong su = y & f[r + 1] & ~reg[r + 1], sd = y & f[r - 1] & ~reg[r - 1];
             if (su != 0)
             {
-                if (sd != 0) pend |= 1UL << (int)(r - 1);
-                r++; s = su; if (r > h) h = r; continue;
+                pend |= (sd != 0 ? 1UL : 0UL) << (int)(r - 1);
+                r++; s = su; continue;
             }
-            if (sd != 0) { r--; s = sd; if (r < l) l = r; continue; }
-            while (true)
+            if (sd != 0) { r--; s = sd; continue; }
+            if (pend == 0)
             {
-                if (pend == 0) { lo = (int)l; hi = (int)h; return; }
-                r = BitOperations.TrailingZeroCount(pend); pend &= pend - 1;
-                s = (reg[r - 1] | reg[r + 1]) & f[r] & ~reg[r];
-                if (s != 0) { if (r < l) l = r; if (r > h) h = r; break; }
+                int a = BitOperations.TrailingZeroCount(touched), z = 63 - BitOperations.LeadingZeroCount(touched);
+                if (a < lo) lo = a; if (z > hi) hi = z;
+                return;
             }
+            // a pending row always ends up non-empty (its seeds are free cells next to a written row); if another path already filled them the seed word is just empty
+            r = BitOperations.TrailingZeroCount(pend); pend &= pend - 1;
+            s = (reg[r - 1] | reg[r + 1]) & f[r] & ~reg[r];
         }
     }
 
     /// <summary><see cref="Flood"/> over the cells f &amp; ~ban (free and not in ban), e.g. the pockets outside a known region.</summary>
     public static void FloodMasked(ulong* f, ulong* ban, ulong* reg, int rp, ulong seed, ref int lo, ref int hi)
     {
-        nint l = lo, h = hi;
         nint r = rp; ulong s = seed;
         AssertSubset(seed, f[rp] & ~ban[rp], "FloodMasked seed");
-        ulong pend = 0;
+        ulong pend = 0, touched = 0;
         while (true)
         {
+            touched |= 1UL << (int)r;
             ulong y = Fill(s, f[r] & ~ban[r]);
             reg[r] |= y;
             ulong su = y & f[r + 1] & ~ban[r + 1] & ~reg[r + 1], sd = y & f[r - 1] & ~ban[r - 1] & ~reg[r - 1];
             if (su != 0)
             {
-                if (sd != 0) pend |= 1UL << (int)(r - 1);
-                r++; s = su; if (r > h) h = r; continue;
+                pend |= (sd != 0 ? 1UL : 0UL) << (int)(r - 1);
+                r++; s = su; continue;
             }
-            if (sd != 0) { r--; s = sd; if (r < l) l = r; continue; }
-            while (true)
+            if (sd != 0) { r--; s = sd; continue; }
+            if (pend == 0)
             {
-                if (pend == 0) { lo = (int)l; hi = (int)h; return; }
-                r = BitOperations.TrailingZeroCount(pend); pend &= pend - 1;
-                s = (reg[r - 1] | reg[r + 1]) & f[r] & ~ban[r] & ~reg[r];
-                if (s != 0) { if (r < l) l = r; if (r > h) h = r; break; }
+                int a = BitOperations.TrailingZeroCount(touched), z = 63 - BitOperations.LeadingZeroCount(touched);
+                if (a < lo) lo = a; if (z > hi) hi = z;
+                return;
             }
+            r = BitOperations.TrailingZeroCount(pend); pend &= pend - 1;
+            s = (reg[r - 1] | reg[r + 1]) & f[r] & ~ban[r] & ~reg[r];
         }
     }
 

@@ -332,6 +332,7 @@ public sealed unsafe partial class FullSolver : IDisposable
         if (stamp > uint.MaxValue - 4) { Array.Clear(mark); Array.Clear(mark2); stamp = 0; }
         uint st = ++stamp;
         int w = W;
+        if (fbits && !ReachRowsOff) return ReachRows(p, mk, st);
         int* q = queueP; int tail = 0; q[tail++] = p; mk[p] = st; int minC = p;
         for (int i = 0; i < tail; i++)
         {
@@ -340,6 +341,29 @@ public sealed unsafe partial class FullSolver : IDisposable
             y = c + w; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; }
             y = c - 1; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; if (y < minC) minC = y; }
             y = c + 1; if (mk[y] != st && blk[y] == 0) { mk[y] = st; q[tail++] = y; }
+        }
+        return minC;
+    }
+
+    public static bool ReachRowsOff = Environment.GetEnvironmentVariable("SOKSOLV_REACHROWS_OFF") == "1";   // test hook: queue flood
+
+    /// <summary>ReachP over the free-row mirror (flood kernel v2); the region's cells are then stamped from the row words.</summary>
+    int ReachRows(int p, uint* mk, uint st)
+    {
+        int w = W;
+        ulong* fr = frR; ulong* rg = frReg;
+        int rp = frRow[p]; int cp = frCol[p];
+        ulong saved = fr[rp];
+        fr[rp] = saved | 1UL << cp;       // the start cell counts as reachable even if it is blocked
+        int lo = rp, hi = rp;
+        RowK.Flood(fr, rg, rp, 1UL << cp, ref lo, ref hi);
+        fr[rp] = saved;
+        int minC = lo * w + System.Numerics.BitOperations.TrailingZeroCount(rg[lo]);
+        for (int r = lo; r <= hi; r++)
+        {
+            ulong x = rg[r]; rg[r] = 0;
+            int baseC = r * w;
+            for (; x != 0; x &= x - 1) mk[baseC + System.Numerics.BitOperations.TrailingZeroCount(x)] = st;
         }
         return minC;
     }
