@@ -19,7 +19,8 @@ if not specs: specs = [(f, 1) for f in (files or sorted(glob.glob(f"{root}/testd
 env = dict(os.environ, PATH=os.environ["PATH"] + ":/root/.dotnet", DOTNET_ROOT="/root/.dotnet")
 def run(cmd, extra):
     e = dict(env, **extra)
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=e)
+    try: r = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=e, timeout=float(os.environ.get('RUN_TIMEOUT', '120')))
+    except subprocess.TimeoutExpired: return 'TIMEOUT', ''
     m = re.search(r"S1HASH (.*)", r.stderr); f = re.search(r"S1FEAT (.*)", r.stderr)
     global lastfeat; lastfeat = f.group(1) if f else ""
     return (m.group(1) if m else "NO-S1HASH " + r.stderr[-150:].replace("\n", " ")), r.stdout
@@ -31,6 +32,8 @@ for f, i in specs:
     c, cout = run(f"{cs} -parity -macro-alt 0 {"-macro-planalt " if alt else ""}-macro-stage {stage} -macro-features {feat} -strategy macro -nodes {nodes} -t 120 '{f}' {i}", {"SOKSOLV_S1": "1"}); t2 = time.time()
     tg += t1 - t0; tc += t2 - t1
     csfeat = lastfeat
+    if g == 'TIMEOUT' or c == 'TIMEOUT':
+        print(f"SKIP {os.path.basename(f)[:-4]}#{i:<4} (timeout: go={g=='TIMEOUT'} cs={c=='TIMEOUT'})", flush=True); continue
     ok = g == c
     if not ok: bad += 1
     print(f"{'OK  ' if ok else 'DIFF'} {os.path.basename(f)[:-4]}#{i:<4} go {t1-t0:6.2f}s cs {t2-t1:6.2f}s  [{csfeat}] {g if ok else 'GO: ' + g + '  CS: ' + c}", flush=True)

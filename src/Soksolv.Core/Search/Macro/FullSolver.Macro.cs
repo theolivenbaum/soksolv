@@ -84,6 +84,7 @@ public sealed unsafe partial class FullSolver
         mSetupDeadlineMs = opt.NodeBudget > 0 || timeLimitSec <= 0 ? long.MaxValue : (long)Math.Min(100, timeLimitSec * 1000 / 10);
         mNodeLimit = nodeLimitOverride > 0 ? nodeLimitOverride : opt.NodeBudget;
         if (MacroStage >= 2) { MComputeRooms(); MComputeBasin(); }
+        if (Prof.On) Console.Error.WriteLine($"rooms+basin done t={clock.ElapsedMilliseconds} ms");
         long tPlan0 = clock.ElapsedMilliseconds;
         if (MacroStage >= 3)
         {

@@ -754,12 +754,15 @@ public sealed unsafe partial class FullSolver
         }
 
         // ---- expansion --------------------------------------------------------------------------------------------------------------
-        int expGen;
+        int[] boxesBuf = new int[64]; int[]? pullQ_; int[] pullQ => pullQ_ ??= new int[4 * cells + 8];
+        int expGen; public static readonly long[] T4 = new long[8];
         void Expand4(int id)
         {
+            long t0 = Prof.Start();
             expGen++;
             ref var nd0 = ref nodes[id];
-            var boxes = Boxes(id).ToArray();
+            int nbx = nodes[id].Nb; if (boxesBuf.Length < nbx) boxesBuf = new int[nbx * 2];
+            Boxes(id).CopyTo(boxesBuf); var boxes = new ReadOnlySpan<int>(boxesBuf, 0, nbx);
             SetOcc(id);
             var used = Used(id);
             var (_, parentStamp) = Flood(nd0.Player);
@@ -783,7 +786,8 @@ public sealed unsafe partial class FullSolver
             foreach (int t in free) for (int w = 0; w < aw; w++) alive[w] |= reach[t][w];
             cands.Clear(); remN = 0; region0.Clear();
             int baseR = LabelRegions();
-            int nbx = boxes.Length;
+            if (Prof.On) T4[0] += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+            long t1 = Prof.Start();
             for (int bi = 0; bi < nbx; bi++)
             {
                 int b = boxes[bi];
@@ -802,16 +806,16 @@ public sealed unsafe partial class FullSolver
                 if (k > 0) rb = baseR - k + 1;
                 if ((bi & 7) == 7 && Stopped()) break;
                 boxGen++; uint g = boxGen;
-                var q = new List<int>();
+                int qc = 0; var q = pullQ;
                 for (int di = 0; di < 4; di++)
                 {
                     int d = dirs[di];
-                    if (pgen[b + d] == pg) { int kk = b * 4 + di; q.Add(kk); seenK[kk] = g; }
+                    if (pgen[b + d] == pg) { int kk = b * 4 + di; q[qc++] = kk; seenK[kk] = g; }
                 }
                 CutBegin(b);
                 SetOccCell(b, false);
                 bool sunk = false;
-                for (int qi = 0; qi < q.Count; qi++)
+                for (int qi = 0; qi < qc; qi++)
                 {
                     int kq = q[qi]; int c = kq / 4, d = dirs[kq % 4];
                     int to = c + d, player = c + 2 * d;
@@ -820,7 +824,7 @@ public sealed unsafe partial class FullSolver
                     for (int di = 0; di < 4; di++)
                     {
                         int k2 = to * 4 + di;
-                        if ((sides & (1 << di)) != 0 && seenK[k2] != g) { seenK[k2] = g; q.Add(k2); }
+                        if ((sides & (1 << di)) != 0 && seenK[k2] != g) { seenK[k2] = g; q[qc++] = k2; }
                     }
                     int t = baseAt[to];
                     if (sinks && !sunk && t >= 0 && (used[t >> 6] >> (t & 63) & 1) == 0 && elimOK[t])
@@ -841,6 +845,8 @@ public sealed unsafe partial class FullSolver
                 region0.Add(rb);
                 SetOccCell(b, true);
             }
+            if (Prof.On) T4[1] += System.Diagnostics.Stopwatch.GetTimestamp() - t1;
+            long t2 = Prof.Start();
             ref var nd = ref nodes[id];
             if (remN > 0 && KeepParks > 0) { KeepParks4(id, boxes); return; }
             if (remN > 0)
@@ -860,6 +866,7 @@ public sealed unsafe partial class FullSolver
             if (Plan4Beam > 0 && beamN > Plan4Beam) beamN = Plan4Beam;
             nd.COff = PutKids(beam, beamN);
             nd.CLen = beamN;
+            if (Prof.On) T4[2] += System.Diagnostics.Stopwatch.GetTimestamp() - t2;
         }
 
         bool TrySink(int id, ReadOnlySpan<int> boxes, int b, int bi, int to, int t, int rb)
@@ -1137,6 +1144,7 @@ public sealed unsafe partial class FullSolver
                 Expand4(id);
                 Expanded++;
                 Enqueue(id);
+                if (Prof.On && Expanded % 2000 == 0) Console.Error.WriteLine($"p4 expanded {Expanded} nodes {nodeN} kids {kids.Count} t={s.clock.ElapsedMilliseconds} ms | setup {T4[0]*1000/System.Diagnostics.Stopwatch.Frequency} boxloop {T4[1]*1000/System.Diagnostics.Stopwatch.Frequency} tail {T4[2]*1000/System.Diagnostics.Stopwatch.Frequency} ms");
             }
             Best = best; Done = done;
             if (fails >= 10000) Exhausted = true;
