@@ -233,6 +233,7 @@ public sealed unsafe partial class FullSolver
                 if (!goal[c] && sd.Dead(c, player)) { stats.SideDead++; mLastAdded = -1; return -1; }
         id = nodes.Insert(slot, fp, ckey, player);
         mLastAdded = id;
+        if (opt.Net != null && !pull) MeetAdd(id, boxes, player);
         nodes.Parent(id) = parent; nodes.From(id) = (ushort)from; nodes.Dir(id) = (sbyte)dir; nodes.G(id) = g; nodes.W(id) = w;
         if (reg < 0) reg = Regions();
         var cell = new FeatureCell(MPacked(), reg, MRoomConnectivity(), MOutOfPlan(boxes));

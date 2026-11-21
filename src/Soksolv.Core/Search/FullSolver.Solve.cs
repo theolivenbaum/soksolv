@@ -70,6 +70,7 @@ public sealed unsafe partial class FullSolver
             if ((expanded & 255) == 0)
             {
                 long now = sw.ElapsedMilliseconds;
+                if (opt.Net != null && MeetCheckMail() is { } met) return new SolveResult { Solved = true, Solution = met, Nodes = expanded };
                 if ((opt.NodeBudget == 0 && limitMs > 0 && now > limitMs) || opt.Stop || (opt.Cancel?.Stopped ?? false)) return new SolveResult { Reason = "timeout", Nodes = expanded };
                 if (now - lastMemCheck > 50)
                 {
@@ -110,6 +111,7 @@ public sealed unsafe partial class FullSolver
                 PushTo(src, nh, nw, id);
             }
             foreach (int b in cur) SetOcc(b, false);
+            if (meetPending.Count > 0) MeetPost(child);
             if (solved >= 0) return new SolveResult { Solved = true, Solution = Reconstruct(solved), Nodes = expanded };
         }
         return new SolveResult { Reason = "exhausted", Nodes = expanded };

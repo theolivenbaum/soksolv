@@ -811,6 +811,7 @@ public sealed unsafe partial class FullSolver
         int bucket = onGoal * MaxRegions + Math.Min(reg, MaxRegions - 1);
         nodes.Bucket(id) = (ushort)bucket;
         PushNode(h, w, id, bucket);
+        if (opt.Net != null) MeetAdd(id, boxes, player);
         if (nodes.NeedsGrow)
         {
             if (opt.BudgetBytes > 0 && TrackedBytes() + (ulong)nodes.TableSlots * 16 > opt.BudgetBytes) memFull = true;

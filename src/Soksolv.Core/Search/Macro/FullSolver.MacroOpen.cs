@@ -589,9 +589,11 @@ public sealed unsafe partial class FullSolver
         mSearchStartMs = mLastImproveMs = clock.ElapsedMilliseconds;
         foreach (int b in start) SetOcc(b, false);
         var cur = mCur; var child = mChild;
+        meetMacro = true;
         while (true)
         {
             if (MExpired()) return new SolveResult { Reason = "timeout", Nodes = expanded };
+            if (opt.Net != null && !pull && (expanded & 255) == 0 && MeetCheckMail() is { } met) return new SolveResult { Solved = true, Solution = met, Nodes = expanded };
             if (opt.StallFinish && opt.NodeBudget == 0 && mRows != null && mStallTries < 3 && mBest > 0)
             {
                 long now = clock.ElapsedMilliseconds;
@@ -642,6 +644,7 @@ public sealed unsafe partial class FullSolver
                 MEnqueue(id);
             }
             foreach (int b in cur) SetOcc(b, false);
+            if (meetPending.Count > 0) MeetPost(cur);
             if (cid < 0) continue;
             MNoteBest(cid);
             if (ch == 0 && pull)

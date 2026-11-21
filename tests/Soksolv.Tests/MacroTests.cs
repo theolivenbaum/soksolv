@@ -298,4 +298,16 @@ public class MacroTests
         try { var r = Run(level, 3000, 5, 255); Assert.True(r.Nodes > 0); }   // throws on any scan/flood disagreement
         finally { FullSolver.CheckCut = false; }
     }
+
+    [Theory]
+    [InlineData("Holland_81_27")]
+    [InlineData("SokHard_163_36")]
+    [InlineData("Sasquatch_IV_50_42")]
+    [InlineData("Sven_1623_100")]
+    public void Plan4_MatchSkipAgreesWithFullMatching(string level)
+    {
+        FullSolver.MatchCheckHook = true;
+        try { var r = Run(level, 3000, 5, 255); Assert.True(r.Nodes > 0); }   // throws on any matchSkip/matchOK disagreement
+        finally { FullSolver.MatchCheckHook = false; }
+    }
 }

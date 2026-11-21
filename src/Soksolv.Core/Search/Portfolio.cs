@@ -6,6 +6,7 @@ namespace Soksolv.Search;
 
 public sealed class PortfolioOptions
 {
+    public bool Meet = true;   // bidirectional meetings (Go: on in `all` mode; -no-meet)
     public long NodeBudget;
     public ulong MemBytes = 15360UL << 20;   // total budget (Go -mem); 70% goes to lane data structures, split by share
     public bool Full = true, Reverse = true, Macro = true;
@@ -45,6 +46,12 @@ public static class Portfolio
         var shared = new ClusterTable(16); var sharedPen = new ClusterTable(16); var sharedDz = new Search.DeadZone.DeadZoneTable(18);
         SolveResult? winner = null; var all = new List<SolveResult>(); var gate = new object();
         var threads = new List<Thread>();
+        // bidirectional meetings between forward lanes (full) and the backward reverse lane (Go: meet.Back/Fwd in `all` mode)
+        Meet.MeetNet? net = null;
+        if (po.Meet && po.Reverse && (po.Full || po.Macro || po.Novelty))
+        {
+            try { net = new Meet.MeetNet(Level.Parse(rows).Cells); } catch (InvalidDataException) { }
+        }
 
         void Lane(string name, Func<SolveResult> run)
         {
@@ -67,24 +74,24 @@ public static class Portfolio
         if (po.Full)
             Lane("full", () => FullSolver.Solve(rows, new FullOptions
             {
-                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedPenalties = sharedPen, SharedDeadZone = sharedDz,
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedPenalties = sharedPen, SharedDeadZone = sharedDz, Net = net, MeetOwner = 0,
             }, timeLimitSec));
         if (po.Reverse)
         {
             var ro = ReverseRunner.Config(2, po.RevSupply);
-            ro.NodeBudget = po.NodeBudget; ro.BudgetBytes = budget; ro.MemLimitBytes = po.MemBytes; ro.Cancel = cancel;
+            ro.NodeBudget = po.NodeBudget; ro.BudgetBytes = budget; ro.MemLimitBytes = po.MemBytes; ro.Cancel = cancel; ro.Net = net; ro.BackOwner = 0;
             Lane("reverse", () => ReverseRunner.Solve(rows, ro, timeLimitSec));
         }
         if (po.Macro)
             Lane("macro", () => FullSolver.SolveMacroLane(rows, new FullOptions
             {
-                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared,
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, Net = net, MeetOwner = 1,
                 MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
             }, timeLimitSec));
         if (po.Novelty)
             Lane("novelty", () => FullSolver.SolveNovelty(rows, new FullOptions
             {
-                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedDeadZone = sharedDz,
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedDeadZone = sharedDz, Net = net, MeetOwner = 3,
                 MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
             }, timeLimitSec));
         if (po.Fa2)
@@ -99,6 +106,8 @@ public static class Portfolio
                 NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared,
             }, timeLimitSec));
         foreach (var t in threads) t.Join();
+        if (net != null && Environment.GetEnvironmentVariable("SOKSOLV_MEET_DEBUG") == "1")
+            Console.Error.WriteLine($"meet: back adds {net.Back.Adds} fwd adds {net.Fwd.Adds} posted(to back) {net.Back.Posted} confirmed(back) {net.Back.Confirmed} posted(to fwd) {net.Fwd.Posted} confirmed(fwd) {net.Fwd.Confirmed} dropped {net.Back.Dropped + net.Fwd.Dropped}");
 
         var res = winner ?? new SolveResult { Reason = string.Join("; ", all.Select(a => $"{a.Strategy}:{a.Reason}")) };
         res.Nodes = all.Sum(a => a.Nodes);
