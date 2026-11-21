@@ -10,7 +10,7 @@ ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster p
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
 bool portPull = false, portNovelty = true, portFa2 = true;
-bool noMeet = false;
+bool noMeet = false, pfOn = false; string? strataDump = null; long hubSlices = 0;
 var hfSwitches = new Dictionary<string, bool>();
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
 var pos = new List<string>();
@@ -31,6 +31,9 @@ for (int i = 0; i < args.Length; i++)
             hfSwitches[name] = val != "false"; break;
         }
         case "-no-meet": noMeet = true; break;
+        case "-hub-strata-dump": strataDump = args[++i]; break;
+        case "-hub-node-slices": hubSlices = long.Parse(args[++i]); break; // hub lanes: expansion-count slices instead of wall-clock ones (deterministic; -nodes caps the lane)
+        case "-pf-on": pfOn = true; break; // pull: Festival-ordered pull (hub lanes' backward solver)
         case "-macro-alt": macroAlt = args[++i] != "0"; break;
         case "-macro-planalt": macroPlanAlt = true; break;
         case "-parity": ClusterChecker.AStar = false; ClusterChecker.SkipCapped = false; break; // Go-identical cluster proofs (BFS, no skipping)
@@ -92,7 +95,7 @@ var opt = new FullOptions
     SharedClusters = new ClusterTable(16),
     SharedPenalties = new ClusterTable(16),
     SharedDeadZone = new Soksolv.Search.DeadZone.DeadZoneTable(18),
-    MacroStage = macroStage, MacroFeatures = macroFeat, PlanAlt = macroPlanAlt, MacroAlt = macroAlt, Fa2 = fa2o,
+    PfOn = pfOn, HubNodeSlices = hubSlices, MacroStage = macroStage, MacroFeatures = macroFeat, PlanAlt = macroPlanAlt, MacroAlt = macroAlt, Fa2 = fa2o,
 };
 {
     bool bundle = !hfSwitches.TryGetValue("hf-festival", out bool bv) || bv;
@@ -111,6 +114,8 @@ SolveResult Run(string[] r, double tl)
     }
     if (strategy == "full") return FullSolver.Solve(r, opt, tl);
     if (strategy == "hf") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveHf(r, opt, tl); }
+    if (strategy == "hub-pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveHubPull(r, opt, tl); }
+    if (strategy == "hub-strata") { opt.StallScale = 1.0; return FullSolver.SolveHubStrata(r, opt, tl, strataDump ?? "hub-strata.txt"); }
     if (strategy == "pull") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolvePull(r, opt, tl); }
     if (strategy == "fa2") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveFa2(r, opt, tl); }
     if (strategy == "novelty") { opt.StallScale = tl > 0 && tl < 600 ? tl / 600 : 1.0; return FullSolver.SolveNovelty(r, opt, tl); }

@@ -41,6 +41,14 @@ public sealed class FullOptions
     public bool StallFinish = true;
     /// <summary>Pull mode (Go pull lane): the macro engine run backward on a pull view of the level (see Pull/FullSolver.Pull.cs).</summary>
     public bool Pull;
+    /// <summary>Go solver.pfOn (hub-pull / hub-gen's backward solver): Festival-ordered pull search (Search/Hub/FullSolver.PfOn.cs); needs Pull.</summary>
+    public bool PfOn;
+    /// <summary>Initial state of the type-exploration generator (Go solver.rng; 0: the default seed).</summary>
+    public ulong RngSeed;
+    /// <summary>Hub lanes: &gt; 0 replaces the wall-clock slices (Go festbUnit 250 ms) by this many pull expansions (deterministic mode; opt.NodeBudget then caps the lane's total expansions).</summary>
+    public long HubNodeSlices;
+    /// <summary>Bytes held by the lane's other trees (Go peerTracked): they count against BudgetBytes.</summary>
+    public Func<ulong>? PeerBytes;
     /// <summary>Novelty lane (Go solver.novelty = 100): at most this many novel moves per opened node cost nothing (0: off).</summary>
     public int Novelty;
     /// <summary>Macro alt engine (exp-769): plan4 with festsink + roomsep + keep-parks 1.</summary>
@@ -122,14 +130,14 @@ public sealed unsafe partial class FullSolver : IDisposable
     Cand[] cands; Push1[] pushes1;
     readonly Stopwatch clock = Stopwatch.StartNew();
     // pull mode (Go solver.pull): front()/playerAfter()/supportCell() generalise push geometry
-    readonly bool pull;
+    readonly bool pull, pfOn;
     int Front(int b, int d) => pull ? b + d : b - d;
     int PlayerAfter(int nc, int d) => pull ? nc + d : nc - d;
     int SupportCell(int b, int c, int d) => pull ? c + d : b - d;
 
     public FullSolver(Level level, FullOptions options)
     {
-        pull = options.Pull;
+        pull = options.Pull; pfOn = options.Pull && options.PfOn; mRng = options.RngSeed;
         lv = level; opt = options; n = lv.Boxes.Length; cells = lv.Cells; W = lv.W;
         dirs = [-W, W, -1, 1]; wall = lv.Wall; goal = lv.Goal;
         occ = new bool[cells];

@@ -54,6 +54,41 @@ public sealed class FessHeap
         }
         a[i] = e;
     }
+    /// <summary>Go container/heap.Remove(h, i): swap with the last, restore the heap, return the removed entry.</summary>
+    public FessEntry Remove(int i)
+    {
+        int last = n - 1;
+        if (i != last)
+        {
+            (a[i], a[last]) = (a[last], a[i]);
+            // down(i, last)
+            int i0 = i, cur = i;
+            while (true)
+            {
+                int j1 = 2 * cur + 1;
+                if (j1 >= last || j1 < 0) break;
+                int j = j1;
+                if (j1 + 1 < last && FessEntry.Less(a[j1 + 1], a[j1])) j = j1 + 1;
+                if (!FessEntry.Less(a[j], a[cur])) break;
+                (a[cur], a[j]) = (a[j], a[cur]);
+                cur = j;
+            }
+            if (cur == i0)
+            {
+                // up(i)
+                int jj = i0;
+                while (true)
+                {
+                    int p = (jj - 1) / 2;
+                    if (p == jj || !FessEntry.Less(a[jj], a[p])) break;
+                    (a[jj], a[p]) = (a[p], a[jj]);
+                    jj = p;
+                }
+            }
+        }
+        n--;
+        return a[n];
+    }
     public FessEntry Pop()
     {
         var top = a[0];

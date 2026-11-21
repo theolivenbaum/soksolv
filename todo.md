@@ -102,3 +102,9 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 
 - [x] pullfest leaf functions (pushDistances/pfDist/pfHot/pfBicon/pfSpreadSum/tuple order): Search/Hub/PfFest.cs, exact vs Go goldens (18 levels x 8 samples)
 - [ ] pfOn engine hooks in the macro/pull engine (patched-Go `-strategy pull` + SOKSOLV_PFON reference), then hubstrata, hubrace, hubprobe, festb, hubgen, hub, hfsched, portfolio hub lanes + toward retargeting loop (see docs/lanes.md 'Hub family - status after the 14th fork')
+
+## Hub family (15th fork)
+- [x] pfOn Festival-order pull (`-strategy pull -pf-on`): exact vs patched Go (testdata 22/22 at N=1..20000, LTS 296/296 at N=1, 42/42 at 10..20000)
+- [x] hubstrata (`-strategy hub-strata -hub-strata-dump`): byte-identical dumps
+- [x] `-strategy hub-pull` (raceAlternate; wall clock default, `-hub-node-slices K` deterministic): exact vs node-slice Go reference (bench/hub-ref)
+- [ ] hub-gen / hub (hubgen.go 1037, hub.go 1112, festbAlternate, retargetTo, toward meet hooks, hfsched in Portfolio), Portfolio `hub-pull` lane, retarget reuse
