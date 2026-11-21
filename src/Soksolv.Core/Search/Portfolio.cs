@@ -10,8 +10,8 @@ public sealed class PortfolioOptions
     public long NodeBudget;
     public ulong MemBytes = 15360UL << 20;   // total budget (Go -mem); 70% goes to lane data structures, split by share
     public bool Full = true, Reverse = true, Macro = true;
-    /// <summary>Novelty lane (forward FESS with the novelty advisor). Pull lane: off by default — without the backward perimeter (not ported) it rarely finishes a level alone.</summary>
-    public bool Novelty = true, Pull = false;
+    /// <summary>Novelty lane (forward FESS with the novelty advisor). Pull lane: on by default (Go's laneShares); it needs the meeting perimeter to finish levels.</summary>
+    public bool Novelty = true, Pull = true;
     /// <summary>fa2 lane (plan-guided forward FESS: own v2 plan; Go's anytime lane also runs a second engine on the macro lane's plan4 list — not ported).</summary>
     public bool Fa2 = true;
     /// <summary>factor lane (component planning; joins only boards with >= 2 non-trivial static box components, as Go's factorGate).</summary>
