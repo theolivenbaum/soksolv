@@ -142,7 +142,7 @@ public static class Portfolio
         if (towardOn)
             Lane("toward", () => FullSolver.SolveTowardLane(rows, new FullOptions
             {
-                BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, NodeBudget = po.NodeBudget, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
+                BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, NodeBudget = po.NodeBudget, Net = net, MeetOwner = 2, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
             }, timeLimitSec, () => Volatile.Read(ref pullBest)));
         if (po.Pull)
             Lane("pull", () => FullSolver.SolvePull(rows, new FullOptions
@@ -154,6 +154,8 @@ public static class Portfolio
         if (net != null && Environment.GetEnvironmentVariable("SOKSOLV_MEET_DEBUG") == "1")
             Console.Error.WriteLine($"meet: back adds {net.Back.Adds} fwd adds {net.Fwd.Adds} posted(to back) {net.Back.Posted} confirmed(back) {net.Back.Confirmed} posted(to fwd) {net.Fwd.Posted} confirmed(fwd) {net.Fwd.Confirmed} dropped {net.Back.Dropped + net.Fwd.Dropped}");
 
+        if (Environment.GetEnvironmentVariable("SOKSOLV_LANE_DEBUG") == "1")
+            foreach (var a in all) Console.Error.WriteLine($"lane {a.Strategy}: solved={a.Solved} reason={a.Reason} nodes={a.Nodes} ms={a.TimeMs:F0} fp={a.Fingerprint}");
         var res = winner ?? new SolveResult { Reason = string.Join("; ", all.Select(a => $"{a.Strategy}:{a.Reason}")) };
         res.Nodes = all.Sum(a => a.Nodes);
         res.PeakBytes = all.Sum(a => a.PeakBytes);
