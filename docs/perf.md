@@ -217,7 +217,10 @@ all 23 testdata levels for full, macro, novelty, pull, hf (-no-meet), fa2, dive,
 ### What did not work (measured, reverted)
 * **Lazy articulation** (ring-table `pieces(t)` for non-splitting candidates, one region flood for `comps`, flood per split candidate; or hybrid: Tarjan only when a candidate's ring
   splits): total Ir unchanged (+0.6%). Most boxes with >= 2 candidates have at least one ring-split candidate (corridors), and a pointer Tarjan (~13 instr per free cell,
-  4.7k Ir on Sasquatch, ~17k on Holland) costs about 4-8 row floods, so floods only win when almost no candidate splits.
+  4.7k Ir on Sasquatch, ~17k on Holland) costs about 4-8 row floods, so floods only win when almost no candidate splits. Also tried an adaptive budget (flood the first K
+  ring-split candidates, then switch to the Tarjan pass; K=0/2/6): pull 0.707G -> 0.723/0.718/0.711G Ir, macro 6.69G -> 6.70G: no gain on any lane.
+* Rewriting the Tarjan frame loop with the current frame in registers and a monotone discovery base (no per-pass stamps): -4% of MArtic itself; kept, and `ComputeArticulation`
+  (full/fa2) now shares that single pass (`MArtic`) instead of a second array-based copy.
 * **7x7 window connectivity** to resolve ring-split candidates without a flood (all free orthogonal neighbours of t joined by a path inside the window): only ~25% of the
   split-possible cases resolve (42-60% are real splits, the rest connect over longer paths), the window test costs ~310 Ir -> net +6% on Holland `full`.
 * Ternary-selected neighbour offsets instead of `b.Dirs[di]` in `FastPlayerB`: slower (kept the table, now a pinned `int*`).

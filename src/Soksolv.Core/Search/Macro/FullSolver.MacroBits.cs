@@ -176,6 +176,7 @@ public sealed unsafe partial class FullSolver
     ArtC[]? maArr; ArtC* maP; ArtFr[]? mfArr; ArtFr* mfP; uint maStamp; int[]? mDirsPin; int* mDirsP;
 
     /// <summary>One iterative Tarjan pass over the free cells (blk = walls and boxes): component count in <c>artComps</c>, per-cell piece counts for <see cref="MChildRegions"/>.</summary>
+    int maBase;
     void MArtic()
     {
         if (maArr == null)
@@ -186,48 +187,48 @@ public sealed unsafe partial class FullSolver
             for (int i = 0; i < 4; i++) mDirsP[i] = dirs[i];
         }
         ArtC* ac = maP; ArtFr* stack = mfP; int* dr = mDirsP; byte* bk = blk;
-        uint st = ++maStamp;
-        if (st == 0) { Array.Clear(maArr); st = maStamp = 1; }
-        int comps = 0, timer = 0;
+        // discovery numbers grow across calls (a cell is unseen in this pass iff Disc <= b0), so nothing is cleared per pass
+        if (maBase > int.MaxValue - 4 * cells) { Array.Clear(maArr); maBase = 0; }
+        int b0 = maBase, timer = b0, comps = 0;
         var floor = FloorCells();
         for (int fi = 0; fi < floor.Length; fi++)
         {
             int root = floor[fi];
-            if (bk[root] != 0 || ac[root].Seen == st) continue;
+            if (bk[root] != 0 || ac[root].Disc > b0) continue;
             comps++;
             timer++;
-            ac[root].Disc = timer; ac[root].Low = timer; ac[root].Pieces = 0; ac[root].Seen = st;
-            stack[0].C = root; stack[0].P = -1; stack[0].N = 0;
-            int sz = 1;
-            while (sz > 0)
+            ac[root].Disc = timer; ac[root].Pieces = 0;
+            int c = root, p = -1, n = 0, low = timer, sp = 0;   // current frame in registers, suspended frames on the stack
+            while (true)
             {
-                ArtFr* f = stack + (sz - 1);
-                int c = f->C;
-                bool descended = false;
-                while (f->N < 4)
+                if (n < 4)
                 {
-                    int y = c + dr[f->N++];
+                    int y = c + dr[n++];
                     if (bk[y] != 0) continue;
                     ArtC* ay = ac + y;
-                    if (ay->Seen != st)
+                    int dy = ay->Disc;
+                    if (dy <= b0)
                     {
                         timer++;
-                        ay->Disc = timer; ay->Low = timer; ay->Pieces = 1; ay->Seen = st;
-                        ArtFr* nf = stack + sz;
-                        nf->C = y; nf->P = c; nf->N = 0; sz++;
-                        descended = true; break;
+                        ay->Disc = timer; ay->Pieces = 1;
+                        ac[c].Low = low;
+                        stack[sp].C = c; stack[sp].P = p; stack[sp].N = n; sp++;
+                        p = c; c = y; n = 0; low = timer;
+                        continue;
                     }
-                    if (y != f->P && ay->Disc < ac[c].Low) ac[c].Low = ay->Disc;
+                    if (y != p && dy < low) low = dy;
+                    continue;
                 }
-                if (descended) continue;
-                sz--;
-                int pp = f->P;
-                if (pp < 0) continue;
-                int lc = ac[c].Low;
-                if (lc < ac[pp].Low) ac[pp].Low = lc;
-                if (lc >= ac[pp].Disc) ac[pp].Pieces++;
+                if (sp == 0) break;
+                sp--;
+                int pc = stack[sp].C;
+                int plow = ac[pc].Low;
+                if (low >= ac[pc].Disc) ac[pc].Pieces++;
+                if (low < plow) plow = low;
+                p = stack[sp].P; n = stack[sp].N; c = pc; low = plow;
             }
         }
+        maBase = timer;
         artComps = comps;
     }
 
