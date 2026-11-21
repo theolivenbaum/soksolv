@@ -6,6 +6,12 @@ namespace Soksolv.Search;
 public sealed unsafe partial class FullSolver
 {
     // ---- open(): evaluate all macro moves of a node once (Go fess_moves.go open, Stage 1 configuration) ----------------------------
+    // novelty lane (Go exp-192/194/289): per-FESS-cell novelty memory
+    const bool AccessNovelty = true, Novelty2 = true;
+    readonly List<ulong[]?> mNovSeen = new(), mNovPushSeen = new();
+    readonly HashSet<ulong> mNovPairs = new(), mNovAccess = new();
+    readonly List<ulong> mNovWords = new(), mNovT0 = new(), mNovT1 = new();
+    long mParentSpread;
     int mOpenId, mOpenCands, mParentOop, mParentRoom, mParentConn, mParentPackedF; uint mOpenSt; int[]? mHotCounts;
     DisplacementLandmarks? dl; bool dlInit; ulong mCmdMask, mUnpinMask;
 
@@ -62,6 +68,9 @@ public sealed unsafe partial class FullSolver
         if (Feat(4)) PreparePackingObligations();
         mPlan?.NodeSetup(cur);
         Prof.Stop(5, tc);
+        mAccN = 0;
+        if (pull) { long sp = 0; foreach (int bx in cur) sp += spreadDist[bx]; mParentSpread = sp; }
+        { int bk0 = (int)maux[id].Bucket; mUnpackedRegime = bk0 < mcells.Count && parentPacked < mcells[bk0].Packed; }
         mOpenId = id; mOpenSt = st; mParentOop = parentOop; mParentRoom = parentRoom; mHotCounts = counts;
         for (int i = 0; i < cur.Length; i++)
         {
@@ -134,6 +143,15 @@ public sealed unsafe partial class FullSolver
         if (openerK >= 0) mWeights[openerK] = 0;
         if (oopK >= 0) mWeights[oopK] = 0;
         if (dispK >= 0) { mWeights[dispK] = 0; stats.DispAdvisor++; }
+        int noveltyN = NoveltyBudget();
+        for (int k = 0; k < nm; k++) mCands[k].Tier = noveltyN > 0 ? 3 : 0;
+        if (noveltyN > 0)
+        {
+            // Go: for advisor, k := range chosen (advisor index order; a later advisor overrides an earlier tier on the same move)
+            ReadOnlySpan<int> chosenK = [packingK, connK, roomK, hotK, explorerK, openerK, oopK, dispK];
+            for (int adv = 0; adv < 8; adv++)
+                if (chosenK[adv] >= 0) mCands[chosenK[adv]].Tier = adv is 0 or 1 or 2 or 7 ? 0 : 1;
+        }
         if (Feat(6))
         {
             // advisor picks that are distinct group exits are remembered (Go: revExits.insert for every chosen advisor)
@@ -170,7 +188,12 @@ public sealed unsafe partial class FullSolver
                                 if (c < 0 || c == 0 && m.Plen < mCands[bestExit].Plen) bestExit = k;
                             }
                         }
-                        if (bestExit >= 0) { mWeights[bestExit] = 0; mRevExits.Add(mCands[bestExit].ExitKey); }
+                        if (bestExit >= 0)
+                        {
+                            mWeights[bestExit] = 0;
+                            if (noveltyN > 0) { ref var be0 = ref mCands[bestExit]; be0.Tier = be0.Packed > parentPacked || be0.R < parentConn || be0.Room < parentRoom ? 0 : 1; }
+                            mRevExits.Add(mCands[bestExit].ExitKey);
+                        }
                     }
                 }
                 maux[id].RevBestExit = (short)bestExit;
@@ -189,14 +212,25 @@ public sealed unsafe partial class FullSolver
                     for (int k = 0; k < nm; k++)
                         if ((mRevWords[revOff + k / 64] & (1UL << (k % 64))) != 0) mCands[k].Undo = true;
                 }
-                if (maux[id].RevBestExit >= 0) { int be = maux[id].RevBestExit; if (be < nm) mWeights[be] = 0; }
+                if (maux[id].RevBestExit >= 0)
+                {
+                    int be = maux[id].RevBestExit;
+                    if (be < nm)
+                    {
+                        mWeights[be] = 0;
+                        if (noveltyN > 0) { ref var bm = ref mCands[be]; bm.Tier = bm.Packed > parentPacked || bm.R < parentConn || bm.Room < parentRoom ? 0 : 1; }
+                    }
+                }
             }
         }
-        for (int k = 0; k < nm; k++) mKeys[k] = new MKey { Bad = Feat(6) && mCands[k].RevBad ? 1 : 0, W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = mCands[k].Plen, Idx = k };
+        if (noveltyN > 0) MNoveltyBlock(id, cur, nm, noveltyN, parentConn);
+        bool useTier = noveltyN > 0 && AccessNovelty;
+        for (int k = 0; k < nm; k++) mKeys[k] = new MKey { Tier = useTier ? mCands[k].Tier : 0, Bad = Feat(6) && mCands[k].RevBad ? 1 : 0, W = mWeights[k], Oop = mCands[k].Oop, Packed = mCands[k].Packed, R = mCands[k].R, Room = mCands[k].Room, Hot = mCands[k].Hot, Mobility = mCands[k].Mobility, Plen = mCands[k].Plen, Idx = k };
         mKeys.AsSpan(0, nm).Sort(static (x, y) =>
         {
             if (x.Bad != y.Bad) return x.Bad < y.Bad ? -1 : 1;
             if (x.W != y.W) return x.W < y.W ? -1 : 1;
+            if (x.Tier != y.Tier) return x.Tier < y.Tier ? -1 : 1;
             if (x.Oop != y.Oop) return x.Oop < y.Oop ? -1 : 1;
             if (x.Packed != y.Packed) return x.Packed > y.Packed ? -1 : 1; // -packed
             if (x.R != y.R) return x.R < y.R ? -1 : 1;
@@ -219,6 +253,107 @@ public sealed unsafe partial class FullSolver
         }
         ref var a = ref maux[id];
         a.MvLen = (uint)win; a.MvNext = 0; a.MvTotal = (uint)nm; a.MvLeft = (uint)(nm - off);
+    }
+
+    /// <summary>Go open(): novelty advisor with stable windows (StableWindows, exp-192/194/289): novel moves cost nothing; tiers order them.</summary>
+    void MNoveltyBlock(int id, int[] cur, int nm, int novelty, int parentConn)
+    {
+        if (!mReopening)
+        {
+            int bk = (int)maux[id].Bucket;
+            while (mNovSeen.Count <= bk) mNovSeen.Add(null);
+            var seen = mNovSeen[bk] ??= new ulong[(cells + 63) / 64];
+            ulong[]? pushSeen = null;
+            if (AccessNovelty)
+            {
+                while (mNovPushSeen.Count <= bk) mNovPushSeen.Add(null);
+                pushSeen = mNovPushSeen[bk] ??= new ulong[(4 * cells + 63) / 64];
+            }
+            int nov = 0, nwd = (nm + 63) / 64, novOff = mNovWords.Count;
+            for (int x = 0; x < nwd; x++) { mNovWords.Add(0); if (AccessNovelty) { mNovT0.Add(0); mNovT1.Add(0); } }
+            maux[id].NovOffset = novOff + 1;
+            for (int k = 0; k < nm; k++)
+            {
+                ref var m = ref mCands[k];
+                int w = m.T / 64; ulong bit = 1UL << (m.T % 64);
+                bool w1Novel = (seen[w] & bit) == 0, w2Novel = false;
+                if (Novelty2)
+                    for (int j = 0; j < cur.Length; j++)
+                    {
+                        if (j == m.I) continue;
+                        int a = m.T, c = cur[j];
+                        if (a > c) (a, c) = (c, a);
+                        if (!mNovPairs.Contains((ulong)bk << 40 | (ulong)a << 20 | (ulong)c)) { w2Novel = true; break; }
+                    }
+                bool accessNovel = false;
+                if (AccessNovelty && m.AccLen > 0)
+                    for (int e = m.AccStart; e < m.AccStart + m.AccLen; e++)
+                    {
+                        ulong raw = mAccBuf[e];
+                        ulong tag = raw >> 40 & 0xF;
+                        if (tag == 0) { if ((pushSeen![raw / 64] & 1UL << (int)(raw % 64)) == 0) { accessNovel = true; break; } }
+                        else if (!mNovAccess.Contains((ulong)bk << 44 | raw)) { accessNovel = true; break; }
+                    }
+                bool novel = w1Novel || w2Novel || accessNovel;
+                if (Feat(6) && m.RevBad) novel = false;
+                if (novel && nov < novelty)
+                {
+                    seen[w] |= bit;
+                    if (Novelty2)
+                        for (int j = 0; j < cur.Length; j++)
+                        {
+                            if (j == m.I) continue;
+                            int a = m.T, c = cur[j];
+                            if (a > c) (a, c) = (c, a);
+                            mNovPairs.Add((ulong)bk << 40 | (ulong)a << 20 | (ulong)c);
+                        }
+                    if (AccessNovelty && m.AccLen > 0)
+                        for (int e = m.AccStart; e < m.AccStart + m.AccLen; e++)
+                        {
+                            ulong raw = mAccBuf[e];
+                            if ((raw >> 40 & 0xF) == 0) pushSeen![raw / 64] |= 1UL << (int)(raw % 64);
+                            else mNovAccess.Add((ulong)bk << 44 | raw);
+                        }
+                    mWeights[k] = 0;
+                    nov++;
+                    mNovWords[novOff + k / 64] |= 1UL << (k % 64);
+                    bool connMaintained = m.R <= parentConn;
+                    int tier = 2;
+                    if (m.Tier == 0) tier = 0;
+                    else if (AccessNovelty && accessNovel && connMaintained) tier = 0;
+                    else if (w1Novel && connMaintained) tier = 1;
+                    else if (m.Tier == 1) tier = 1;
+                    if (Feat(6) && m.GroupDupExit) tier = 2;
+                    m.Tier = tier;
+                    if (AccessNovelty)
+                    {
+                        if (tier == 0) mNovT0[novOff + k / 64] |= 1UL << (k % 64);
+                        else if (tier == 1) mNovT1[novOff + k / 64] |= 1UL << (k % 64);
+                    }
+                }
+                else if (m.Tier > 2) m.Tier = 3;
+            }
+        }
+        else if (maux[id].NovOffset > 0)
+        {
+            int novOff = maux[id].NovOffset - 1;
+            for (int k = 0; k < nm; k++)
+            {
+                ref var m = ref mCands[k];
+                if ((mNovWords[novOff + k / 64] & 1UL << (k % 64)) != 0)
+                {
+                    mWeights[k] = 0;
+                    if (AccessNovelty)
+                    {
+                        if (mNovT0.Count > 0 && (mNovT0[novOff + k / 64] & 1UL << (k % 64)) != 0) m.Tier = 0;
+                        else if (mNovT1.Count > 0 && (mNovT1[novOff + k / 64] & 1UL << (k % 64)) != 0) m.Tier = 1;
+                        else m.Tier = 2;
+                    }
+                    else m.Tier = 2;
+                }
+                else if (m.Tier > 2) m.Tier = 3;
+            }
+        }
     }
 
     static int MScoreCmp(ref MCand m, ref MCand o) =>
@@ -267,7 +402,7 @@ public sealed unsafe partial class FullSolver
             if (CheckRegions && r != Regions()) throw new InvalidOperationException($"incremental region count {r} != flood {Regions()}");
             if (mCandN == mCands.Length) Array.Resize(ref mCands, mCandN * 2);
             tp = Prof.Start();
-            var (mob, expl) = MacroStage >= 5 ? MMoveAccess(cur, i, t) : (0, false);
+            var (mob, expl, accS, accL) = MacroStage >= 5 ? MMoveAccess(cur, i, t) : (0, false, 0, 0);
             Prof.Stop(3, tp);
             tp = Prof.Start();
             int room = t == cur[i] ? mParentRoom : MRoomConnectivity(), packed, oop, progress = -2;
@@ -278,7 +413,7 @@ public sealed unsafe partial class FullSolver
                 packed = mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.Packed(occ) : cpacked; progress = cphase;
                 oop = MOutOfPlan(cur, cphase, i, t);
             }
-            else { packed = MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
+            else { packed = pull ? (int)((mParentSpread - spreadDist[cur[i]] + spreadDist[t]) / SpreadBucket) : MPacked(); oop = mParentOop - OopOne(cur[i]) + OopOne(t); }
             if (mCmdMask != 0 && dl != null && r <= mParentConn)
             {
                 int gIdxB = dl.GoalIdx[cur[i]];
@@ -330,7 +465,7 @@ public sealed unsafe partial class FullSolver
                     if (mRevExits.Contains(cExit)) cGroupDup = true; else cDistinct = true;
                 }
             }
-            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl };
+            mCands[mCandN++] = new MCand { Undo = cUndo, Internal = cInternal, DeadChild = cDeadChild, GroupDupExit = cGroupDup, DistinctExit = cDistinct, ExitKey = cExit, I = i, B = cur[i], T = t, R = r, Packed = packed, Plen = plen, Side = k & 3, Room = room, Oop = oop, Progress = progress, Hot = mHotCounts != null ? HotAfterP(cur, i, t) : 0, Mobility = mob, Explorer = expl, AccStart = accS, AccLen = accL };
         }
         SetOcc(t, false);
         return true;

@@ -167,6 +167,8 @@ public sealed unsafe partial class FullSolver
 
     /// <summary>Planner state shared by the anytime stepping in the macro loop.</summary>
     public static bool CheckCut;   // test hook: compare every cutscan query with the exact flood
+    public static bool MatchCheckHook { get => Planner4.MatchCheck; set => Planner4.MatchCheck = value; }
+    // (old marker): compare every cutscan query with the exact flood
     Planner4? p4pend;
     PackingPlan? prePlan; int prePlanAt;
     /// <summary>The alt engine (exp-769) plans plan4 with festsink + roomsep + keep-parks 1.</summary>
@@ -642,6 +644,98 @@ public sealed unsafe partial class FullSolver
             return true;
         }
 
+        // matchSkip (exp-583): matchOK(boxes, skipBox, skipBase) from one maximum matching M of all the node's boxes per expansion.
+        //  |M| <= n-2: removing one box leaves a deficiency, so false. M perfect: skipBox's base is freed, at most one alternating-path
+        //  search from skipBase's box (Berge). |M| = n-1 (box u0 unmatched): skipBox must be reached from u0 by an even alternating path;
+        //  flipping that path gives a maximum matching M1 perfect on the other boxes, then as above.
+        int fmGen, fmDef, fmU0; int[] fmBox = [], fmOf = [], fm1 = [], fmPar = [], fmBy = []; readonly List<int> fmQ = new();
+        public static bool MatchCheck;
+
+        bool MatchSkip(ReadOnlySpan<int> boxes, int skipBox, int skipBase)
+        {
+            if (fmGen != expGen) { fmGen = expGen; FmPrep(boxes); }
+            bool r = MatchSkipOK(boxes, skipBox, skipBase);
+            if (MatchCheck && r != MatchOK(boxes, skipBox, skipBase)) throw new InvalidOperationException($"matchSkip {r} != matchOK for box {skipBox} base {skipBase}");
+            return r;
+        }
+
+        void FmPrep(ReadOnlySpan<int> boxes)
+        {
+            curBox.Clear(); for (int i = 0; i < boxes.Length; i++) curBox.Add(boxes[i]);
+            skipT = -1;
+            Array.Fill(mBox, -1);
+            fmDef = 0; fmU0 = -1;
+            for (int u = 0; u < curBox.Count; u++) { mStamp++; if (!Augment(u, mStamp)) { fmDef++; if (fmU0 < 0) fmU0 = u; } }
+            if (fmBox.Length != mBox.Length) fmBox = new int[mBox.Length];
+            Array.Copy(mBox, fmBox, mBox.Length);
+            if (fmOf.Length < boxes.Length) fmOf = new int[boxes.Length];
+            for (int i = 0; i < boxes.Length; i++) fmOf[i] = -1;
+            for (int t = 0; t < fmBox.Length; t++) if (fmBox[t] >= 0) fmOf[fmBox[t]] = t;
+        }
+
+        bool MatchSkipOK(ReadOnlySpan<int> boxes, int skipBox, int skipBase)
+        {
+            if (fmDef >= 2) return false;
+            if (fmDef == 0)
+            {
+                int fb = fmOf[skipBox];
+                if (fb == skipBase || fmBox[skipBase] < 0) return true; // M minus skipBox's pair already avoids skipBase
+                mStamp++;
+                return AltPath(boxes, fmBox, fmBox[skipBase], skipBase, fb, mStamp);
+            }
+            if (fm1.Length != fmBox.Length) fm1 = new int[fmBox.Length];
+            Array.Copy(fmBox, fm1, fmBox.Length);
+            if (skipBox != fmU0)
+            {
+                // BFS over alternating paths from u0 (every base met is matched: M is maximum); flip the path to skipBox
+                if (fmPar.Length < boxes.Length) fmPar = new int[boxes.Length];
+                if (fmBy.Length < mBox.Length) fmBy = new int[mBox.Length];
+                mStamp++;
+                uint st = mStamp;
+                fmQ.Clear(); fmQ.Add(fmU0);
+                bool found = false;
+                for (int qi = 0; qi < fmQ.Count && !found; qi++)
+                {
+                    int cell = boxes[fmQ[qi]];
+                    foreach (int t in free)
+                    {
+                        if (!CanReach(t, cell) || mSeen[t] == st) continue;
+                        mSeen[t] = st;
+                        int x = fmBox[t];
+                        fmPar[x] = t; // x is reached through base t (from box q[qi])
+                        fmBy[t] = fmQ[qi];
+                        if (x == skipBox) { found = true; break; }
+                        fmQ.Add(x);
+                    }
+                }
+                if (!found) return false;
+                for (int x = skipBox; x != fmU0;)
+                {
+                    int t = fmPar[x];
+                    int y = fmBy[t];
+                    fm1[t] = y;
+                    x = y;
+                }
+            }
+            // fm1 leaves skipBox unmatched and is perfect on the other boxes
+            if (fm1[skipBase] < 0) return true;
+            mStamp++;
+            return AltPath(boxes, fm1, fm1[skipBase], skipBase, -1, mStamp);
+        }
+
+        /// <summary>Is there an alternating path (w.r.t. matching m, base -> box) from box u to a base that is free once skipBase's pair (and the base fb freed by the removed box; -1: none) is dropped, avoiding skipBase?</summary>
+        bool AltPath(ReadOnlySpan<int> boxes, int[] m, int u, int skipBase, int fb, uint seen)
+        {
+            int cell = boxes[u];
+            foreach (int t in free)
+            {
+                if (t == skipBase || !CanReach(t, cell) || mSeen[t] == seen) continue;
+                mSeen[t] = seen;
+                if (t == fb || m[t] < 0 || AltPath(boxes, m, m[t], skipBase, fb, seen)) return true;
+            }
+            return false;
+        }
+
         // ---- region labelling -------------------------------------------------------------------------------------------------------
         int LabelRegions()
         {
@@ -889,7 +983,7 @@ public sealed unsafe partial class FullSolver
         bool TrySink(int id, ReadOnlySpan<int> boxes, int b, int bi, int to, int t, int rb)
         {
             bool ok = Separated(b, to);
-            if (ok && matchOn && !MatchOK(boxes, bi, t)) ok = false;
+            if (ok && matchOn && !MatchSkip(boxes, bi, t)) ok = false;
             if (ok)
             {
                 ref var nd = ref nodes[id];

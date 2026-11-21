@@ -35,10 +35,10 @@ public sealed unsafe partial class FullSolver
     {
         public int I, B, T, R, Packed, Plen, Side, Room, Oop, Progress, Hot, Mobility; public bool Explorer;
         public ulong ScoreKey;
-        public bool Undo, Internal, DeadChild, GroupDupExit, DistinctExit; public ulong ExitKey;
+        public bool Undo, Internal, DeadChild, GroupDupExit, DistinctExit; public ulong ExitKey; public int AccStart, AccLen, Tier;
         public readonly bool RevBad => Undo || Internal || DeadChild;
     }
-    struct MKey { public int Bad, W, Oop, Packed, R, Room, Hot, Mobility, Plen, Idx; }
+    struct MKey { public int Bad, W, Tier, Oop, Packed, R, Room, Hot, Mobility, Plen, Idx; }
     Search.DeadZone.DeadZoneChecker? dz;
     MCand[] mCands = new MCand[64]; int mCandN;
     int[] mWeights = new int[64]; MKey[] mKeys = new MKey[64];

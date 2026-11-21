@@ -9,6 +9,8 @@ public sealed class PortfolioOptions
     public long NodeBudget;
     public ulong MemBytes = 15360UL << 20;   // total budget (Go -mem); 70% goes to lane data structures, split by share
     public bool Full = true, Reverse = true, Macro = true;
+    /// <summary>Novelty lane (forward FESS with the novelty advisor). Pull lane: off by default — without the backward perimeter (not ported) it rarely finishes a level alone.</summary>
+    public bool Novelty = true, Pull = false;
     public int MacroStage = 5, MacroFeatures = 255; // all ported stage-6 features (bits 0-4: windows, deadzone+frontier corral, displacement, corridor flow, obligations)
     public int RevSupply = 4;
     public Action<string>? Log;
@@ -35,7 +37,7 @@ public static class Portfolio
     {
         var sw = Stopwatch.StartNew();
         var cancel = new CancelFlag();
-        int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0) + (po.Macro ? 1 : 0);
+        int lanes = (po.Full ? 1 : 0) + (po.Reverse ? 1 : 0) + (po.Macro ? 1 : 0) + (po.Novelty ? 1 : 0) + (po.Pull ? 1 : 0);
         if (lanes == 0) return new SolveResult { Reason = "no lanes" };
         ulong budget = po.MemBytes / 100 * 70 / (ulong)lanes;
         var shared = new ClusterTable(16); var sharedPen = new ClusterTable(16); var sharedDz = new Search.DeadZone.DeadZoneTable(18);
@@ -76,6 +78,17 @@ public static class Portfolio
             {
                 NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared,
                 MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
+            }, timeLimitSec));
+        if (po.Novelty)
+            Lane("novelty", () => FullSolver.SolveNovelty(rows, new FullOptions
+            {
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared, SharedDeadZone = sharedDz,
+                MacroStage = po.MacroStage, MacroFeatures = po.MacroFeatures, StallScale = timeLimitSec > 0 && timeLimitSec < 600 ? timeLimitSec / 600 : 1.0,
+            }, timeLimitSec));
+        if (po.Pull)
+            Lane("pull", () => FullSolver.SolvePull(rows, new FullOptions
+            {
+                NodeBudget = po.NodeBudget, BudgetBytes = budget, Cancel = cancel, SharedClusters = shared,
             }, timeLimitSec));
         foreach (var t in threads) t.Join();
 

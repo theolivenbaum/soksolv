@@ -83,15 +83,27 @@ public sealed unsafe partial class FullSolver
         return n;
     }
 
+    // access facts recorded for the novelty lane (Go accBuf); entries are (tag << 40) | payload
+    ulong[] mAccBuf = new ulong[256]; int mAccN;
+    bool mUnpackedRegime;
+    int NoveltyBudget() => pull ? 0 : opt.Novelty;
+
     /// <summary>
-    /// Move access (Go moveAccessScan with access novelty off), for the child just flooded by the box search (m3 stamp mpstamp,
-    /// occ = child): mobility = (box, direction) pairs whose support cell is in the child's player region; explorer = an unchanged
-    /// box gains a legal push from support outside the parent's region (mark stamped mOpenSt).
+    /// Move access (Go moveAccessScan), for the child just flooded by the box search (m3 stamp mpstamp, occ = child):
+    /// mobility = (box, direction) pairs whose support cell is in the child's player region; explorer = an unchanged
+    /// box gains a legal push from support outside the parent's region (mark stamped mOpenSt). With AccessNovelty and a
+    /// novelty budget it also records the access capability facts (tags 0-4) in mAccBuf[accStart..accStart+accLen).
     /// </summary>
-    (int mobility, bool explorer) MMoveAccess(ReadOnlySpan<int> cur, int moved, int target)
+    (int mobility, bool explorer, int accStart, int accLen) MMoveAccess(ReadOnlySpan<int> cur, int moved, int target)
     {
         uint cs = mpstamp;
         int mobility = 0; bool explorer = false;
+        bool recordAcc = AccessNovelty && NoveltyBudget() > 0;
+        int accStart = mAccN;
+        int origB = cur[moved];
+        bool vacated = (mCmdMask | mUnpinMask) != 0 || (goal[origB] && !goal[target]);
+        bool displaced = recordAcc && (mUnpackedRegime || vacated);
+        bool goalVacated = recordAcc && vacated;
         for (int i = 0; i < cur.Length; i++)
         {
             int b = i == moved ? target : cur[i];
@@ -102,10 +114,34 @@ public sealed unsafe partial class FullSolver
                 if (m3[support] != cs) continue;
                 mobility++;
                 bool fresh = i != moved && mark[support] != mOpenSt;
-                if (!fresh || explorer) continue;
-                if (!wall[to] && !occ[to] && dist[b + d] >= 0) explorer = true;
+                if (!goalVacated && (!fresh || explorer && !recordAcc)) continue;
+                bool legal = !wall[to] && !occ[to] && dist[b + d] >= 0;
+                if (fresh && legal)
+                {
+                    explorer = true;
+                    if (recordAcc)
+                    {
+                        ulong psi = (uint)(b * 4 + di);
+                        AccPush(psi);
+                        AccPush((1UL << 40) | (psi << 20) | (uint)target);
+                        if (displaced) AccPush((2UL << 40) | (psi << 20) | (uint)origB);
+                    }
+                }
+                if (goalVacated && legal && (mark[support] != mOpenSt || b == target))
+                {
+                    ulong psi = (uint)(b * 4 + di);
+                    AccPush((4UL << 40) | ((ulong)(uint)origB << 20) | psi);
+                }
             }
         }
-        return (mobility, explorer);
+        int accLen = 0;
+        if (recordAcc)
+        {
+            if (mCandNP >= 0 && mark[mCandNP] != mOpenSt) AccPush((3UL << 40) | ((ulong)(uint)mCandNP << 20) | (uint)target);
+            accLen = mAccN - accStart;
+        }
+        return (mobility, explorer, accStart, accLen);
     }
+
+    void AccPush(ulong v) { if (mAccN == mAccBuf.Length) Array.Resize(ref mAccBuf, mAccN * 2); mAccBuf[mAccN++] = v; }
 }
