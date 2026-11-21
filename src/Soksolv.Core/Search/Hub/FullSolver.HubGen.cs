@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using Soksolv.Search.Hub;
 using Soksolv.Search.Meet;
 
@@ -76,6 +78,10 @@ public sealed unsafe partial class FullSolver
         public bool Full;
         public HubReach? Reach;
         readonly int[] dirs; readonly bool[] wall; readonly bool[] occ; readonly int[] dist;
+        // bit-row view (boards <= 64 wide, <= 62 tall, walled ring): occupied / player-region / scratch rows, rows indexed y+1
+        readonly bool bitsOk; readonly int wd, hh, nRows; readonly ulong rmask;
+        readonly ulong[] wallR = [], occR = [], remR = [], r1R = [], tmpR = [];
+        readonly ushort[] cellRow = []; readonly ulong[] cellBit = [];
 
         public int Count => nNodes;
         internal ref GenNode Node(int id) => ref nodes[id];
@@ -114,6 +120,17 @@ public sealed unsafe partial class FullSolver
             }
             for (int c = 0; c < cells; c++) { z[c] = Next(); zp[c] = Next(); }
             mark = new uint[cells]; lab = new int[cells]; vis = new uint[cells * 4]; dd = new uint[cells];
+            if (pf.Bits != null)
+            {
+                bitsOk = true; wd = ps.W; hh = cells / wd; nRows = hh + 2; rmask = wd == 64 ? ~0UL : (1UL << wd) - 1;
+                wallR = new ulong[nRows]; occR = new ulong[nRows]; remR = new ulong[nRows]; r1R = new ulong[nRows]; tmpR = new ulong[nRows];
+                cellRow = new ushort[cells]; cellBit = new ulong[cells];
+                for (int c = 0; c < cells; c++)
+                {
+                    cellRow[c] = (ushort)(c / wd + 1); cellBit[c] = 1UL << (c % wd);
+                    if (wall[c]) wallR[c / wd + 1] |= cellBit[c];
+                }
+            }
             cur = new int[n];
             top = new GenEnt[HubGenFlags.TopK + 1]; topR = new int[HubGenFlags.TopK + 1]; topT = new int[HubGenFlags.TopK + 1];
             if (HubGenFlags.Reach)
@@ -161,7 +178,7 @@ public sealed unsafe partial class FullSolver
         }
 
         /// <summary>Marks the free cells reachable from p; returns the smallest and the number of free components.</summary>
-        int Flood(int p, out int regs)
+        int FloodQ(int p, out int regs)
         {
             stamp++;
             uint s = stamp;
@@ -196,9 +213,74 @@ public sealed unsafe partial class FullSolver
             return minC;
         }
 
-        public bool InPlayerRegion(int c) => mark[c] == stamp && lab[c] == 1;
-        public bool LabIs1(int c) => lab[c] == 1;
-        public void FloodAt(int p) => Flood(p, out _);
+
+        /// <summary>Region 1 rows (the flooded player region), valid after <see cref="Flood"/> in bit mode.</summary>
+        public ulong[] Region1 => r1R;
+        public bool BitsOk => bitsOk;
+
+        /// <summary>
+        /// Floods the player's region from p (the start cell counts even when blocked) over the free cells (the boxes are cur[]);
+        /// returns the smallest cell of the region and the number of free components. labels: also number the other components (lab) for <see cref="DReg"/>.
+        /// </summary>
+        int Flood(int p, out int regs, bool labels = false)
+        {
+            if (!bitsOk) return FloodQ(p, out regs);
+            fixed (ulong* wr = wallR, oc = occR, rem = remR, r1 = r1R, tmp = tmpR)
+            {
+                int rows = nRows;
+                for (int i = 0; i < rows; i++) { oc[i] = 0; r1[i] = 0; }
+                foreach (int b in cur) oc[cellRow[b]] |= cellBit[b];
+                rem[0] = 0; rem[rows - 1] = 0;
+                for (int i = 1; i < rows - 1; i++) rem[i] = ~(wr[i] | oc[i]) & rmask;
+                int py = cellRow[p]; ulong pb = cellBit[p];
+                rem[py] |= pb;
+                RowFlood.One(rem, r1, py, pb, out int lo, out int hi);
+                int minC = (lo - 1) * wd + BitOperations.TrailingZeroCount(r1[lo]);
+                if (p < minC) minC = p;
+                int n = 1;
+                for (int i = lo; i <= hi; i++) rem[i] &= ~r1[i];
+                int labNo = 1;
+                for (int i = 1; i < rows - 1; i++)
+                {
+                    while (rem[i] != 0)
+                    {
+                        n++;
+                        ulong seed = rem[i] & (0UL - rem[i]);
+                        RowFlood.One(rem, tmp, i, seed, out int l2, out int h2);
+                        if (labels)
+                        {
+                            labNo++;
+                            for (int r = l2; r <= h2; r++)
+                            {
+                                ulong m = tmp[r];
+                                while (m != 0) { int x = BitOperations.TrailingZeroCount(m); m &= m - 1; lab[(r - 1) * wd + x] = labNo; }
+                            }
+                        }
+                        for (int r = l2; r <= h2; r++) { rem[r] &= ~tmp[r]; tmp[r] = 0; }
+                    }
+                }
+                regs = n;
+                return minC;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        bool InR1(int c) => (r1R[cellRow[c]] & cellBit[c]) != 0;
+        /// <summary>The free cells outside the player's region (after <see cref="Flood"/>): written to dst, count returned.</summary>
+        public int PocketCells(int[] dst)
+        {
+            int k = 0;
+            for (int i = 1; i < nRows - 1; i++)
+            {
+                ulong m = ~(wallR[i] | occR[i]) & rmask & ~r1R[i];
+                while (m != 0) { int x = BitOperations.TrailingZeroCount(m); m &= m - 1; dst[k++] = (i - 1) * wd + x; }
+            }
+            return k;
+        }
+
+        public bool InPlayerRegion(int c) => bitsOk ? InR1(c) : mark[c] == stamp && lab[c] == 1;
+        public bool LabIs1(int c) => bitsOk ? InR1(c) : lab[c] == 1;
+        public void FloodAt(int p, int[] boxes) { Array.Copy(boxes, cur, n); Flood(p, out _); }
 
         /// <summary>FNV-1a over every node's fields (parity fingerprint, bench/hubgen-ref).</summary>
         public ulong Checksum()
@@ -307,7 +389,7 @@ public sealed unsafe partial class FullSolver
             int minC = Flood(player, out int regs);
             nd.Player = minC; nd.Reg = regs;
             FullEval(ref nd, bs);
-            if (HubGenFlags.Bic) nd.Bic = ps.pff!.Bicon(occ);
+            if (HubGenFlags.Bic) nd.Bic = ps.pff!.Bicon(occ, cur);
             ulong full = nd.Hash ^ zp[minC];
             if (seen.ContainsKey(full)) return;
             int id = AddNode(nd, bs);
@@ -439,7 +521,7 @@ public sealed unsafe partial class FullSolver
             nd.Player = minC; nd.Reg = regs;
             ulong full = nd.Hash ^ zp[minC];
             if (seen.ContainsKey(full)) { Dupes++; return; }
-            if (HubGenFlags.Bic) nd.Bic = pf.Bicon(occ);
+            if (HubGenFlags.Bic) nd.Bic = pf.Bicon(occ, cur);
             int id = AddNode(nd, new ReadOnlySpan<ushort>(boxes, p * n, n), i, (ushort)to);
             seen[full] = id;
             curId = id;
@@ -458,7 +540,7 @@ public sealed unsafe partial class FullSolver
             for (int k = 0; k < 4; k++)
             {
                 int d = dirs[k], p = c + d;
-                if (mark[p] != stamp || lab[p] != 1) continue;
+                if (!InPlayerRegion(p)) continue;
                 int qq = p + d;
                 if (!wall[qq] && !occ[qq])
                 {
@@ -502,7 +584,7 @@ public sealed unsafe partial class FullSolver
             {
                 int c = a + dirs[j];
                 if (c == b || wall[c] || occ[c]) continue;
-                int l = lab[c];
+                int l = bitsOk ? (InR1(c) ? 1 : lab[c]) : lab[c];
                 bool dup = false;
                 for (int t = 0; t < k; t++) dup |= seenL[t] == l;
                 if (!dup) seenL[k++] = l;
@@ -516,7 +598,7 @@ public sealed unsafe partial class FullSolver
             LoadNode(id);
             var nd = nodes[id];
             Expanded++;
-            Flood(nd.Player, out _);
+            Flood(nd.Player, out _, true);
             Span<int> cnt = stackalloc int[64];
             var rc = Reach;
             if (rc != null) rc.Counts(NodeBoxes(id), cnt);
