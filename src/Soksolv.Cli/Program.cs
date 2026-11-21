@@ -9,7 +9,7 @@ using Soksolv.Search.Reverse;
 ClusterChecker.AStar = true; ClusterChecker.SkipCapped = true; // fast cluster proofs by default (see docs); -parity restores Go behaviour
 string strategy = "all"; int revLanes = 2, revSupply = 4, revExtra = 0;
 int macroStage = 5, macroFeat = 255; bool macroPlanAlt = false, macroAlt = true;
-bool portPull = false, portHubPull = false, portNovelty = true, portFa2 = true;
+bool portPull = true, portHubPull = false, portNovelty = true, portFa2 = true;
 bool noMeet = false, pfOn = false; string? strataDump = null; long hubSlices = 0;
 var hfSwitches = new Dictionary<string, bool>();
 double tLimit = 0; int memMb = 15360; long nodes = 0; bool header = false;
@@ -46,7 +46,8 @@ for (int i = 0; i < args.Length; i++)
         case "-procs": i++; break; // accepted for CLI compatibility (single lane for now)
         case "-strategy": strategy = args[++i]; break;
         case "-hub-pull": portHubPull = true; break;     // add the hub-pull lane to the portfolio (opt-in)
-        case "-pull": portPull = true; break;           // add the pull lane to the portfolio (off by default: no backward perimeter yet)
+        case "-pull": portPull = true; break;
+        case "-no-pull": portPull = false; break;           // add the pull lane to the portfolio (off by default: no backward perimeter yet)
         case "-no-novelty": portNovelty = false; break;
         case "-no-fa2": portFa2 = false; break;
         case "-rev-lanes": revLanes = int.Parse(args[++i]); break;
