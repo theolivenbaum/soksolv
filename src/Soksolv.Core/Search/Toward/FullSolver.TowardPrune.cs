@@ -3,7 +3,7 @@ namespace Soksolv.Search;
 public sealed unsafe partial class FullSolver
 {
     DiagDeadChecker? dd;
-    bool[]? festTun;
+    bool[]? festTun; int[]? fiC;
 
     /// <summary>Go festTunnels: Festival's forbidden push-tunnel squares.</summary>
     bool[] FestTunnels()
@@ -36,7 +36,7 @@ public sealed unsafe partial class FullSolver
         if (FestTunnels()[t]) return true;
         int w = W;
         Span<int> d8 = [-w, -w + 1, 1, w + 1, w, w - 1, -1, -w - 1];
-        var c = new int[8];
+        var c = fiC ??= new int[8];
         for (int i = 0; i < 8; i++) c[i] = t + d8[i];
         for (int j = 0; j < 8; j += 2)
         {

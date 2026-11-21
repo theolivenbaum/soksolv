@@ -64,7 +64,7 @@ public sealed unsafe partial class FullSolver
         if (hfRank)
         {
             // Festival's forward HF order: connectivity, boxes on target, hotspots against the target, min-cost matching distance
-            parentOop = maux[id].Reg; parentRoom = HotRel(cur); parentHot = MatchDist(cur);
+            parentOop = maux[id].Reg; parentRoom = HotRel(cur); parentHot = MatchParent(cur);
             mParentFrozen = false;
             if (opt.HfFrozenMatch && HfFrozenOff(cur)) { parentHot = Math.Max(parentHot, 1 << 20); mParentFrozen = true; }
             if (opt.HfMatchFirst && parentHot >= 1 << 20) parentOop += HfNoMatch;
@@ -470,7 +470,7 @@ public sealed unsafe partial class FullSolver
             {
                 cur.CopyTo(hfBoxes);
                 hfBoxes[i] = t;
-                oop = r; room = HotRel(hfBoxes); hotOverride = MatchDist(hfBoxes);
+                oop = r; room = HotRel(hfBoxes); hotOverride = MatchChild(hfBoxes, i, cur[i]);
                 // Festival predicts a child's distance with only the moved box (and the parent's frozen boxes) pinned
                 if (opt.HfFrozenMatch && (mParentFrozen || HfFrozenOff(hfBoxes.AsSpan(i, 1)))) hotOverride = Math.Max(hotOverride, 1 << 20);
                 if (opt.HfMatchFirst && hotOverride >= 1 << 20) oop += HfNoMatch;

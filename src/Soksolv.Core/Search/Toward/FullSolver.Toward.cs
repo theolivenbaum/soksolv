@@ -91,43 +91,84 @@ public sealed unsafe partial class FullSolver
 
     int[] hu = [], hv = [], hp = [], hway = [], hminv = []; bool[] hused = [];
 
-    /// <summary>Go matchDist: min-cost matching of boxes to target squares by push distances (assignmentInf if none). Exact Hungarian: the value equals Go's incremental duals.</summary>
+    int Edge(int box, int j) { int e = tgtDist[(j - 1) * cells + box]; return e < 0 ? AssignmentInf : e; }
+
+    /// <summary>One augmenting path for row (1-based) of the Hungarian algorithm over the current duals hu/hv/hp (e-maxx formulation, as Go augmentAssignment).</summary>
+    void AugmentRow(ReadOnlySpan<int> boxes, int row)
+    {
+        int m = n; var u = hu; var v = hv; var p = hp; var way = hway; var minv = hminv; var used = hused;
+        p[0] = row; int j0 = 0;
+        Array.Fill(minv, int.MaxValue); Array.Clear(used);
+        do
+        {
+            used[j0] = true;
+            int i0 = p[j0], delta = int.MaxValue, j1 = 0;
+            int box = boxes[i0 - 1];
+            int baseIdx = box;
+            for (int j = 1; j <= m; j++)
+            {
+                if (used[j]) continue;
+                int e = tgtDist[(j - 1) * cells + baseIdx]; if (e < 0) e = AssignmentInf;
+                int cur = e - u[i0] - v[j];
+                if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+                if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+            }
+            for (int j = 0; j <= m; j++)
+                if (used[j]) { u[p[j]] += delta; v[j] -= delta; } else minv[j] -= delta;
+            j0 = j1;
+        } while (p[j0] != 0);
+        do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
+    }
+
+    long AssignmentCost(ReadOnlySpan<int> boxes)
+    {
+        long total = 0;
+        for (int j = 1; j <= n; j++) total += Edge(boxes[hp[j] - 1], j);
+        return total;
+    }
+
+    /// <summary>Go matchDist: min-cost matching of boxes to target squares by push distances (assignmentInf if none).</summary>
     int MatchDist(ReadOnlySpan<int> boxes)
     {
-        int m = n;
-        const int inf = AssignmentInf;
         Array.Clear(hu); Array.Clear(hv); Array.Clear(hp); Array.Clear(hway);
-        var u = hu; var v = hv; var p = hp; var way = hway; var minv = hminv; var used = hused;
-        for (int i = 1; i <= m; i++)
+        for (int row = 1; row <= n; row++) AugmentRow(boxes, row);
+        long total = AssignmentCost(boxes);
+        return total < AssignmentInf ? (int)total : AssignmentInf;
+    }
+
+    int[] hfDualU = [], hfDualV = [], hfDualP = [], hfInv = []; long hfCost;
+
+    /// <summary>Go hfMatchParent: matchDist, keeping the exact duals/assignment of the expanded node for hfMatchChild.</summary>
+    int MatchParent(ReadOnlySpan<int> boxes)
+    {
+        int score = MatchDist(boxes);
+        int m = n + 1;
+        if (hfDualU.Length != m) { hfDualU = new int[m]; hfDualV = new int[m]; hfDualP = new int[m]; hfInv = new int[m]; }
+        Array.Copy(hu, hfDualU, m); Array.Copy(hv, hfDualV, m); Array.Copy(hp, hfDualP, m);
+        for (int g = 1; g < m; g++) hfInv[hp[g]] = g;
+        hfCost = score == AssignmentInf ? AssignmentCost(boxes) : score;
+        return score;
+    }
+
+    /// <summary>Go hfMatchChild: the child with box `moved` (index in boxes, now at boxes[moved], previously at old) repaired from the parent's saved solution.</summary>
+    int MatchChild(ReadOnlySpan<int> boxes, int moved, int old)
+    {
+        int m = n + 1;
+        int row = moved + 1;
+        int goalCol = hfInv[row];
+        int box = boxes[moved];
+        int u = int.MaxValue;
+        for (int j = 1; j < m; j++) u = Math.Min(u, Edge(box, j) - hfDualV[j]);
+        int newCost = Edge(box, goalCol);
+        if (u == newCost - hfDualV[goalCol])
         {
-            p[0] = i; int j0 = 0;
-            Array.Fill(minv, int.MaxValue); Array.Clear(used);
-            do
-            {
-                used[j0] = true;
-                int i0 = p[j0], delta = int.MaxValue, j1 = 0;
-                int box = boxes[i0 - 1];
-                for (int j = 1; j <= m; j++)
-                {
-                    if (used[j]) continue;
-                    int e = tgtDist[(j - 1) * cells + box]; if (e < 0) e = inf;
-                    int cur = e - u[i0] - v[j];
-                    if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
-                    if (minv[j] < delta) { delta = minv[j]; j1 = j; }
-                }
-                for (int j = 0; j <= m; j++)
-                    if (used[j]) { u[p[j]] += delta; v[j] -= delta; } else minv[j] -= delta;
-                j0 = j1;
-            } while (p[j0] != 0);
-            do { int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0 != 0);
+            int oldCost = Edge(old, goalCol);
+            return (int)Math.Min(AssignmentInf, hfCost + newCost - oldCost);
         }
-        long total = 0;
-        for (int j = 1; j <= m; j++)
-        {
-            int e = tgtDist[(j - 1) * cells + boxes[p[j] - 1]]; if (e < 0) e = inf;
-            total += e;
-        }
-        return total < inf ? (int)total : inf;
+        Array.Copy(hfDualU, hu, m); Array.Copy(hfDualV, hv, m); Array.Copy(hfDualP, hp, m);
+        hu[row] = u; hp[goalCol] = 0; hv[0] = 0;
+        AugmentRow(boxes, row);
+        return (int)Math.Min(AssignmentInf, AssignmentCost(boxes));
     }
 
     /// <summary>Go completeTarget: the prefix (to the child that reached the target board) plus the backward tail; verified on the real level.</summary>
