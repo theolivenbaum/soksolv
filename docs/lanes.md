@@ -107,3 +107,47 @@ lines): solver.go 1030/1586 (target ranking `tgt*`, `hfRank` features), deadzone
 already ported macro/pull code. Needs: target-board machinery (`setTarget`, `tgtDist/tgtPocket`, `hfRank` scoring in open/advisors,
 `hfMatchParent` incremental matching), `festCorral`, `diagdead`, `festIneff`, and the in-process `meet` tables with mailboxes (shared with
 the hub family). Estimate ~1.5k Go lines; it is the first thing to port once the perimeter exists, together with the hub lanes.
+
+
+---
+
+# Meeting network (meet) and what is blocked behind `toward` (tenth fork)
+
+## Done: bidirectional meetings (`Search/Meet/`, port of Go package `meet` + the lane-side hooks)
+* `MeetNet`/`Table`/`Meeting`/`Target`/`MPush` (`Meet/Meet.cs`): Go's lossy 4-way perimeter (Zobrist key per cell, splitmix constants identical,
+  grow x8 up to 2^24 slots, lock-free CAS inserts), per-owner bounded mailboxes (64, a full box drops the post), `Complete` (walk
+  between pushes by BFS, "" if unreachable), `EndCell`. The `Back` table holds the backward searches' states (owners: 0 reverse,
+  3 pull), `Fwd` the forward searches' (0 full, 1 macro, 3 novelty).
+* Hooks, each following the Go code path for stored nodes: `full` lane (`Meet/FullSolver.Meet.cs`: add -> `Fwd.Add`, new node that
+  `Back.Has` -> pending; after the expansion post prefix + player to `Back`; every 256 expansions resolve mail from `Fwd`),
+  `macro`/`novelty` lanes (same code through `MReconstruct`), `reverse` lane (`Reverse/ReverseSolver.Meet.cs`: add -> `Back.Add`,
+  probe `Fwd`, post tails to `Fwd`, resolve mail from `Back` owner 0) and the `pull` lane (`Meet/FullSolver.PullMeet.cs`, owner 3,
+  tail = `PullTail`). Every joined solution is re-verified by the portfolio (`Portfolio.Lane`).
+* `Portfolio`: the network is created when a backward lane (reverse, or pull with `-pull`) and a forward lane run; `-no-meet`
+  disables it; `SOKSOLV_MEET_DEBUG=1` prints post/confirm counts. Meetings observed: reverse posts 20-70 hits per level on the SokHard
+  levels, 1-3 confirmed (a confirmed meeting finished the level), e.g. `SokHard_163#36` solved by `full` through a reverse post.
+* Tests: `MeetTests.cs` (key order independence, add/has/growth, mailbox cap/drop, `Complete`, portfolio with meetings solves+verifies).
+* **Not exact Go parity:** meetings are timing dependent in Go as well (threads), so no node-count parity exists; the check is that
+  every meeting yields a verified solution and that the lane parities (`-nodes` mode, no net) are unchanged (they are: tests green).
+* Not ported from the Go meeting protocol: candidate references for lazily generated children (`pendCands`/`refGet`/`reconstructRef`,
+  exp-659), `RetainFwdMail` previous-tree mail, `Best` target publishing (`publishPullBest`/`StoreBest`; the table slot exists in `MeetNet.Best`).
+
+## Done: diagonal-chain deadlocks (`Search/DiagDead.cs`)
+Exact port of `diagdead.Checker.Dead` (the Go default `-diag-dead=target` applies it to toward-family searches only). Not wired to a lane
+yet (needs `toward`) and not unit-tested against Go goldens yet.
+
+## Not done: `toward` / `tfwd` / `hf`, `hub-pull`, `hub-gen`, `hub`
+Scope measured for `toward`/`hf` (default flags; `TowardHF = true` -> `fessTowardReal`):
+* Target mode in the macro engine (`setTarget`: target squares replace the goals for ranking only, `tgtDist` per target square, `packed` =
+  boxes on target squares, `hotRel` = hotspot count against the target, `hfMatchParent/Child` = min-cost matching distance to the target
+  (exact Hungarian, `assignmentInf = 1<<20`; the incremental dual update in incremental_match.go returns the same value), no plan
+  (`noPlan`), no displacement landmarks, `cell = {packed, hotRel, oop: reg}` at node creation, `diagdead` on for `hfRank`, solved test
+  `onTarget(child)` -> `completeTarget` = prefix + `Complete(target boxes, tail)` verified, `nodeLimit`) — about 15 sites in
+  `FullSolver.Macro*.cs` (MAdd cell, MOpen parent/child features, MPacked, deadlock chain, search loop) plus ~300 new lines (Hungarian,
+  target setup, hotRel). `hf` = `SolvePull` for `N/3` expansions, `bestTarget()` (frontier best + `PullTail`), then toward for the rest
+  while a drain loop empties the pull mailbox (`pullCheckMail`, now available as `PullMeetCheckMail`).
+* Prerequisites now in place: meet network, pull lane with perimeter + tails, `DiagDead`. Remaining: the macro-engine target mode and
+  the Hungarian matcher, validated by `bench/lane-parity.py hf "" N` (solved, pushes, expanded, stored, generated, duplicates) against Go's
+  deterministic `-strategy hf -nodes N`.
+* Hub lanes additionally need `pullfest.go` (`pfOn` Festival-order pull, 400 lines), `hubrace.go`/`hubstrata.go`/`hubgen.go`/`hub.go`
+  (~2.8k lines), `fess_toward.go` retarget machinery (`RetargetReuse`, previous trees), see the scope table above. Not started.

@@ -76,3 +76,11 @@ Dependencies in Go: `reach`, `cluster`, `diagdead`, `sidedead`, `soloracle`, `me
 - [x] stages 1-5, 6a-6g with exact parity (fingerprint + end-to-end vs unpatched Go on testdata; LTS-42 41/41 + 1 skip)
 - [ ] speed: per-candidate open() on wide levels (~2x Go), plan4 box loop on 50+-box levels (~2.5x Go): word-parallel goal-area/move-access/hot rows, LazyChild, incremental roomConnChild
 - [ ] memory-governed revive ring + elastic memory for the macro lane (portfolio)
+
+## Meetings / toward / hub (tenth fork)
+- [x] meet network (Table/Meeting/Complete/Target) + hooks in full, macro, novelty, reverse, pull lanes; portfolio `Meet` option, `-no-meet`
+- [x] `DiagDead` port (toward-family prune) — unit goldens still to add
+- [ ] macro-engine target mode (setTarget/hotRel/hfMatch/onTarget/completeTarget) + Hungarian -> `toward`/`hf` (parity vs `-strategy hf -nodes N`)
+- [ ] `Best` target publishing from pull (`publishPullBest`) and reverse lanes -> `toward` portfolio lane
+- [ ] pfOn (Festival-order pull), hubrace/hubstrata -> `hub-pull`; hubgen/hub/hfsched -> `hub-gen`/`hub`
+- [ ] candidate-ref meetings (pendCands/refGet) for lazily generated children
