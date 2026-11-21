@@ -6,6 +6,7 @@ public sealed unsafe partial class FullSolver
     // row(y): floor-index bitset of box squares whose reachable-goal set shrinks if y becomes a permanent wall
     // (union over goals g of T_g \ T'_g(y) \ {y}, T_g = push-reachability tree of g, T' with y walled as cell and as support).
     readonly Dictionary<int, ulong[]> hotRows = new();
+    bool hotGoalFree;   // fa2: goals are neither blockers nor victims (Festival's relation); set before the first row is built
     uint[]? hotSeen; uint hotStamp; int[]? hotQ;
 
     ulong[] HotRow(int blocker)
@@ -37,6 +38,11 @@ public sealed unsafe partial class FullSolver
             }
             for (int c = 0; c < cells; c++)
                 if (c != blocker && goalDist[gbase + c] >= 0 && hotSeen[c] != st) { int f = nodes.Fidx[c]; row[f >> 6] |= 1UL << (f & 63); }
+        }
+        if (hotGoalFree)
+        {
+            if (goal[blocker]) Array.Clear(row);
+            else foreach (int g in goals) { int fi = nodes.Fidx[g]; row[fi >> 6] &= ~(1UL << (fi & 63)); }
         }
         hotRows[blocker] = row;
         return row;

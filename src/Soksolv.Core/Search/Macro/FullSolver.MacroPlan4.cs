@@ -17,6 +17,23 @@ public sealed unsafe partial class FullSolver
         public List<Entry> E = new();
         public int InitNum;
         public int Mode = 1;
+        public bool[]? FestTo;                       // fa2: cells that are some entry's target (Go festTo)
+        public List<(int cell, int until)> OopPark = new(); // Go oopPark (planner v2): extra out-of-plan targets
+
+        /// <summary>Festival next_parking_place semantics (Go festPlan.nextParking): first plan entry still missing, or -1.</summary>
+        public int NextParking(bool[] occ)
+        {
+            int n = E.Count;
+            for (int i = 0; i < InitNum; i++) if (E[i].Until == -1 && !occ[E[i].To]) return -1;
+            int packed = n;
+            for (int i = n - 1; i >= InitNum; i--)
+            {
+                if (occ[E[i].To]) continue;
+                if (E[i].Until == -1 || E[i].Until >= packed) packed = i;
+            }
+            if (packed >= n) return -1;
+            return E[packed].To;
+        }
 
         public void RecomputeUntil()
         {

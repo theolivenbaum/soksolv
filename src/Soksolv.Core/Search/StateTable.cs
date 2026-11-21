@@ -98,6 +98,16 @@ public sealed unsafe class StateTable : IDisposable
         table[slot] = ((ulong)fp << 32) | (uint)(id + 1);
         return id;
     }
+    /// <summary>Appends a node record without indexing it (fa2 keeps its own duplicate filter and may hold equal states several times).</summary>
+    public int AppendUnindexed(ulong* key, int player)
+    {
+        int id = Rec.Alloc();
+        byte* r = Rec.At(id);
+        Buffer.MemoryCopy(key, r, Nw * 8, Nw * 8);
+        *(ushort*)(r + fo + OPlayer) = (ushort)player;
+        *(int*)(r + fo + OMv) = -1;
+        return id;
+    }
     public bool NeedsGrow => (long)Rec.Count * 4 >= (long)(tmask + 1) * 3;
     public void Grow()
     {

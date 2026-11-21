@@ -163,7 +163,7 @@ public sealed unsafe partial class FullSolver
         if (pull) // Festival's backward HF order: progress is how far the boxes have spread from the goals
         {
             long sp = 0;
-            foreach (int c in nodes.Fcell) if (occ[c]) sp += spreadDist[c];
+            foreach (int fc in nodes.Fcell) if (occ[fc]) sp += spreadDist[fc];
             return (int)(sp / SpreadBucket);
         }
         if (mPlan != null) return mPlan.Fest != null && mPlan.FestPacked ? mPlan.Fest.Packed(occ) : mPlan.Status(occ).packed;
@@ -434,7 +434,7 @@ public sealed unsafe partial class FullSolver
                         return true;
                     }
                 }
-                else if (!MVisit(k, nc, cur)) return false;
+                else if (!(fa2On ? Fa2Visit(k, nc, cur) : MVisit(k, nc, cur))) return false;
                 for (int d2i = 0; d2i < 4; d2i++)
                 {
                     int k2 = nc * 4 + d2i;

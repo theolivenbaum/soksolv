@@ -440,12 +440,16 @@ public sealed unsafe partial class FullSolver
             SetOcc(b, true);
         }
         if (h0 == 0) { Array.Clear(occ); return new SolveResult { Solved = true }; }
-        int p0 = Reach(lv.Player, mark);
-        uint st0 = stamp;
-        for (int x = 0; x < nodes.Nw; x++) ckey[x] = 0;
-        foreach (int b in start) Flip(b);
-        int root = MAdd(nodes.HashOf(start, p0), p0, -1, -1, -1, -1, 0, h0, 0, -1, start);
-        if (root >= 0) { MOpen(root, start, h0, st0); PropagateDead(root); MEnqueue(root); }
+        int[] rootCells = pull ? pullRoots : [lv.Player]; // pull: one root per player zone of the solved position
+        foreach (int rp in rootCells)
+        {
+            int p0 = Reach(rp, mark);
+            uint st0 = stamp;
+            for (int x = 0; x < nodes.Nw; x++) ckey[x] = 0;
+            foreach (int b in start) Flip(b);
+            int root = MAdd(nodes.HashOf(start, p0), p0, -1, -1, -1, -1, 0, h0, 0, -1, start);
+            if (root >= 0) { MOpen(root, start, h0, st0); PropagateDead(root); MEnqueue(root); }
+        }
         mBest = 0;
         mSearchStartMs = mLastImproveMs = clock.ElapsedMilliseconds;
         foreach (int b in start) SetOcc(b, false);
@@ -505,6 +509,20 @@ public sealed unsafe partial class FullSolver
             foreach (int b in cur) SetOcc(b, false);
             if (cid < 0) continue;
             MNoteBest(cid);
+            if (ch == 0 && pull)
+            {
+                // all boxes on start squares: solved if the real player is in this state's region too
+                foreach (int b in child) SetOcc(b, true);
+                Reach(nodes.Player(cid), mark);
+                bool home = mark[realPlayer] == stamp;
+                foreach (int b in child) SetOcc(b, false);
+                if (home)
+                {
+                    string psol = PullSolution(cid);
+                    if (psol.Length > 0) return new SolveResult { Solved = true, Solution = psol, Nodes = expanded };
+                }
+                ch = -1; // not the start position; keep searching
+            }
             if (ch == 0)
             {
                 string sol = MReconstruct(cid);

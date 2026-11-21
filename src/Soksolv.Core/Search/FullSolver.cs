@@ -42,6 +42,8 @@ public sealed class FullOptions
     public bool PlanAlt;
     /// <summary>Go -macro-alt-plan (default on): the macro lane runs a second engine on the alt plan4 config, alternating on a baton.</summary>
     public bool MacroAlt = true;
+    /// <summary>fa2 lane settings (Go FA2* flags, defaults as in Go).</summary>
+    public Fa2Options Fa2 = new();
     public FullOptions Clone() => (FullOptions)MemberwiseClone();
     public double StallScale = 1.0;
 }
