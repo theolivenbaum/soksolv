@@ -83,7 +83,7 @@ public struct MacroAux
     public ushort Reg;
     public byte Dead;
     // rev-groups (exp-290)
-    public int RevGroup, RevOffset; public ushort RevSize, PushTo; public short RevBestExit;
+    public int RevGroup, RevOffset, NovOffset; public ushort RevSize, PushTo; public short RevBestExit;
     public FeatureCell Actual;
 }
 

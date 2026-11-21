@@ -38,6 +38,8 @@ public sealed class FullOptions
     public bool StallFinish = true;
     /// <summary>Pull mode (Go pull lane): the macro engine run backward on a pull view of the level (see Pull/FullSolver.Pull.cs).</summary>
     public bool Pull;
+    /// <summary>Novelty lane (Go solver.novelty = 100): at most this many novel moves per opened node cost nothing (0: off).</summary>
+    public int Novelty;
     /// <summary>Macro alt engine (exp-769): plan4 with festsink + roomsep + keep-parks 1.</summary>
     public bool PlanAlt;
     /// <summary>Go -macro-alt-plan (default on): the macro lane runs a second engine on the alt plan4 config, alternating on a baton.</summary>
