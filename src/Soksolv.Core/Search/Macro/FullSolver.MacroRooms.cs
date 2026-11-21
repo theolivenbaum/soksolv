@@ -22,6 +22,8 @@ public sealed unsafe partial class FullSolver
     int[] rmRoomBase = [], rmFbStart = []; (int cell, int kind)[] rmFbEdge = [];
     int[] rmCompRep = []; uint[] rmCompRepSt = []; uint rmRepStamp;
     int[] rmDsu = []; ulong[] rmFragTouch = [];
+    int[] rmFlat = [], rmFbCell = [], rmFbKind = [], rmFbStartPin = [], rmRoomLen = [];
+    int* rmLabP, rmRepP, rmDsuP, rmFlatP, rmFbCellP, rmFbKindP, rmFbStartP; ulong* rmTouchP, rmFragP; uint* rmRepStP;
     uint[] rmSeen = []; uint rmStamp; int[] rmQueue = [], rmStack = [];
 
     bool HasRooms => MacroStage >= 2 && rmRooms.Length > 0;
@@ -63,13 +65,13 @@ public sealed unsafe partial class FullSolver
         // initFast
         int maxc = 0;
         rmLoc = new int[cells];
-        rmLab = new int[cells];
+        rmLab = GC.AllocateArray<int>(cells, pinned: true);
         foreach (var rc in rmRooms) { maxc = Math.Max(maxc, rc.Length); for (int i = 0; i < rc.Length; i++) rmLoc[rc[i]] = i; }
         var corr = new List<int>();
         for (int c = 0; c < cells; c++) if (rmCell[c] < 0 && !wall[c]) corr.Add(c);
         rmCorr = corr.ToArray();
-        rmTouch = new ulong[(rmCorr.Length + 16) * Math.Max(1, rmNw)];
-        rmCompRep = new int[rmCorr.Length + 16]; rmCompRepSt = new uint[rmCorr.Length + 16];
+        rmTouch = GC.AllocateArray<ulong>((rmCorr.Length + 16) * Math.Max(1, rmNw), pinned: true);
+        rmCompRep = GC.AllocateArray<int>(rmCorr.Length + 16, pinned: true); rmCompRepSt = GC.AllocateArray<uint>(rmCorr.Length + 16, pinned: true);
         var nbStart = new List<int>(); var nbCell = new List<int>(); var nbKind = new List<int>(); var roomBase = new List<int>();
         for (int r = 0; r < nr; r++)
         {
@@ -100,8 +102,29 @@ public sealed unsafe partial class FullSolver
             }
         fbStart.Add(fbEdge.Count);
         rmFbStart = fbStart.ToArray(); rmFbEdge = fbEdge.ToArray();
-        rmDsu = new int[Math.Max(1, maxc)]; rmFragTouch = new ulong[Math.Max(1, maxc) * Math.Max(1, rmNw)];
+        rmDsu = GC.AllocateArray<int>(Math.Max(1, maxc), pinned: true); rmFragTouch = GC.AllocateArray<ulong>(Math.Max(1, maxc) * Math.Max(1, rmNw), pinned: true);
+        // flat pinned views for the single-word room kernel (<= 64 rooms)
+        rmFlat = GC.AllocateArray<int>(Math.Max(1, rmRooms.Sum(x => x.Length)), pinned: true);
+        { int o = 0; for (int r = 0; r < nr; r++) foreach (int c in rmRooms[r]) rmFlat[o++] = c; }
+        rmFbCell = GC.AllocateArray<int>(Math.Max(1, rmFbEdge.Length), pinned: true); rmFbKind = GC.AllocateArray<int>(Math.Max(1, rmFbEdge.Length), pinned: true);
+        for (int e = 0; e < rmFbEdge.Length; e++) { rmFbCell[e] = rmFbEdge[e].cell; rmFbKind[e] = rmFbEdge[e].kind; }
+        rmFbStartPin = GC.AllocateArray<int>(rmFbStart.Length, pinned: true); Array.Copy(rmFbStart, rmFbStartPin, rmFbStart.Length);
+        rmRoomLen = new int[nr]; for (int r = 0; r < nr; r++) rmRoomLen[r] = rmRooms[r].Length;
+        rmLabP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmLab[0]); rmTouchP = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmTouch[0]);
+        rmRepP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmCompRep[0]); rmRepStP = (uint*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmCompRepSt[0]);
+        rmDsuP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmDsu[0]); rmFragP = (ulong*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFragTouch[0]);
+        rmFlatP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFlat[0]); rmFbCellP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFbCell[0]);
+        rmFbKindP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFbKind[0]); rmFbStartP = (int*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref rmFbStartPin[0]);
         rmSeen = new uint[cells]; rmQueue = new int[cells]; rmStack = new int[cells];
+        rmIn4 = new bool[cells];
+        for (int c = 0; c < cells; c++)
+        {
+            int r0 = rmCell[c];
+            if (r0 < 0) continue;
+            rmIn4[c] = true;
+            foreach (int d in dirs) { int y = c + d; if (!wall[y] && rmCell[y] != r0) rmIn4[c] = false; }
+        }
+        rmFragRoot = new int[nbStart.Count - 1]; rmFragRow = new ulong[nbStart.Count - 1];
         // direct room neighbours with no boxes (occ is empty here)
         for (int r = 0; r < nr; r++)
             if (rmRooms[r].Length > 0) RoomWalk(r, rmRooms[r][0]);
@@ -170,8 +193,73 @@ public sealed unsafe partial class FullSolver
     }
 
     /// <summary>Broken directed edges from the empty fragments of room r (Go roomBrokenFast), given the current corridor labelling.</summary>
+    /// <summary>RoomBroken for at most 64 rooms (one touch word per fragment): pointer kernel with inlined find/union (Go roomFrag1).</summary>
+    int RoomBroken1(int r)
+    {
+        int bse = rmRoomBase[r], n = rmRoomLen[r];
+        int* cl = rmFlatP + bse; int* dsu = rmDsuP; ulong* rows = rmFragP; byte* bk = blk;
+        int* fbs = rmFbStartP + bse;
+        int* lab = rmLabP; ulong* touch = rmTouchP; int* rep = rmRepP; uint* repSt = rmRepStP;
+        uint rs = ++rmRepStamp;
+        if (rs == 0) { Array.Clear(rmCompRepSt); rs = rmRepStamp = 1; }
+        int free = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (bk[cl[i]] != 0) continue;
+            free++;
+            dsu[i] = i; rows[i] = 0;
+            for (int e = fbs[i], eEnd = fbs[i + 1]; e < eEnd; e++)
+            {
+                int y = rmFbCellP[e];
+                if (bk[y] != 0) continue;
+                int kd = rmFbKindP[e];
+                if (kd >= 0)
+                {
+                    if (kd < i)
+                    {
+                        int ra = i, rb = kd;
+                        while (dsu[ra] != ra) { dsu[ra] = dsu[dsu[ra]]; ra = dsu[ra]; }
+                        while (dsu[rb] != rb) { dsu[rb] = dsu[dsu[rb]]; rb = dsu[rb]; }
+                        if (ra != rb) { dsu[ra] = rb; rows[rb] |= rows[ra]; }
+                    }
+                }
+                else if (kd == -1)
+                {
+                    int k = lab[y];
+                    int ri = i;
+                    while (dsu[ri] != ri) { dsu[ri] = dsu[dsu[ri]]; ri = dsu[ri]; }
+                    rows[ri] |= touch[k];
+                    if (repSt[k] == rs)
+                    {
+                        int ra = i, rb = rep[k];
+                        while (dsu[ra] != ra) { dsu[ra] = dsu[dsu[ra]]; ra = dsu[ra]; }
+                        while (dsu[rb] != rb) { dsu[rb] = dsu[dsu[rb]]; rb = dsu[rb]; }
+                        if (ra != rb) { dsu[ra] = rb; rows[rb] |= rows[ra]; }
+                    }
+                    else { repSt[k] = rs; rep[k] = i; }
+                }
+                else
+                {
+                    int ri = i;
+                    while (dsu[ri] != ri) { dsu[ri] = dsu[dsu[ri]]; ri = dsu[ri]; }
+                    rows[ri] |= 1UL << (-2 - kd);
+                }
+            }
+        }
+        ulong edge = rmEdgeBits[r];
+        if (free == 0) return BitOperations.PopCount(edge);
+        int broken = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (bk[cl[i]] != 0 || dsu[i] != i) continue;
+            broken += BitOperations.PopCount(edge & ~rows[i]);
+        }
+        return broken;
+    }
+
     int RoomBroken(int r)
     {
+        if (rmNw == 1) return RoomBroken1(r);
         int nw = rmNw;
         var cellsR = rmRooms[r]; int bse = rmRoomBase[r];
         int eb = r * nw;
@@ -215,6 +303,7 @@ public sealed unsafe partial class FullSolver
     }
 
     // ---- incremental room connectivity (Go roomConnParent / roomConnChild) ----------------------------------------------------------
+    bool[] rmIn4 = []; int[] rmFragRoot = []; ulong[] rmFragRow = [];   // interior-move shortcut (Go in4 / fragRoot / fragRow)
     int[] rmShare = []; int rmParentTotal; ulong[] rmAff = []; int[] rmUndo = new int[64]; int rmUndoN;
     public static bool CheckRooms = Environment.GetEnvironmentVariable("SOKSOLV_CHECK_ROOMS") == "1";
 
@@ -225,9 +314,89 @@ public sealed unsafe partial class FullSolver
         if (rmShare.Length != rmRooms.Length) { rmShare = new int[rmRooms.Length]; rmAff = new ulong[Math.Max(1, rmNw)]; }
         LabelCorridors();
         int total = 0;
-        for (int r = 0; r < rmRooms.Length; r++) { rmShare[r] = RoomBroken(r); total += rmShare[r]; }
+        for (int r = 0; r < rmRooms.Length; r++)
+        {
+            rmShare[r] = RoomBroken(r); total += rmShare[r];
+            if (rmNw == 1) RmKeepFrags(r);
+        }
         rmParentTotal = total;
         return total;
+    }
+
+    /// <summary>Records room r's fragments just computed by RoomBroken (Go keepFrags).</summary>
+    void RmKeepFrags(int r)
+    {
+        var cellsR = rmRooms[r]; int bse = rmRoomBase[r];
+        for (int i = 0; i < cellsR.Length; i++)
+        {
+            if (occ[cellsR[i]]) continue;
+            int x = i;
+            while (rmDsu[x] != x) x = rmDsu[x];
+            rmFragRoot[bse + i] = x;
+            if (x == i) rmFragRow[bse + i] = rmFragTouch[i];
+        }
+    }
+
+    /// <summary>Go roomInteriorMove: the box on b moved to t, both interior cells of one room (occ holds the child): only that room changes, settled from the opened node's fragments; false when a split is possible.</summary>
+    bool RmInteriorMove(int b, int t, out int result)
+    {
+        result = 0;
+        int r = rmCell[t];
+        ulong edge = rmEdgeBits[r];
+        int bse = rmRoomBase[r];
+        int w = W;
+        Span<bool> fr = stackalloc bool[8];
+        Span<int> ring = stackalloc int[8];
+        ring[0] = t - w; ring[1] = t - w + 1; ring[2] = t + 1; ring[3] = t + w + 1; ring[4] = t + w; ring[5] = t + w - 1; ring[6] = t - 1; ring[7] = t - w - 1;
+        int nfree = 0;
+        for (int k = 0; k < 8; k++)
+        {
+            int c = ring[k];
+            fr[k] = c != b && !occ[c] && !wall[c] && rmCell[c] == r;
+            if ((k & 1) == 0 && fr[k]) nfree++;
+        }
+        int share = rmShare[r];
+        if (nfree == 0) share -= BitOperations.PopCount(edge);
+        else if (nfree > 1)
+        {
+            int start = -1;
+            for (int k = 0; k < 8; k++) if (!fr[k]) { start = k; break; }
+            if (start >= 0)
+            {
+                int runs = 0;
+                for (int j = 1; j <= 8; j++)
+                {
+                    int k = (start + j) & 7;
+                    if (!fr[k]) continue;
+                    if (!fr[(k + 7) & 7])
+                    {
+                        bool has = false;
+                        for (int q = k; fr[q]; q = (q + 1) & 7) if ((q & 1) == 0) { has = true; break; }
+                        if (has) runs++;
+                    }
+                }
+                if (runs > 1) return false;
+            }
+        }
+        Span<int> roots = stackalloc int[4];
+        ulong rows = 0; int nr = 0, contrib = 0;
+        foreach (int d in dirs)
+        {
+            int c = b + d;
+            if (occ[c] || wall[c]) continue;
+            int x = rmFragRoot[bse + rmLoc[c]];
+            bool dup = false;
+            for (int j = 0; j < nr; j++) dup |= roots[j] == x;
+            if (dup) continue;
+            roots[nr++] = x;
+            ulong row = rmFragRow[bse + x];
+            rows |= row;
+            contrib += BitOperations.PopCount(edge & ~row);
+        }
+        if (nr == 0) share += BitOperations.PopCount(edge);
+        else if (nr > 1) share += BitOperations.PopCount(edge & ~rows) - contrib;
+        result = rmParentTotal - rmShare[r] + share;
+        return true;
     }
 
     void RmFlood(int c, ref int next, int k0)
@@ -263,6 +432,16 @@ public sealed unsafe partial class FullSolver
     {
         if (!HasRooms || rmRooms.Length < 2) return 0;
         if (b == t) return rmParentTotal;
+        if (rmNw == 1 && rmIn4[b] && rmIn4[t] && rmCell[b] == rmCell[t] && RmInteriorMove(b, t, out int fast))
+        {
+            if (CheckRooms)
+            {
+                int want = MRoomConnectivity();
+                if (want != fast) throw new InvalidOperationException($"interior room move {fast} != full {want} (b {b} t {t})");
+                SetOcc(t, false); SetOcc(b, true); LabelCorridors(); SetOcc(b, false); SetOcc(t, true);
+            }
+            return fast;
+        }
         int nw = rmNw;
         var aff = rmAff;
         for (int w = 0; w < nw; w++) aff[w] = 0;
