@@ -405,18 +405,25 @@ public sealed unsafe class ClusterChecker
         a[j] = v;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static Key MkKey(ReadOnlySpan<int> bx, int player)
     {
-        // boxes sorted ascending; cells < 32768 fit 16 bits; unused slots 0xFFFF
-        ulong lo = ulong.MaxValue, hi = ulong.MaxValue;
-        for (int i = 0; i < bx.Length; i++)
+        // boxes sorted ascending; cells < 32768 fit 16 bits; unused slots 0xFFFF; player in slot 7
+        int n = bx.Length;
+        ulong lo = 0, hi = 0;
+        if (n <= 4)
         {
-            int sh = (i & 3) * 16;
-            if (i < 4) lo = (lo & ~(0xFFFFUL << sh)) | ((ulong)(ushort)bx[i] << sh);
-            else hi = (hi & ~(0xFFFFUL << sh)) | ((ulong)(ushort)bx[i] << sh);
+            for (int i = 0; i < n; i++) lo |= (ulong)(ushort)bx[i] << (i * 16);
+            lo |= ulong.MaxValue << (n * 16 & 63) & (n == 4 ? 0UL : ulong.MaxValue);
+            hi = 0x0000FFFFFFFFFFFFUL;
         }
-        // player in the last slot (index 7)
-        hi = (hi & ~(0xFFFFUL << 48)) | ((ulong)(ushort)player << 48);
+        else
+        {
+            for (int i = 0; i < 4; i++) lo |= (ulong)(ushort)bx[i] << (i * 16);
+            for (int i = 4; i < n; i++) hi |= (ulong)(ushort)bx[i] << ((i - 4) * 16);
+            hi |= 0x0000FFFFFFFFFFFFUL << ((n - 4) * 16) & 0x0000FFFFFFFFFFFFUL;
+        }
+        hi |= (ulong)(ushort)player << 48;
         return new Key { Lo = lo, Hi = hi };
     }
 
@@ -470,7 +477,8 @@ public sealed unsafe class ClusterChecker
             if (seenCount > capStates) { NCap++; StCap += head; return (false, 0); }
             if (Prof.On) Prof.Calls[14]++;
             var st = cq[head]; int depth = cdepth[head];
-            for (int i = 0; i < n; i++) cur[i] = (int)((i < 4 ? st.Lo >> (i * 16) : st.Hi >> ((i - 4) * 16)) & 0xFFFF);
+            int off = 0;
+            for (int i = 0; i < n; i++) { cur[i] = (int)((i < 4 ? st.Lo >> (i * 16) : st.Hi >> ((i - 4) * 16)) & 0xFFFF); if (goalP[cur[i]] == 0) off++; }
             int stp = (int)((st.Hi >> 48) & 0xFFFF);
             for (int i = 0; i < n; i++) Block(cur[i]);
             Region(stp);
@@ -492,11 +500,9 @@ public sealed unsafe class ClusterChecker
             {
                 ref var m = ref moves[mi];
                 cur.CopyTo(nb);
+                if (off - (goalP[m.From] == 0 ? 1 : 0) + (goalP[m.To] == 0 ? 1 : 0) == 0) { NAlive++; StAlive += head; return (false, depth + 1); }
                 MoveSorted(nb, m.I, m.To);
-                bool done = true;
-                for (int i = 0; i < n; i++) if (goalP[nb[i]] == 0) { done = false; break; }
-                if (done) { NAlive++; StAlive += head; return (false, depth + 1); }
-                int np = ResolveNp(m.Np, m.From, nb);
+                int np = m.Np >= 0 && !CheckFast ? m.Np : ResolveNp(m.Np, m.From, nb);
                 TryAdd(MkKey(nb, np), depth + 1);
             }
         }

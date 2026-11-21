@@ -625,31 +625,36 @@ public sealed unsafe partial class FullSolver
         if (maxR < 0 || nodes.Parent(id) < 0) return null;
         int moved = nodes.From(id) + dirs[nodes.Dir(id)];
         if (macros.TryGetValue(id, out var seq0)) { var last = seq0[^1]; moved = last.From + dirs[last.Dir]; }
-        List<Push[]>? res = null;
+        int nres = 0;
+        mmScratch ??= new Push[]?[Math.Max(1, cur.Length)];
         foreach (int b in cur)
         {
             if (b != moved || !entrance[b]) continue;
             var seq = BoxPath(b, maxR, st);
-            if (seq != null) { stats.Macros++; (res ??= new()).Add(seq); }
+            if (seq != null) { stats.Macros++; mmScratch[nres++] = seq; }
         }
-        return res?.ToArray();
+        if (nres == 0) return null;
+        var res = new Push[nres][];
+        for (int k = 0; k < nres; k++) { res[k] = mmScratch[k]!; mmScratch[k] = null; }
+        return res;
     }
 
+    Push[]?[]? mmScratch; int[]? bpQ;
     Push[]? BoxPath(int b, int maxR, uint st)
     {
         const int limit = 500;
         if (pstamp > 1u << 31 || bstamp > 1u << 31) { Array.Clear(mark3); Array.Clear(bseenStamp); pstamp = bstamp = 0; }
         uint bs = ++bstamp;
-        var q = new List<int>();
+        var q = bpQ ??= new int[4 * 500 + 8]; int qn = 0;
         for (int di = 0; di < 4; di++)
         {
             int d = dirs[di];
-            if (mark[b - d] == st) { int k = b * 4 + di; bseenStamp[k] = bs; bprev[k] = -1; q.Add(k); }
+            if (mark[b - d] == st) { int k = b * 4 + di; bseenStamp[k] = bs; bprev[k] = -1; q[qn++] = k; }
         }
         SetOcc(b, false);
         try
         {
-            for (int i = 0; i < q.Count && i < limit; i++)
+            for (int i = 0; i < qn && i < limit; i++)
             {
                 int k = q[i];
                 int c = k / 4, di = k % 4;
@@ -657,10 +662,11 @@ public sealed unsafe partial class FullSolver
                 if (wall[nc] || occ[nc] || dist[nc] < 0) continue;
                 if (goal[nc] && round[nc] == maxR)
                 {
-                    var seq = new List<Push>();
-                    for (; k >= 0; k = bprev[k]) seq.Add(new Push(k / 4, (sbyte)(k % 4)));
-                    seq.Reverse();
-                    return seq.ToArray();
+                    int len = 0;
+                    for (int kk = k; kk >= 0; kk = bprev[kk]) len++;
+                    var seq = new Push[len];
+                    for (int j = len - 1; k >= 0; k = bprev[k], j--) seq[j] = new Push(k / 4, (sbyte)(k % 4));
+                    return seq;
                 }
                 SetOcc(nc, true);
                 uint ps = ++pstamp;
@@ -678,7 +684,7 @@ public sealed unsafe partial class FullSolver
                 for (int d2i = 0; d2i < 4; d2i++)
                 {
                     int k2 = nc * 4 + d2i;
-                    if (mark3[nc - dirs[d2i]] == ps && bseenStamp[k2] != bs) { bseenStamp[k2] = bs; bprev[k2] = k; q.Add(k2); }
+                    if (mark3[nc - dirs[d2i]] == ps && bseenStamp[k2] != bs) { bseenStamp[k2] = bs; bprev[k2] = k; q[qn++] = k2; }
                 }
             }
             return null;
