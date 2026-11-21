@@ -514,7 +514,7 @@ public sealed unsafe partial class FullSolver
             var (mob, expl, accS, accL) = MacroStage >= 5 && !pfOn ? MMoveAccess(cur, i, t) : (0, false, 0, 0);
             Prof.Stop(3, tp);
             tp = Prof.Start();
-            int room = pfOn ? 0 : t == cur[i] ? mParentRoom : MRoomConnChild(cur[i], t), packed, oop, progress = -2;
+            int room = pfOn || hfRank ? 0 : t == cur[i] ? mParentRoom : MRoomConnChild(cur[i], t), packed, oop, progress = -2;
             Prof.Stop(1, tp);
             if (mPlan != null)
             {
