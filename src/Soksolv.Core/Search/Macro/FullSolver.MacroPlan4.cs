@@ -1261,6 +1261,198 @@ public sealed unsafe partial class FullSolver
             if (fails >= 10000) Exhausted = true;
         }
 
+
+        // ---- planner v2 (Go packing_plan2.go planner2: fa2's own planner, exp-411) ------------------------------------------------------
+        public const int V2Beam = 48;
+
+        /// <summary>planner2's goal-distance score: pull distance to the NEAREST goal (planner4 sums over all goals).</summary>
+        public void UseV2Distance()
+        {
+            Array.Fill(distance, -1);
+            var q = new List<int>();
+            foreach (int g in s.goals) { distance[g] = 0; q.Add(g); }
+            for (int i = 0; i < q.Count; i++)
+                foreach (int d in dirs)
+                {
+                    int x = q[i] + d;
+                    if (!wall[x] && distance[x] < 0) { distance[x] = distance[q[i]] + 1; q.Add(x); }
+                }
+            for (int i = 0; i < distance.Length; i++) distance[i] = Math.Max(distance[i], 0);
+        }
+
+        /// <summary>Go planner2.expand: removals when any box can reach an unused base (only those), else the best V2Beam plain pulls.</summary>
+        void ExpandV2(int id)
+        {
+            expGen++;
+            ref var nd0 = ref nodes[id];
+            int nbx = nd0.Nb; if (boxesBuf.Length < nbx) boxesBuf = new int[nbx * 2];
+            Boxes(id).CopyTo(boxesBuf); var boxes = new ReadOnlySpan<int>(boxesBuf, 0, nbx);
+            SetOcc(id);
+            var used = Used(id);
+            var (_, parentStamp) = Flood(nd0.Player);
+            pg++;
+            CutNewNode();
+            for (int i = 0; i < qlen; i++) pgen[queue[i]] = pg;
+            free.Clear();
+            for (int t = 0; t < baseCell.Length; t++) if ((used[t >> 6] >> (t & 63) & 1) == 0) free.Add(t);
+            cands.Clear(); remN = 0; region0.Clear();
+            Array.Clear(demand);
+            foreach (int t in free) for (int i = 0; i < nbx; i++) if (CanReach(t, boxes[i])) demand[t]++;
+            int aw = reach[0].Length;
+            if (alive.Length < aw) alive = new ulong[aw];
+            Array.Clear(alive);
+            foreach (int t in free) for (int w = 0; w < aw; w++) alive[w] |= reach[t][w];
+            var usedArr = used.ToArray();
+            bool IsFree(int t) => t >= 0 && (usedArr[t >> 6] >> (t & 63) & 1) == 0;
+            var reachBases = new List<int>();
+            for (int bi = 0; bi < nbx; bi++)
+            {
+                int b = boxes[bi];
+                if ((bi & 7) == 7 && Stopped()) break;
+                reachBases.Clear();
+                { int t0 = baseAt[b]; if (IsFree(t0)) reachBases.Add(t0); }
+                boxGen++; uint g = boxGen;
+                int qc = 0; var q = pullQ;
+                for (int di = 0; di < 4; di++)
+                {
+                    int d = dirs[di];
+                    if (pgen[b + d] == pg) { int kk = b * 4 + di; q[qc++] = kk; seenK[kk] = g; }
+                }
+                CutBegin(b);
+                SetOccCell(b, false);
+                for (int qi = 0; qi < qc; qi++)
+                {
+                    int kq = q[qi]; int c = kq / 4, d = dirs[kq % 4];
+                    int to = c + d, player = c + 2 * d;
+                    if (wall[to] || occ[to] || wall[player] || occ[player]) continue;
+                    var (np, sides) = Query(to, player);
+                    for (int di = 0; di < 4; di++)
+                    {
+                        int k2 = to * 4 + di;
+                        if ((sides & (1 << di)) != 0 && seenK[k2] != g) { seenK[k2] = g; q[qc++] = k2; }
+                    }
+                    int t = baseAt[to];
+                    if (IsFree(t)) { reachBases.Add(t); continue; }
+                    if ((alive[to >> 6] >> (to & 63) & 1) == 0) continue;
+                    if (!NewEnd(to, np, g)) continue;
+                    cands.Add(new P2Cand { Box = bi, To = to, Player = np, Pieces = Pieces(to) });
+                }
+                if (reachBases.Count > 0)
+                {
+                    reachBases.Sort((a, c2) => demand[a] != demand[c2] ? demand[a] - demand[c2] : a - c2);
+                    int chosen = -1;
+                    for (int ti = 0; ti < reachBases.Count; ti++)
+                    {
+                        if (ti >= 64) break;
+                        if (!matchOn || MatchSkip(boxes, bi, reachBases[ti])) { chosen = reachBases[ti]; break; }
+                    }
+                    if (chosen >= 0)
+                    {
+                        ref var nd = ref nodes[id];
+                        int np = Flood(nd.Player).norm;      // the box is gone: the player's region is its component in the board without it
+                        int regions = Regions();             // box b is off the board
+                        int goals = nd.Goals; if (goal[b]) goals--;
+                        int dist = nd.Dist - distance[b];
+                        var ch = new P2Child { From = b, To = baseCell[chosen], Player = np, Base = chosen };
+                        ch.Hash = nd.Hash ^ zb[b] ^ zp[nd.Player] ^ zp[np] ^ zu[chosen];
+                        ch.Key = Key(nd.Nb - 1, regions, goals, dist, 0);
+                        if (remN == rem.Length) Array.Resize(ref rem, remN * 2);
+                        rem[remN++] = ch;
+                    }
+                }
+                region0.Add(Regions());
+                SetOccCell(b, true);
+            }
+            ref var nd1 = ref nodes[id];
+            if (remN > 0)
+            {
+                SortKids(rem, remN);
+                nd1.CLen = remN;
+                nd1.COff = PutKids(rem, remN);
+                return;
+            }
+            beamN = 0;
+            int K = V2Beam;
+            if (beam.Length < K + 1) beam = new P2Child[K + 1];
+            foreach (var c in cands)
+            {
+                int b = boxes[c.Box];
+                int regions = region0[c.Box] - 1 + c.Pieces;
+                int goals = nd1.Goals; if (goal[b]) goals--; if (goal[c.To]) goals++;
+                int dist = nd1.Dist - distance[b] + distance[c.To];
+                ulong key = Key(nd1.Nb, regions, goals, dist, 0);
+                if (beamN >= K && key >= beam[beamN - 1].Key) continue;
+                var ch = new P2Child { Key = key, From = b, To = c.To, Player = c.Player, Base = -1 };
+                ch.Hash = nd1.Hash ^ zb[b] ^ zb[c.To] ^ zp[nd1.Player] ^ zp[c.Player];
+                int i = beamN;
+                if (i < K) beam[beamN++] = ch; else i--;
+                for (; i > 0 && beam[i - 1].Key > key; i--) beam[i] = beam[i - 1];
+                beam[i] = ch;
+            }
+            nd1.COff = PutKids(beam, beamN);
+            nd1.CLen += beamN;
+        }
+
+        /// <summary>Go planner2.run: best-first over (key, seq); returns the best witness (complete when every box was consumed).</summary>
+        public PackingPlan? RunV2()
+        {
+            for (int c = 0; c < cells; c++) if (occ[c]) { occ[c] = false; blk[c] = (byte)(wall[c] ? 1 : 0); }
+            foreach (int g in s.goals) SetOccCell(g, true);
+            var roots = new List<int>(); var covered = new bool[cells];
+            foreach (int c in floorCells)
+                if (!occ[c] && !covered[c])
+                {
+                    var (norm, st) = Flood(c);
+                    roots.Add(norm);
+                    for (int i = 0; i < qlen; i++) if (mark[queue[i]] == st) covered[queue[i]] = true;
+                }
+            if (roots.Count == 0) return null;
+            int gsum = 0; foreach (int g in s.goals) gsum += distance[g];
+            foreach (int r in roots)
+            {
+                ulong h = zp[r]; foreach (int g in s.goals) h ^= zb[g];
+                EnsureBoxes(s.goals.Length);
+                int off = boxN; foreach (int g in s.goals) boxArena[boxN++] = g;
+                PushNode(new P2Node { Parent = -1, BOff = off, Nb = s.goals.Length, Player = r, Hash = h, Goals = s.goals.Length, Dist = gsum, MBase = -1, Key = Key(s.goals.Length, 1, s.goals.Length, gsum, 0) });
+                EnsureUsed(); Array.Clear(usedArena, usedN, nw); usedN += nw;
+                SeenInsert(h);
+                if (matchOn) SetOcc(nodeN - 1);
+            }
+            if (matchOn)
+            {
+                free.Clear(); for (int t = 0; t < baseCell.Length; t++) free.Add(t);
+                if (!MatchOK(Boxes(0), -1, -1)) matchOn = false;
+            }
+            var heap = v2Heap = new P2Heap();
+            int best = 0;
+            int nroots = nodeN;
+            for (int id = 0; id < nroots; id++)
+            {
+                if (nodes[id].Key < nodes[best].Key) best = id;
+                ExpandV2(id);
+                Expanded++;
+                if (nodes[id].CLen > 0) { seq++; heap.Push(new P2Entry { Key = KidKey(id, 0), Seq = seq, Node = id }); }
+            }
+            while (!Stopped() && nodes[best].Nb > 0 && Expanded < MaxExp && heap.Count > 0)
+            {
+                var e = heap.Pop();
+                ref var pn = ref nodes[e.Node];
+                var c = Kid(e.Node, pn.CNext);
+                pn.CNext++;
+                if (pn.CNext < pn.CLen) { seq++; heap.Push(new P2Entry { Key = KidKey(e.Node, pn.CNext), Seq = seq, Node = e.Node }); }
+                int id = AddNode(e.Node, c);
+                if (id < 0) continue;
+                if (nodes[id].Key < nodes[best].Key) best = id;
+                if (nodes[id].Nb == 0) { best = id; break; }
+                ExpandV2(id);
+                Expanded++;
+                if (nodes[id].CLen > 0) { seq++; heap.Push(new P2Entry { Key = KidKey(id, 0), Seq = seq, Node = id }); }
+            }
+            Best = best;
+            return Result(best);
+        }
+        P2Heap? v2Heap;
+
         public PackingPlan? Finish4()
         {
             var res = Result(Best);
@@ -1309,6 +1501,15 @@ public sealed unsafe partial class FullSolver
     // ---- plan4 entry points on the solver (Go buildPlan4x / newPlanner4 / planAnytime / stepPlan4 / endPlan4) ----------------------------
     Planner4 NewPlanner4(long deadlineMs, int maxNodes) =>
         new(this, deadlineMs, maxNodes, PlanAlt, PlanAlt, PlanAlt ? 1 : 0);
+
+    /// <summary>Go buildPlanV2Core (fa2's own planner): returns the best witness plan.</summary>
+    PackingPlan? BuildPlanV2(long deadlineMs, int maxNodes)
+    {
+        var p = new Planner4(this, deadlineMs, maxNodes, false, false, 0);
+        p.MaxExp = maxNodes;
+        p.UseV2Distance();
+        return p.RunV2();
+    }
 
     PackingPlan? EndPlan4(PackingPlan? res)
     {

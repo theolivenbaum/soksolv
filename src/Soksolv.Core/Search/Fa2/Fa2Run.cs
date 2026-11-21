@@ -226,5 +226,5 @@ public sealed unsafe partial class FullSolver
     }
 
     void Fa2SetupRooms() { }
-    PackingPlan? Fa2BuildPlanV2(long deadlineMs, int maxNodes) => null; // planner v2: later step
+    PackingPlan? Fa2BuildPlanV2(long deadlineMs, int maxNodes) => BuildPlanV2(deadlineMs, maxNodes);
 }
