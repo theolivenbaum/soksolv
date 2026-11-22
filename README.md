@@ -77,26 +77,23 @@ below are from one 4-core Xeon 2.1 GHz VM, Go 1.24 vs the AOT build, same levels
 | pull | 0.51 |
 | fa2 | 0.56 |
 
-### Whole portfolio, 10 s per board, full set (9771 distinct boards)
+### 10 s sweep vs a restricted Go (NOT the Go default portfolio)
 
-Every distinct board of the LTS and OTS collections, each solver run on one board at a time (Go's default
-portfolio vs the C# portfolio, 4-core VM), every solution verified. Full output in
-[`docs/full-benchmark.md`](docs/full-benchmark.md).
+Correction: this sweep compared the C# portfolio against Go run with only its `full` and `reverse` lanes
+(one thread each, 6000 MiB), the `go2` mode of `bench/fullrun.py`, not against Go's default all-lane
+portfolio. It is therefore **not** a like-for-like comparison with Go and should not be quoted as one. It
+only shows how the C# portfolio compares to those two Go lanes on a 4-core VM. All 9771 distinct boards,
+10 s each, every solution verified; full output in [`docs/full-benchmark.md`](docs/full-benchmark.md).
 
-| | Go | C# |
+| | Go (full + reverse lanes only) | C# (portfolio) |
 |---|---|---|
 | Solved (of 9771) | 7049 | 8735 |
 | Solved by only this solver | 8 | 1694 |
-| Solved by neither | 1028 | 1028 |
-| Time on the 7041 boards both solved | 4592 s | 1475 s (0.32x) |
-| Mean peak memory on those boards | 30.8 MB | 44.8 MB |
+| Time on the 7041 boards both solved | 4592 s | 1475 s |
 
-LTS (3259 boards): Go 2648, C# 3043. OTS (6512 boards): Go 4401, C# 5692.
-
-Caveats: the C# portfolio includes the `full` lane, which Go's default does not run (a `-no-full` comparison is
-still to do); a handful of boards are much slower than Go (worst: Small chessboards#22 10.3x, A.K.K.
-Informatika#17 9.2x, Grigr2001_100#40 5.7x); C# uses about 14 MB more memory because the `macros`/`nodeMacros`
-dictionaries are still on the GC heap. Single run per board at 10 s, so near-limit boards can flip either way.
+The like-for-like comparison against Go's full default portfolio is the 600 s run below (see
+[`docs/benchmark-600s.md`](docs/benchmark-600s.md) once available), which uses the settings of
+`.reference/benchmark` and compares with its published Go results.
 
 ## Status
 

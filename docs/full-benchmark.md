@@ -1,6 +1,6 @@
 # Full-set benchmark: Go vs C# (10 s per board, whole portfolio)
 
-All 9771 distinct boards of LTS + OTS, one board at a time per solver, batches of ~50 boards (Go then C# per batch), every solution verified with the Go checker. C# = AOT build at commit d8126c7. Go portfolio = default lanes (no `full` lane); the C# portfolio also runs `full`.
+All 9771 distinct boards of LTS + OTS, one board at a time per solver, batches of ~50 boards (Go then C# per batch), every solution verified with the Go checker. C# = AOT build at commit d8126c7. **Go side = `go2` mode: only the `full` and `reverse` lanes, one thread each, 6000 MiB. This is NOT Go's default all-lane portfolio, so this table is not a like-for-like comparison with Go.** The C# side is the default portfolio.
 
 ```
 === machine ===
