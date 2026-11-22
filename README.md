@@ -77,23 +77,26 @@ below are from one 4-core Xeon 2.1 GHz VM, Go 1.24 vs the AOT build, same levels
 | pull | 0.51 |
 | fa2 | 0.56 |
 
-### Whole portfolio, 10 s per board (partial: full-set run in progress)
+### Whole portfolio, 10 s per board, full set (9771 distinct boards)
 
-Every distinct board of the LTS and OTS collections, each solver run on one board at a time, every solution
-verified. Latest cumulative result after 2654 of about 9771 boards (batches 0-54 of 196):
+Every distinct board of the LTS and OTS collections, each solver run on one board at a time (Go's default
+portfolio vs the C# portfolio, 4-core VM), every solution verified. Full output in
+[`docs/full-benchmark.md`](docs/full-benchmark.md).
 
 | | Go | C# |
 |---|---|---|
-| Solved | 1927 | 2365 |
-| Solved by only this solver | 4 | 442 |
-| Time on boards both solved | 1269 s | 382 s (0.30x) |
-| Mean peak memory on those boards | 30 MB | 44 MB |
+| Solved (of 9771) | 7049 | 8735 |
+| Solved by only this solver | 8 | 1694 |
+| Solved by neither | 1028 | 1028 |
+| Time on the 7041 boards both solved | 4592 s | 1475 s (0.32x) |
+| Mean peak memory on those boards | 30.8 MB | 44.8 MB |
 
-LTS: Go 739, C# 834 of 898. OTS: Go 1188, C# 1531 of 1756.
+LTS (3259 boards): Go 2648, C# 3043. OTS (6512 boards): Go 4401, C# 5692.
 
-Caveats: the C# portfolio includes the `full` lane, which Go's default does not run; a few boards are slower
-than Go (worst ratios 2.6x to 5.7x); C# uses more memory because the `macros`/`nodeMacros` dictionaries are
-still on the GC heap. Final full-set numbers will replace this table when the run completes.
+Caveats: the C# portfolio includes the `full` lane, which Go's default does not run (a `-no-full` comparison is
+still to do); a handful of boards are much slower than Go (worst: Small chessboards#22 10.3x, A.K.K.
+Informatika#17 9.2x, Grigr2001_100#40 5.7x); C# uses about 14 MB more memory because the `macros`/`nodeMacros`
+dictionaries are still on the GC heap. Single run per board at 10 s, so near-limit boards can flip either way.
 
 ## Status
 
