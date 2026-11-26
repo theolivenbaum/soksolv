@@ -91,9 +91,20 @@ only shows how the C# portfolio compares to those two Go lanes on a 4-core VM. A
 | Solved by only this solver | 8 | 1694 |
 | Time on the 7041 boards both solved | 4592 s | 1475 s |
 
-The like-for-like comparison against Go's full default portfolio is the 600 s run below (see
-[`docs/benchmark-600s.md`](docs/benchmark-600s.md) once available), which uses the settings of
-`.reference/benchmark` and compares with its published Go results.
+### 600 s run on the settings of `.reference/benchmark` (all 13315 levels, every solution verified)
+
+600 s per level, 15 GB, 196 batches, C# default portfolio on a 4-core Xeon VM, compared with the published Go
+results (8 pinned EPYC cores, so times are not comparable; solved counts are). Details, the lists of levels only one
+side solved and the same-VM Go run are in [`docs/benchmark-600s.md`](docs/benchmark-600s.md).
+
+| Suite | Levels | Go (published) | C# | Both | Only Go | Only C# |
+|---|---|---|---|---|---|---|
+| LTS | 3272 | 3218 | 3198 | 3194 | 24 | 4 |
+| OTS | 10043 | 9620 | 9542 | 9530 | 90 | 12 |
+| All | 13315 | 12838 | 12740 | 12724 | 114 | 16 |
+
+C# solves 98 fewer levels (0.7 %) than the published Go results, mostly in the hardest sets (Sven_1623, Sasquatch).
+The Go default portfolio on this same VM is being measured to separate hardware from algorithmic differences.
 
 ## Status
 
